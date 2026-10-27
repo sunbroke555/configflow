@@ -1,0 +1,45 @@
+{
+  "started_at": "2026-10-27T11:51:05.525Z",
+  "preview": "http://192.168.0.32:15810",
+  "cases": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "network": "host",
+      "identity_modes": [
+        "file",
+        "docker-volume"
+      ],
+      "download_bytes_equal": true,
+      "clipboard_equal": true,
+      "no_sidecar_files": true,
+      "identity_toggle": true,
+      "script_and_migration": true,
+      "mixed_pair_help": true,
+      "overflow": false
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "network": "macvlan",
+      "identity_modes": [
+        "file",
+        "docker-volume"
+      ],
+      "download_bytes_equal": true,
+      "clipboard_equal": true,
+      "no_sidecar_files": true,
+      "identity_toggle": true,
+      "script_and_migration": true,
+      "mixed_pair_help": true,
+      "overflow": false
+    }
+  ],
+  "downloads": 4,
+  "clipboard_check": "UI copy action recorded at browser clipboard API; exact response equality asserted",
+  "installed_or_registered": false,
+  "errors": 0,
+  "entry_asset": "/assets/index-C6RKyUrb.js",
+  "status": "passed",
+  "finished_at": "2026-10-27T11:51:11.714Z"
+}
