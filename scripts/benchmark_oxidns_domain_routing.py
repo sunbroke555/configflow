@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
 import socket
 import socketserver
@@ -243,8 +244,13 @@ def measure(port, names, local, remote, *, qtype=1, workers=1, expected_ip=None)
 
 
 def benchmark(binary, before, after, output, samples=100):
+    def load_snapshot():
+        return {'load_average': list(os.getloadavg()), 'logical_cpus': os.cpu_count(),
+                'top_processes': subprocess.check_output(
+                    ['ps', '-eo', 'pid,comm,pcpu,etime', '--sort=-pcpu'], text=True).splitlines()[:16]}
     report = {'environment': {'binary': str(binary), 'version': subprocess.check_output([str(binary), '--version'], text=True).strip(),
                              'local_delay_ms': 20, 'proxy_delay_ms': 40, 'samples': samples,
+                             'load_before': load_snapshot(),
                              'scope': 'loopback controlled-delay benchmark; not public Internet latency'}, 'results': []}
     with tempfile.TemporaryDirectory(prefix='cf-dns-benchmark-') as temporary:
         for cache in (False, True):
@@ -276,6 +282,7 @@ def benchmark(binary, before, after, output, samples=100):
                 finally:
                     local.close()
                     remote.close()
+    report['environment']['load_after'] = load_snapshot()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(report, ensure_ascii=False, indent=2))
