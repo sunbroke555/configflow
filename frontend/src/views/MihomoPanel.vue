@@ -44,7 +44,7 @@
     </div>
 
     <SectionCard v-if="devices && !devices.length">
-      <EmptyState :icon="Server" title="暂无 Mihomo Agent" description="接入 Mihomo Agent 后，即可在这里切换策略组、查看连接和规则。">
+      <EmptyState :icon="Server" title="暂无 Mihomo Agent" description="接入 Mihomo Agent 后，即可在这里切换策略组、查看连接、规则和日志。">
         <Button class="min-h-11" @click="router.push('/agents')">前往 Agent 接入</Button>
       </EmptyState>
     </SectionCard>
@@ -58,9 +58,10 @@
         <span v-if="coreVersion" class="min-w-0 break-all font-mono">Mihomo {{ coreVersion }}</span>
       </div>
 
-      <SectionCard v-if="statusError && !coreVersion">
+      <SectionCard v-if="statusError && !coreVersion && tab !== 'logs'">
         <EmptyState :icon="TriangleAlert" title="暂时无法连接 Mihomo" :description="statusError">
           <Button variant="outline" class="min-h-11" :disabled="statusLoading" @click="reloadAll">重试</Button>
+          <Button variant="outline" class="min-h-11" @click="changeTab('logs')">查看日志</Button>
           <Button v-if="upgradeRequired" class="min-h-11" @click="router.push('/agents')">前往升级 Agent</Button>
         </EmptyState>
       </SectionCard>
@@ -69,10 +70,12 @@
           <TabsTrigger value="proxies" class="min-h-11 px-4">策略</TabsTrigger>
           <TabsTrigger value="connections" class="min-h-11 px-4">连接</TabsTrigger>
           <TabsTrigger value="rules" class="min-h-11 px-4">规则</TabsTrigger>
+          <TabsTrigger value="logs" class="min-h-11 px-4">日志</TabsTrigger>
         </TabsList>
         <TabsContent value="proxies"><MihomoProxies :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
         <TabsContent value="connections"><MihomoConnections :key="agentId" :agent-id="agentId" :active="tab === 'connections'" /></TabsContent>
         <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="logs"><MihomoLogs :key="agentId" :agent-id="agentId" :active="tab === 'logs'" :reload-token="reloadToken" /></TabsContent>
       </Tabs>
     </template>
     <MihomoSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :context-label="settingsEditor.label"
@@ -96,6 +99,7 @@ import Segmented from '@/components/common/Segmented.vue'
 import MihomoProxies from '@/components/mihomo/MihomoProxies.vue'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
+import MihomoLogs from '@/components/mihomo/MihomoLogs.vue'
 import MihomoCoreActions from '@/components/mihomo/MihomoCoreActions.vue'
 import { agentApi, mihomoPanelApi, profileApi } from '@/api'
 import { loadAgentSummaries } from '@/lib/agentSummaries'
@@ -106,7 +110,7 @@ import type { Agent } from '@/types'
 const MihomoSettings = defineAsyncComponent(() => import('@/components/generate/MihomoSettings.vue'))
 type Device = Pick<Agent, 'id' | 'name' | 'host' | 'status'>
 const STORAGE_KEY = 'configflow:mihomo-panel:agent'
-const TABS = ['proxies', 'connections', 'rules']
+const TABS = ['proxies', 'connections', 'rules', 'logs']
 const MODE_OPTIONS: Array<{ value: MihomoMode; label: string }> = [
   { value: 'rule', label: '规则' },
   { value: 'global', label: '全局' },

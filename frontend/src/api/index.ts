@@ -443,15 +443,15 @@ export const agentApi = {
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),
-  getLogSources: (id: string) => api.get(`/agents/${id}/logs/sources`),
-  getLogs: (id: string, lines: number = 100, target: AgentLogTarget = {}) => {
+  getLogSources: (id: string, options: { signal?: AbortSignal } = {}) => api.get(`/agents/${encodeURIComponent(id)}/logs/sources`, options),
+  getLogs: (id: string, lines: number = 100, target: AgentLogTarget = {}, options: { signal?: AbortSignal } = {}) => {
     const params = new URLSearchParams({ lines: lines.toString() })
     if (target.source) {
       params.append('source', target.source)
     } else if (target.logPath) {
       params.append('log_path', target.logPath)
     }
-    return api.get(`/agents/${id}/logs?${params.toString()}`)
+    return api.get(`/agents/${encodeURIComponent(id)}/logs?${params.toString()}`, options)
   },
   clearLog: (id: string, target: AgentLogTarget) => api.post(`/agents/${id}/logs/clear`, target.source ? { source: target.source } : { log_path: target.logPath }),
   pushConfig: (id: string, deploymentId?: string, expected?: PublishGuard | { expected_profile_id: string; expected_oxidns_revision: string; expected_config_revision?: number }) => api.post(`/agents/${id}/push-config`, {
