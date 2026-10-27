@@ -313,6 +313,13 @@ fi
             replacements["core_install_phase"] = ('if [ -z "$DNS_HA_EXISTING_CONFIG" ]; then\n'
                                                   + replacements["core_install_phase"] + 'fi\n')
             replacements["agent_cleanup_trap"] = 'trap \'rm -f "$BINARY_TMP"\' EXIT HUP INT TERM'
+    if install_core or prepare_dns_ha:
+        # Minimal root shells (notably Alpine pct/SSH sessions) can omit the
+        # location where the canonical core installer places its binaries.
+        replacements["install_arguments"] = (
+            'PATH="${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}:/usr/local/sbin:/usr/local/bin"\n'
+            'export PATH\n' + replacements["install_arguments"]
+        )
     # Single pass: values containing braces must remain literal, especially JSON
     # commands and URLs. The config heredoc is quoted to disable shell expansion.
     script = re.sub(r"\{(" + "|".join(replacements) + r")\}", lambda match: replacements[match.group(1)], INSTALL_GO_SCRIPT_TEMPLATE)

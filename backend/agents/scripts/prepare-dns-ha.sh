@@ -105,7 +105,15 @@ agent_ha_install_dependencies() (
             [ "$agent_ha_policy_status" = 101 ] || agent_ha_fail "Debian/Ubuntu 的 OpenRC 环境未禁止软件包自动启动服务，无法安全自动准备；已保留系统策略并停止。"
         fi
     fi
-    agent_ensure_dependencies keepalived ha_ip ha_service jq
+    # Install the original missing set. Recollecting while our runtime mask is
+    # present would mistake an absent systemd unit for an installed one.
+    if [ -n "$AGENT_MISSING_DEPENDENCIES" ]; then
+        if ! agent_install_packages $AGENT_PACKAGES; then
+            agent_ha_fail "系统依赖安装失败，尚未安装核心或 Agent。请检查网络、软件源及包管理器锁后重试。"
+        fi
+    fi
+    agent_collect_dependencies keepalived ha_ip ha_service jq
+    [ -z "$AGENT_MISSING_DEPENDENCIES" ] || agent_ha_fail "包安装后仍缺少工具：${AGENT_MISSING_DEPENDENCIES}，尚未安装核心或 Agent。"
     agent_ha_preserve_package_default
     keepalived --version >/dev/null 2>&1 || agent_ha_fail "keepalived 无法运行，请检查包安装结果。"
     ip -j -4 addr show >/dev/null 2>&1 || agent_ha_fail "ip 命令不支持所需 JSON 输出，请检查 iproute2 安装结果。"

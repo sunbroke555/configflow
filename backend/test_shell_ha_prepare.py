@@ -222,3 +222,27 @@ def test_unusable_keepalived_stops_before_core_or_agent_mutation(tmp_path,monkey
     assert result.returncode!=0
     assert 'core --core' not in events.read_text()
     assert 'agent-download' not in events.read_text()
+
+
+def test_existing_binary_without_systemd_unit_still_installs_service_package(tmp_path):
+    script, env, root, events = preparation_harness(tmp_path)
+    binary = Path(env['HA_COMMANDS']) / 'keepalived'
+    binary.write_text('#!/bin/sh\nexit 0\n')
+    binary.chmod(0o755)
+    result = run_preparation(script, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    transactions = [item for item in map(json.loads, events.read_text().splitlines()) if item[0] == 'apt-get']
+    assert 'keepalived' in transactions[-1][1]
+    assert (root / 'state/unit').exists()
+    assert not (root / 'state/unexpected-start').exists()
+    assert not (root / 'run/systemd/system/keepalived.service').is_symlink()
+    assert not (root / 'state/enabled').exists()
+
+
+def test_full_installer_handles_root_path_without_usr_local_bin(tmp_path, monkeypatch):
+    script, env, root, events = full_installer(tmp_path, monkeypatch)
+    env['PATH'] = f'{tmp_path}/commands:/usr/sbin:/usr/bin:/sbin:/bin'
+    result = subprocess.run(['/bin/sh', str(script)], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert events.read_text().count('core --core oxidns') == 1
+    assert (root / 'opt/configflow-agent/config-oxidns.json').exists()
