@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import { Check, ChevronRight, ChevronsUpDown, ExternalLink, Loader2, X } from '@lucide/vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { Check, ChevronRight, ChevronsUpDown, Loader2, Pencil, X } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -16,6 +16,7 @@ import InfoNote from '@/components/common/InfoNote.vue'
 import Segmented from '@/components/common/Segmented.vue'
 import RuleDnsField from '@/components/rules/RuleDnsField.vue'
 import RuleContentIssues from '@/components/rules/RuleContentIssues.vue'
+import RuleSourceEditor from '@/components/rules/RuleSourceEditor.vue'
 import api, { ruleApi, ruleSetApi } from '@/api'
 import { confirm, notify } from '@/lib/feedback'
 import { isDnsRuleType } from '@/lib/oxidns'
@@ -55,6 +56,8 @@ const emit = defineEmits<{
   /** dns 为 compose 返回的新规则 DNS 状态，可直接并入列表快照 */
   saved: [result: { ids: string[]; dns?: Record<string, RuleDnsState> }]
   enable: [id: string]
+  'source-saved': [source: Item]
+  'reload-dns': []
 }>()
 
 const SOURCE_OPTIONS: Array<{ value: SourceKind; label: string }> = [
@@ -70,6 +73,13 @@ const DOMAIN_SCOPES = [
 ]
 
 const source = ref<SourceKind>('values')
+const editingSource = ref<Item | null>(null)
+const sourceEditor = ref<InstanceType<typeof RuleSourceEditor> | null>(null)
+const sourceSaving = ref(false)
+const sourceDirty = ref(false)
+const sourceOverrides = ref<Record<string, Item>>({})
+const editorBody = ref<HTMLElement | null>(null)
+let sourceScrollTop = 0
 const contentCheck = ref<RuleContentCheck | null>(null)
 const form = reactive({
   ruleType: 'DOMAIN-SUFFIX',
@@ -89,6 +99,7 @@ const dnsTouched = ref(false)
 /** 编辑偏离的跟随规则时，选择「按策略更新 DNS」 */
 const resync = ref(false)
 const saving = ref(false)
+const busy = computed(() => saving.value || sourceSaving.value)
 const saveError = ref('')
 const libraryOpen = ref(false)
 const urlCheck = ref<'idle' | 'checking' | 'ok' | 'failed'>('idle')
@@ -107,7 +118,10 @@ const entry = computed(() => (editItem.value ? props.dns?.rules[editItem.value.i
 const libraryFormat = computed(() => detectRuleContentFormat(form.library.content))
 const singleType = computed(() => !editing.value && source.value === 'values' && SINGLE_RULE_TYPES.includes(form.ruleType))
 
-const libraryById = computed(() => new Map(props.library.map(item => [item.id, item])))
+const libraryById = computed(() => new Map([...props.library, ...Object.values(sourceOverrides.value)].map(item => [item.id, item])))
+const libraryOptions = computed(() => [...libraryById.value.values()])
+// 父页面刷新成功后以服务器元数据为准；刷新失败仍保留刚保存的来源预览。
+watch(() => props.library, () => { sourceOverrides.value = {} })
 /** 已在当前配置空间引用的规则集：#序号 */
 const usedLibrary = computed(() => {
   const used = new Map<string, number>()
@@ -183,7 +197,8 @@ const policyRoute = computed(() => followRoute(isRuleset.value
   ? { itemType: 'ruleset', policy: form.policy }
   : { itemType: 'rule', rule_type: ruleType.value || (parts.value.domain[0] || parts.value.ip[0])?.rule_type || 'DOMAIN', policy: form.policy }, engine.value?.policy_routes))
 const fieldDisabled = computed(() => !dnsLoaded.value || locked.value || !!unsupportedType.value)
-const effectiveDns = computed<RuleDnsValue>(() => (fieldDisabled.value ? 'default' : dnsChoice.value))
+const dnsDraftPending = computed(() => (dnsTouched.value || resync.value) && !dnsLoaded.value)
+const effectiveDns = computed<RuleDnsValue>(() => (fieldDisabled.value && !dnsDraftPending.value ? 'default' : dnsChoice.value))
 const defaultChoice = computed(() => defaultDnsChoice({ domain: hasDomainPart.value, ip: hasIpPart.value && !(source.value === 'values' && !editing.value) }, engine.value))
 
 watch(defaultChoice, value => {
@@ -205,6 +220,7 @@ const savedExplicit = computed(() => entry.value?.state === 'explicit'
   || (entry.value?.state === 'disabled' && !entry.value.follow && !!entry.value.route))
 
 const warnings = computed<DnsWarning[]>(() => {
+  if (dnsDraftPending.value) return []
   if (unsupportedType.value) return engine.value && !engine.value.editable ? dnsWarnings({ engine: engine.value, value: 'default', policy: form.policy, policyRoute: null }).filter(item => item.kind === 'locked') : []
   const policyChanged = editing.value && editItem.value?.policy !== form.policy
   return dnsWarnings({
@@ -253,7 +269,7 @@ const addCount = computed(() => {
 })
 watch(() => [form.library.content, form.library.behavior, source.value], () => { contentCheck.value = null })
 const libraryNameTaken = computed(() => source.value === 'new_library' && props.library.some(item => item.name === form.library.name.trim()))
-const blocked = computed(() => !!singleValueError.value || !!paste.value?.overLimit || invalidCount.value > 0 || (source.value === 'new_library' && (libraryNameTaken.value
+const blocked = computed(() => dnsDraftPending.value || !!singleValueError.value || !!paste.value?.overLimit || invalidCount.value > 0 || (source.value === 'new_library' && (libraryNameTaken.value
   || (form.library.source_type === 'content' && form.library.behavior === 'domain' && libraryFormat.value === 'text' && !form.library.scope))))
 const saveLabel = computed(() => {
   if (editing.value) return '保存'
@@ -261,7 +277,7 @@ const saveLabel = computed(() => {
   if (source.value === 'new_library') return '保存规则集'
   return addCount.value ? `保存 ${addCount.value} 条规则` : '保存规则'
 })
-const title = computed(() => (!editing.value ? '添加规则' : isRuleset.value ? '编辑规则集' : '编辑规则'))
+const title = computed(() => (editingSource.value ? '编辑规则集来源' : !editing.value ? '添加规则' : isRuleset.value ? '编辑规则集' : '编辑规则'))
 const moreSummary = computed(() => [
   form.remark ? `备注：${form.remark}` : '备注', form.group_name ? `分组：${form.group_name}` : '分组名',
   ...(!editing.value && !singleType.value ? [`插入位置（${form.position === 'top' ? '顶部' : '底部'}）`] : []),
@@ -269,10 +285,14 @@ const moreSummary = computed(() => [
 ].join(' · '))
 
 const snapshot = () => JSON.stringify({ source: source.value, form, dns: dnsChoice.value, resync: resync.value })
-const dirty = () => props.open && snapshot() !== initial
+const dirty = () => props.open && (sourceDirty.value || snapshot() !== initial)
 
 function reset() {
   saveError.value = ''
+  editingSource.value = null
+  sourceDirty.value = false
+  sourceSaving.value = false
+  sourceOverrides.value = {}
   session += 1
   const item = editItem.value
   source.value = editing.value ? (item?.itemType === 'ruleset' ? 'library' : 'values') : props.initialSource || 'values'
@@ -322,9 +342,44 @@ function onWarningAction(kind: NonNullable<DnsWarning['action']>) {
 
 async function requestClose(open: boolean) {
   if (open) return emit('update:open', true)
-  if (saving.value) return
-  if (dirty() && !(await confirm('放弃未保存的规则？', { title: '关闭编辑', confirmText: '放弃', cancelText: '继续编辑' }))) return
+  if (busy.value) return
+  if (dirty() && !(await confirm('放弃未保存的修改？', { title: '关闭编辑', confirmText: '放弃', cancelText: '继续编辑' }))) return
   emit('update:open', false)
+}
+
+async function openSourceEditor(id: string) {
+  const entryItem = libraryById.value.get(id)
+  if (!entryItem || busy.value) return
+  sourceScrollTop = editorBody.value?.scrollTop || 0
+  sourceDirty.value = false
+  editingSource.value = { ...entryItem }
+  await nextTick()
+  if (editorBody.value) editorBody.value.scrollTop = 0
+  editorBody.value?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
+}
+
+async function returnToRule() {
+  const id = editingSource.value?.id
+  editingSource.value = null
+  sourceDirty.value = false
+  await nextTick()
+  if (editorBody.value) editorBody.value.scrollTop = sourceScrollTop
+  const trigger = Array.from(editorBody.value?.querySelectorAll<HTMLButtonElement>('[data-edit-source]') || [])
+    .find(button => button.dataset.editSource === id)
+  trigger?.focus({ preventScroll: true })
+}
+
+async function cancelSourceEdit() {
+  if (busy.value) return
+  if (sourceDirty.value && !(await confirm('放弃未保存的来源修改？', { title: '返回规则设置', confirmText: '放弃', cancelText: '继续编辑' }))) return
+  await returnToRule()
+}
+
+async function onSourceSaved(updated: Item) {
+  sourceOverrides.value = { ...sourceOverrides.value, [updated.id]: updated }
+  emit('source-saved', updated)
+  notifyPublish(['library'], '规则集来源已保存')
+  await returnToRule()
 }
 
 function convertToRuleset() {
@@ -486,25 +541,39 @@ async function save() {
     <DialogContent
       class="rule-editor-dialog"
       :show-close-button="false"
-      :aria-busy="saving"
-      @escape-key-down="event => { if (saving) event.preventDefault() }"
-      @interact-outside="event => { if (saving || dirty()) event.preventDefault() }"
+      :aria-busy="busy"
+      @escape-key-down="event => { if (busy) event.preventDefault() }"
+      @interact-outside="event => { if (busy || dirty()) event.preventDefault() }"
     >
       <header class="rule-editor-header">
         <div class="min-w-0">
           <DialogTitle class="text-lg font-semibold">{{ title }}</DialogTitle>
-          <DialogDescription class="mt-1 text-[13px]">规则按列表顺序自上而下匹配，命中即停止。</DialogDescription>
+          <DialogDescription class="mt-1 text-[13px]">{{ editingSource ? '修改来源会同步到所有引用此规则集的配置。保存来源后返回，当前策略、DNS 和备注草稿会保留。' : '规则按列表顺序自上而下匹配，命中即停止。' }}</DialogDescription>
         </div>
-        <Button type="button" variant="ghost" size="icon" class="rule-editor-close text-muted-foreground" aria-label="关闭" :disabled="saving" @click="requestClose(false)">
+        <Button type="button" variant="ghost" size="icon" class="rule-editor-close text-muted-foreground" aria-label="关闭" :disabled="busy" @click="requestClose(false)">
           <X class="size-4" />
         </Button>
       </header>
 
       <!-- 滚动容器不能是 fieldset：Chromium 中 fieldset 不按 flex 高度裁剪，内容会画到底栏下方 -->
-      <div class="rule-editor-body cf-focus-gutter">
-        <fieldset :disabled="saving" class="rule-editor-fields">
+      <div ref="editorBody" class="rule-editor-body cf-focus-gutter">
+        <RuleSourceEditor
+          v-if="editingSource"
+          ref="sourceEditor"
+          :source="editingSource"
+          @busy="sourceSaving = $event"
+          @dirty="sourceDirty = $event"
+          @saved="onSourceSaved"
+        />
+        <fieldset v-else :disabled="saving" class="rule-editor-fields">
           <Alert v-if="saveError" class="border-destructive-accent/30" data-rule-save-error>
             <AlertDescription class="whitespace-pre-wrap break-all text-destructive-accent">{{ saveError }}</AlertDescription>
+          </Alert>
+          <Alert v-if="dnsDraftPending" data-dns-draft-pending>
+            <AlertDescription class="flex flex-wrap items-center gap-x-3 gap-y-2 text-[13px]">
+              <span>{{ dnsLoading ? 'DNS 状态正在更新，已保留你的选择，读取完成后可保存。' : 'DNS 状态读取失败，已保留你的选择。请重新读取后再保存。' }}</span>
+              <Button v-if="!dnsLoading" type="button" variant="outline" size="sm" @click="emit('reload-dns')">重新读取 DNS</Button>
+            </AlertDescription>
           </Alert>
           <FormField v-if="!editing" label="匹配来源">
             <Segmented v-model="source" :options="SOURCE_OPTIONS" label="匹配来源" block />
@@ -578,7 +647,7 @@ async function save() {
                       <CommandEmpty class="px-3 py-6 text-muted-foreground">没有匹配的规则集</CommandEmpty>
                       <CommandGroup>
                         <CommandItem
-                          v-for="entryItem in library"
+                          v-for="entryItem in libraryOptions"
                           :key="entryItem.id"
                           :value="entryItem.id"
                           :disabled="libraryUnavailable(entryItem)"
@@ -602,11 +671,20 @@ async function save() {
               <p class="mt-1 mb-0">{{ entryItem.behavior }} · {{ entryItem.source_type === 'content' ? '共享规则内容' : '远程 URL' }}</p>
               <p class="mt-1 mb-0 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono">{{ entryItem.source_type === 'content' ? entryItem.content : entryItem.url }}</p>
               <p v-if="entryItem.enabled === false || entryItem.library_enabled === false" class="mt-2 mb-0 text-warning-accent">共享来源已停用；当前配置的启用状态会保留，来源重新启用后生效。</p>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                class="mt-2 h-auto px-0 text-xs"
+                :data-edit-source="editingRuleset ? form.libraryIds[0] : entryItem.id"
+                :disabled="!libraryById.has(editingRuleset ? form.libraryIds[0] || '' : entryItem.id)"
+                @click="openSourceEditor(editingRuleset ? form.libraryIds[0] || '' : entryItem.id)"
+              >
+                <Pencil class="size-3.5" aria-hidden="true" />编辑来源
+              </Button>
             </div>
             <p v-if="selectedLibrary.length > 3" class="m-0 text-xs text-muted-foreground">另有 {{ selectedLibrary.length - 3 }} 个规则集</p>
-            <a v-if="selectedLibrary.length" href="/rule-library" target="_blank" rel="noopener" class="inline-flex min-h-6 w-fit items-center gap-1 text-xs text-primary-accent underline-offset-4 hover:underline max-sm:min-h-11">
-              在规则库中编辑来源<ExternalLink class="size-3" aria-hidden="true" />
-            </a>
+
           </template>
 
           <!-- 新建规则集 -->
@@ -739,7 +817,16 @@ async function save() {
         </fieldset>
       </div>
 
-      <footer class="rule-editor-footer">
+      <footer v-if="editingSource" class="rule-editor-footer">
+        <span class="min-w-0 text-xs text-muted-foreground">保存到共享规则库</span>
+        <div class="flex shrink-0 gap-2">
+          <Button type="button" variant="outline" class="max-md:h-11" :disabled="busy" @click="cancelSourceEdit">返回规则设置</Button>
+          <Button type="button" class="max-md:h-11" :disabled="busy" @click="sourceEditor?.save()">
+            <Loader2 v-if="sourceSaving" class="size-4 animate-spin" />{{ sourceSaving ? '保存中…' : '保存来源' }}
+          </Button>
+        </div>
+      </footer>
+      <footer v-else class="rule-editor-footer">
         <span class="min-w-0 text-xs text-muted-foreground">
           <template v-if="invalidCount">请先修正或删除 {{ invalidCount }} 行无效内容</template>
           <template v-else-if="!addCount && !editing">没有可添加的规则</template>
