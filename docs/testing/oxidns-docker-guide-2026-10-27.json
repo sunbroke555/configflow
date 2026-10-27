@@ -1,0 +1,518 @@
+{
+  "started_at": 1793090058.2212217,
+  "scenarios": [
+    {
+      "name": "migrate-bind-preserves-identity-data-env-and-rollback",
+      "finished_at": 1793090058.2212229,
+      "inspection": {
+        "exit_code": 0,
+        "command_sha256": "9ba0f4e10a53665a321d02593fa8281d71b6c9cbdb2ed8eb7517fe3f6c3a674d"
+      },
+      "execution": {
+        "exit_code": 0,
+        "command_sha256": "5153dc67f21a00b61954bd365df8d5ed6e2d4c5be3e6bfa801dae6d446f4fb41"
+      },
+      "rollback": {
+        "exit_code": 0,
+        "command_sha256": "0c1dd73a1bc495f461f3b2a9f54a1ec984fb406c74ee598984dc83c282b28b28"
+      },
+      "before": {
+        "agent_id": "agent_1793088670758_a0fbe8",
+        "token_sha256": "5bd1e8568ca92ced0678bde8c2af44cbbdfb715f4e61ecddc9322a05486910e0",
+        "agent_name": "guide-legacy-bind-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18082,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "17",
+        "container_id": "de959b97c133f9150cdd69d4c5f87ce30624d524eaf33788b305684f24ded2c9"
+      },
+      "after": {
+        "agent_id": "agent_1793088670758_a0fbe8",
+        "token_sha256": "5bd1e8568ca92ced0678bde8c2af44cbbdfb715f4e61ecddc9322a05486910e0",
+        "agent_name": "guide-legacy-bind-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18082,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "26",
+        "container_id": "7d7c839b737c7271aa12d0ae003235eaf1b94057d55b58bef61b84fed2bac284"
+      },
+      "restored": {
+        "agent_id": "agent_1793088670758_a0fbe8",
+        "token_sha256": "5bd1e8568ca92ced0678bde8c2af44cbbdfb715f4e61ecddc9322a05486910e0",
+        "agent_name": "guide-legacy-bind-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18082,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "25",
+        "container_id": "de959b97c133f9150cdd69d4c5f87ce30624d524eaf33788b305684f24ded2c9"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "host",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0.91",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_1793088670758_a0fbe8",
+        "status": "online",
+        "host": "192.168.79.21",
+        "port": 18082,
+        "last_heartbeat": "2026-10-27T08:34:00.754909"
+      },
+      "backup_files_verified": true,
+      "literal_dollar_environment_preserved_by_run_and_compose": true
+    },
+    {
+      "name": "fresh-host-empty-data-protected-registration",
+      "finished_at": 1793090074.9904606,
+      "execution": {
+        "exit_code": 0,
+        "command_sha256": "a77a7e2a4ef785f5907b6fcebd51ee3166b3e99004beb3287ac20be340210ffd"
+      },
+      "snapshot": {
+        "agent_id": "agent_a03e21d86d5947d0b6be805dad99f53d",
+        "token_sha256": "5c1d4862929f431855f9b0aa520ae6f7bd6f74f09756e4b5720b8c9341f29ff7",
+        "agent_name": "guide-new-host-v2-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18081,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "3dedc7185f8181e52bade703cf437c13c6ae8b8def45a2c556229dfab9177974"
+        },
+        "core_pid": "42",
+        "container_id": "e695dd9a0f0f80cd0c8bebd25fbb16426d6acdd0066fd2a6b270458cbac3edcd"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "host",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0.91",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_a03e21d86d5947d0b6be805dad99f53d",
+        "status": "online",
+        "host": "192.168.79.21",
+        "port": 18081,
+        "last_heartbeat": "2026-10-27T08:34:29.060863"
+      },
+      "generated_device_count": 0,
+      "registered_device_count": 1,
+      "repeated_installer_rejected": true,
+      "administrator_or_global_registration_secrets_in_command": false,
+      "implementation_phase": "Before the subsequent owned-resource retry enhancement; final retry cases are recorded separately"
+    },
+    {
+      "name": "fresh-macvlan-empty-data-protected-registration",
+      "finished_at": 1793090093.960166,
+      "execution": {
+        "exit_code": 0,
+        "command_sha256": "c6d2ee63b8d87714ec5a6e8b0c19486c95ea680bc35182a4b10239ce9e246893"
+      },
+      "snapshot": {
+        "agent_id": "agent_3949c218b18c4eea96c9c29b5641b736",
+        "token_sha256": "21fe107f2165ca5406f649d28f06ff81914f92e5e22c5af5e00c461efc04ee31",
+        "agent_name": "guide-new-macvlan-v2-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18081,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "3dedc7185f8181e52bade703cf437c13c6ae8b8def45a2c556229dfab9177974"
+        },
+        "core_pid": "42",
+        "container_id": "7da8cb8d55a8b1882846fdbfe57e5c06ad151e568946d3866c131d238c868764"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "macvlan",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_3949c218b18c4eea96c9c29b5641b736",
+        "status": "online",
+        "host": "192.168.79.81",
+        "port": 18081,
+        "last_heartbeat": "2026-10-27T08:34:47.918725"
+      },
+      "generated_device_count": 0,
+      "registered_device_count": 1,
+      "repeated_installer_rejected": true,
+      "administrator_or_global_registration_secrets_in_command": false,
+      "implementation_phase": "Before the subsequent owned-resource retry enhancement; final retry cases are recorded separately"
+    },
+    {
+      "name": "host-identity-create-once-symlink-and-hostile-paths",
+      "finished_at": 1793090123.2565844,
+      "cases": [
+        {
+          "case": "create-once",
+          "first_exit": 0,
+          "repeat_exit": 1,
+          "unchanged": true
+        },
+        {
+          "case": "existing",
+          "exit_code": 1,
+          "existing_content_preserved": true
+        },
+        {
+          "case": "symlink",
+          "exit_code": 1,
+          "existing_content_preserved": true
+        },
+        {
+          "case": "dangling-symlink",
+          "exit_code": 1,
+          "existing_content_preserved": true
+        },
+        {
+          "case": "quotes-dollar-parentheses-semicolon-in-literal-path",
+          "exit_code": 0,
+          "injected_marker_absent": true
+        }
+      ],
+      "invalid_paths": [
+        {
+          "path": "relative/file",
+          "http_status": 400
+        },
+        {
+          "path": "/",
+          "http_status": 400
+        },
+        {
+          "path": "/tmp/../unsafe",
+          "http_status": 400
+        },
+        {
+          "path": "/tmp/colon:bad",
+          "http_status": 400
+        },
+        {
+          "path": "/tmp/comma,bad",
+          "http_status": 400
+        },
+        {
+          "path": "/tmp/new\nline",
+          "http_status": 400
+        }
+      ],
+      "system_machine_id_unchanged": true
+    },
+    {
+      "name": "migrate-volume-preserves-identity-data-env-and-rollback",
+      "finished_at": 1793090175.5314908,
+      "inspection": {
+        "exit_code": 0,
+        "command_sha256": "dfd5339762ff8ccdfa9774fd26c4d4bf7fc0c54b6dc67907f6723cc731437288"
+      },
+      "execution": {
+        "exit_code": 0,
+        "command_sha256": "32798477e1a0841bd52c442fd138e16f48fc1d7cd4b42de8f69b645d4896d4db"
+      },
+      "rollback": {
+        "exit_code": 0,
+        "command_sha256": "4b5a57b5cad66b9a0f88c6cec87f1f936d0b9bf98535b46805d9af0cc6b3af9e"
+      },
+      "before": {
+        "agent_id": "agent_1793090129110_45bc11",
+        "token_sha256": "dcec1b2b174462466336bb281b7dcc597400922854f70e910d456b0d0f76d950",
+        "agent_name": "guide-legacy-volume-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18083,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "17",
+        "container_id": "bc6760220f108a0e439e32aadb8d29150b650868e8522e789905a20b9121f8ec"
+      },
+      "after": {
+        "agent_id": "agent_1793090129110_45bc11",
+        "token_sha256": "dcec1b2b174462466336bb281b7dcc597400922854f70e910d456b0d0f76d950",
+        "agent_name": "guide-legacy-volume-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18083,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "26",
+        "container_id": "90db4704e0bcec10d38b5667896b9aef12aedea279496d56e910d284ab8a4e06"
+      },
+      "restored": {
+        "agent_id": "agent_1793090129110_45bc11",
+        "token_sha256": "dcec1b2b174462466336bb281b7dcc597400922854f70e910d456b0d0f76d950",
+        "agent_name": "guide-legacy-volume-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18083,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "24",
+        "container_id": "bc6760220f108a0e439e32aadb8d29150b650868e8522e789905a20b9121f8ec"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "host",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0.91",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_1793090129110_45bc11",
+        "status": "online",
+        "host": "192.168.79.21",
+        "port": 18083,
+        "last_heartbeat": "2026-10-27T08:35:58.135553"
+      },
+      "backup_files_verified": true,
+      "literal_dollar_environment_preserved_by_run_and_compose": true
+    },
+    {
+      "name": "real-daemon-socket-loss-after-old-rename-can-rollback",
+      "finished_at": 1793090208.059295,
+      "execution": {
+        "exit_code": 1,
+        "command_sha256": "6fcb6bf620a6f8289f4f51c2ca16d76f9e81ff36f03813208cb94212d708ad17"
+      },
+      "rollback": {
+        "exit_code": 0,
+        "command_sha256": "2a5ae183545bf00d0d2ecabb5c6cd55b44546ba0415b61c976f43d56abb30bb7"
+      },
+      "before": {
+        "agent_id": "agent_1793088670758_a0fbe8",
+        "token_sha256": "5bd1e8568ca92ced0678bde8c2af44cbbdfb715f4e61ecddc9322a05486910e0",
+        "agent_name": "guide-legacy-bind-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18082,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "16",
+        "container_id": "de959b97c133f9150cdd69d4c5f87ce30624d524eaf33788b305684f24ded2c9"
+      },
+      "after": {
+        "agent_id": "agent_1793088670758_a0fbe8",
+        "token_sha256": "5bd1e8568ca92ced0678bde8c2af44cbbdfb715f4e61ecddc9322a05486910e0",
+        "agent_name": "guide-legacy-bind-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18082,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "f3d13d7dd27c0f61cd4b6b59d9057469d1e783a99ead76ad8bbb5031f68c4313",
+          "/etc/oxidns/rules/lab.txt": "735adda9c7acac7f030186202e5a59d3c20a1706b98f668fa0800e8d320fad0f",
+          "/etc/oxidns/state/cache-marker.bin": "701574f61033898017ab0c82b1ae7be3d53894c948ad0f4f104d7c505a643ba3",
+          "/opt/configflow-agent/identity-marker.txt": "43bcaa73a0314019d38f9cbe841771c3e88872938e97406ccb031078c03aa192"
+        },
+        "core_pid": "17",
+        "container_id": "de959b97c133f9150cdd69d4c5f87ce30624d524eaf33788b305684f24ded2c9"
+      },
+      "fault": "Dedicated Unix socket temporarily moved after Docker rename event; restored before rollback"
+    },
+    {
+      "name": "final-host-regenerate-resumes-only-owned-resources",
+      "finished_at": 1793090572.9785848,
+      "first_execution": {
+        "exit_code": 1,
+        "command_sha256": "851a286fe1f3e129a1333f00e287255bb07113731995587a12ee209cef7b803e"
+      },
+      "regenerated_execution": {
+        "exit_code": 0,
+        "command_sha256": "851a286fe1f3e129a1333f00e287255bb07113731995587a12ee209cef7b803e"
+      },
+      "enrollment_session_reused": true,
+      "new_agent_count": 1,
+      "partial_failure": {
+        "companion_id": "d718a28fb578c6941a81c0e245580106ea2a514b5c2ad283b2e704f5875aa189",
+        "companion_running": true,
+        "main_absent": true,
+        "agent_id": "agent_6f30ae51cf8e43d7ba4a36722205a097",
+        "agent_offline_before_main_started": true
+      },
+      "snapshot": {
+        "agent_id": "agent_6f30ae51cf8e43d7ba4a36722205a097",
+        "token_sha256": "653b81f9c912a3e5c2aa51c66fede1e9c518c1d2d2702140a2200741d2535eb3",
+        "agent_name": "guide-new-host-v3-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18081,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "3dedc7185f8181e52bade703cf437c13c6ae8b8def45a2c556229dfab9177974"
+        },
+        "core_pid": "42",
+        "container_id": "054f9f6750232fa050589828e81765c46c408c6d3547aaf5906f490fea5d0902"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "host",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0.91",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_6f30ae51cf8e43d7ba4a36722205a097",
+        "status": "online",
+        "host": "192.168.79.21",
+        "port": 18081,
+        "last_heartbeat": "2026-10-27T08:42:50.033445"
+      },
+      "existing_container_and_network_ids_preserved": false,
+      "scoped_registration_with_global_key_enabled": true
+    },
+    {
+      "name": "final-macvlan-regenerate-resumes-running-and-stopped-owned-main",
+      "finished_at": 1793090842.5844371,
+      "before": {
+        "agent_id": "agent_0269415e79a647d28cd2233308c288e7",
+        "token_sha256": "8e55255fb44a06a03921f4158e6ffc082d110d7dc0b944ab1d8b4df928ecdc2b",
+        "agent_name": "guide-new-macvlan-v3-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18081,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "3dedc7185f8181e52bade703cf437c13c6ae8b8def45a2c556229dfab9177974"
+        },
+        "core_pid": "42",
+        "container_id": "597a26c074548087d04d2ae6956344e619ad28f7ec80ab8679958817efd39856"
+      },
+      "after": {
+        "agent_id": "agent_0269415e79a647d28cd2233308c288e7",
+        "token_sha256": "8e55255fb44a06a03921f4158e6ffc082d110d7dc0b944ab1d8b4df928ecdc2b",
+        "agent_name": "guide-new-macvlan-v3-oxidns",
+        "server_url": "http://192.168.79.30:18080",
+        "agent_port": 18081,
+        "hashes": {
+          "/etc/oxidns/config.yaml": "3dedc7185f8181e52bade703cf437c13c6ae8b8def45a2c556229dfab9177974"
+        },
+        "core_pid": "36",
+        "container_id": "597a26c074548087d04d2ae6956344e619ad28f7ec80ab8679958817efd39856"
+      },
+      "running_execution": {
+        "exit_code": 0,
+        "command_sha256": "300e2027728c75409d1d1463f2811e5766e9dfcbd9cd5f3cc8c9a69cfdd65e65"
+      },
+      "stopped_execution": {
+        "exit_code": 0,
+        "command_sha256": "300e2027728c75409d1d1463f2811e5766e9dfcbd9cd5f3cc8c9a69cfdd65e65"
+      },
+      "environment": {
+        "kind": "container",
+        "network": "macvlan",
+        "ready": true,
+        "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "interface": "eth0",
+        "blockers": []
+      },
+      "online": {
+        "id": "agent_0269415e79a647d28cd2233308c288e7",
+        "status": "online",
+        "host": "192.168.79.81",
+        "port": 18081,
+        "last_heartbeat": "2026-10-27T08:47:19.594968"
+      },
+      "network_id": "5166cc299b7b108c93536eb8fd665216468df770b85b91f75e11f248e95b63e0",
+      "agent_container_network_and_data_preserved": true,
+      "additional_agents_created": 0,
+      "enrollment_session_reused": true,
+      "initial_fixed_ip_collision_reproduced": true,
+      "fixed_replay_uses_readonly_network_none_proof": true
+    }
+  ],
+  "first_verified_source_sha256": {
+    "backend/agents/docker_ha_guide.py": "63e5aec9b3ef85ea3f570d4595ccda3882691ff4c6ee1b262d476476ffd64d46",
+    "backend/agents/docker_ha_enrollment.py": "4651ce35cd87c301848d8f16b75ef89fd7c4740a3a2dbf4956c51322a3c0165f",
+    "backend/routes/docker_ha_installation.py": "f8f8ab5f92b04ae2abe3a1ea9f6678e638ca17cfb410d691d2b2eec10766c06d",
+    "backend/common/profile_context.py": "3a328524b8e3d0b78872917bbca32b12591eefbf4b5663ecf63fbf8002e1d098",
+    "docker/docker-agent-entrypoint-service.sh": "32034b52e7162517343c24d2a180b2493eea05229eae1d9d27def38481968d37",
+    "docker/docker-ha-companion-entrypoint.sh": "f1e6889ba0f34641d52e6601361d16e5693a3748e13e7209c375f76b5be284b7"
+  },
+  "initial_integration_bug": {
+    "symptom": "Fresh installer seeded a redacted token, so real heartbeat remained HTTP 401 despite healthy containers",
+    "cause": "Global JSON sanitizer redacted the new enrollment response token",
+    "resolution": "Successful enrollment response now preserves only its scoped Agent token; verified with fresh v2 names and empty directories",
+    "old_failed_sample_preserved_until_snapshot_rollback": true
+  },
+  "v3_host_source_sha256": {
+    "backend/agents/docker_ha_guide.py": "c11c50c3b1e51977ee4c23c8ba4c06c5b2b172a6a29ac0f2e1b54e3fdd0f51d9",
+    "backend/agents/docker_ha_enrollment.py": "e2fe262fc65a4afd1258904efff7a07fd46c547ef30e1daf38780bad0fa53dda",
+    "backend/common/profile_context.py": "3a328524b8e3d0b78872917bbca32b12591eefbf4b5663ecf63fbf8002e1d098",
+    "backend/routes/docker_ha_installation.py": "f8f8ab5f92b04ae2abe3a1ea9f6678e638ca17cfb410d691d2b2eec10766c06d"
+  },
+  "macvlan_retry_integration_bug": {
+    "symptom": "Initial install succeeded, but replay attempted a second bootstrap helper at the main container fixed IP and failed with Docker exit 125",
+    "fix": "Recorded main uses a readonly Agent mount and network-none identity proof; only a genuinely new main performs bootstrap",
+    "verification": "Continuing the same running instance, then its stopped instance; no rebuilding to hide the original failure"
+  },
+  "final_source_sha256": {
+    "backend/agents/docker_ha_guide.py": "296629aff3d0a28dd85282790c790829a8314f88ecf2cada5122e3953ebb5e41",
+    "backend/agents/docker_ha_enrollment.py": "e2fe262fc65a4afd1258904efff7a07fd46c547ef30e1daf38780bad0fa53dda",
+    "backend/routes/docker_ha_installation.py": "f8f8ab5f92b04ae2abe3a1ea9f6678e638ca17cfb410d691d2b2eec10766c06d",
+    "backend/routes/agents.py": "493e9103a40085fad9d75bb3b776c2e282088944cd3e6e2628ea1f2ce55cd2a5",
+    "backend/common/profile_context.py": "3a328524b8e3d0b78872917bbca32b12591eefbf4b5663ecf63fbf8002e1d098",
+    "docker/Dockerfile.agent": "53188967b17f7b4898ad2fcbfa9ed501df9aa98920e4d2d2bdf862406ff6af7a",
+    "docker/docker-agent-entrypoint-service.sh": "32034b52e7162517343c24d2a180b2493eea05229eae1d9d27def38481968d37",
+    "docker/docker-ha-companion-entrypoint.sh": "f1e6889ba0f34641d52e6601361d16e5693a3748e13e7209c375f76b5be284b7",
+    "scripts/tests/oxidns_docker_guide_lab.py": "7d49f820c7eab4c9bae1d1bdc5b9b57600f3c61727c1f1814baac2ca233e531f"
+  },
+  "versions": {
+    "docker": "29.9.2",
+    "compose": "5.6.1",
+    "agent": "1.8.47-go",
+    "oxidns": "1.6.1",
+    "image": "sha256:1cac73f79381e941c9c8710df2911abfd435af3398074f44e644d39658fb3e91",
+    "image_build_source_base_commit": "104e7ae7ce3e4416ae32fba37375ae8df68e549a"
+  },
+  "scope": {
+    "executor": "192.168.0.32",
+    "docker_host": "CT130",
+    "backend": "CT132",
+    "guest_131_untouched": true,
+    "ha_failover_repeated": false,
+    "production_guests_modified": false,
+    "responses_mocked": false,
+    "administrator_authentication_enabled": true,
+    "global_agent_registration_key_enabled": true
+  },
+  "finished_at": 1793090847.1847079,
+  "related_final_validation": {
+    "backend_passed": 244,
+    "frontend_passed": 130,
+    "typecheck_passed": true,
+    "production_build_passed": true,
+    "real_backend_browser_cases_passed": 8,
+    "source": "Root agent final server verification; no claim of GitHub CI status",
+    "browser_page_errors": 0,
+    "browser_evidence": "results/oxidns-docker-guide-2026-10-27/browser.json",
+    "capability_http_behavior": "Earlier online check returned real HTTP 200; final browser check deliberately selected the stopped original Agent and observed HTTP 502, with same-Agent pairing blocked"
+  },
+  "cleanup_report": "oxidns-docker-guide-cleanup-2026-10-27.json"
+}

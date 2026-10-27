@@ -1,0 +1,27 @@
+{
+  "finished_at": 1793091120.8539593,
+  "guests": {
+    "130": {
+      "status": "stopped",
+      "memory_mib": 384,
+      "disk_and_configuration_rolled_back": true,
+      "task_snapshot_removed": true
+    },
+    "132": {
+      "status": "stopped",
+      "memory_mib": 1536,
+      "disk_and_configuration_rolled_back": true,
+      "task_snapshot_removed": true
+    }
+  },
+  "guest_131_untouched_and_stopped": true,
+  "builder_service_inactive": true,
+  "tunnel_pid_file_removed": true,
+  "task_directory_removed": true,
+  "production_guests_modified": false,
+  "new_test_server_package_retained": "docker-compose 5.6.1",
+  "tunnel_port_19285_closed": true,
+  "temporary_credentials_and_commands_removed": true,
+  "builder_image_cache_and_runtime_removed": true,
+  "verified_at": 1793091173.8927693
+}

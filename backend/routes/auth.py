@@ -51,7 +51,8 @@ def setup_before_request(app):
         if request.endpoint in {'agents.download_agent_binary', 'agents.download_install_command'}:
             return None
         # The gateway installer authenticates a short-lived session capability.
-        if request.endpoint in {'agents.gateway_installation_script', 'agents.gateway_installation_enroll'}:
+        if request.endpoint in {'agents.gateway_installation_script', 'agents.gateway_installation_enroll',
+                                'agents.docker_oxidns_ha_enroll'}:
             return None
         # These routes validate their own Agent credentials (or, for upgrade
         # status, an admin JWT). Do not require a JWT before their checks run.

@@ -96,6 +96,15 @@ function generatedCommandUrl() {
   const command = (document.querySelector('[aria-label="一键安装命令"] textarea') as HTMLTextAreaElement).value
   return commandUrl(command)
 }
+
+it('opens the complete Docker HA guide inside the existing installation dialog', async () => {
+  await radio('docker-ha')
+  expect(document.querySelector('[aria-label="OxiDNS Docker HA 安装引导"]')).not.toBeNull()
+  expect(document.getElementById('docker-ha-image')).not.toBeNull()
+  expect(document.getElementById('agent-name')).toBeNull()
+  await radio('ordinary')
+  expect(document.getElementById('agent-name')).not.toBeNull()
+})
 function commandUrl(command: string) {
   return command.match(/'(https?:\/\/[^']+)'/)![1]!
 }

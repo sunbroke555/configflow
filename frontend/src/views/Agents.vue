@@ -204,6 +204,7 @@
               :agents="agents"
               :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
               @changed="loadAgents"
+              @install-guide="openDockerHAGuide"
             />
 
             <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :ref="instance => setRuleUpdateRef(agent.id, instance)"
@@ -368,10 +369,11 @@
         </DialogHeader>
 
         <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
-          <FormField label="使用模式" hint="管理已有服务选普通，让局域网分流选网关。" :help="optionHelp('只管理服务选普通模式；需要让局域网设备通过 Linux 分流选网关。', '网关向导安装 Mihomo、OxiDNS 和两个 Agent，检查后再启用转发。仅支持 Linux 的 IPv4 网关，客户端也需按指引接入。')">
+          <FormField label="使用模式" hint="选择单机服务、Linux 网关或双机 DNS 高可用。" :help="optionHelp('只管理服务选普通模式；需要局域网分流选网关；两台 Docker 主机共用 DNS 地址选 Docker DNS 高可用。', '网关向导安装代理与 DNS；Docker DNS 高可用引导逐台准备 OxiDNS，再检查并配对虚拟 IP。')">
             <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
               <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
               <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 网关</label>
+              <label :class="[chipClass(installationMode === 'docker-ha'), 'min-h-11']"><RadioGroupItem value="docker-ha" />Docker DNS 高可用</label>
             </RadioGroup>
           </FormField>
           <div v-if="installationMode === 'gateway'" class="space-y-4 rounded-lg border border-border bg-muted p-4">
@@ -382,6 +384,7 @@
             </div>
             <Button class="min-h-11" @click="openGatewayInstaller">开始或继续网关安装</Button>
           </div>
+          <DockerHAInstallGuide v-else-if="installationMode === 'docker-ha'" :profile-id="profileStore.activeProfileId.value" :profile-name="activeProfileName" :server-url="guideServerUrl" @changed="loadAgents" />
           <template v-else>
           <div class="space-y-4">
             <FormField label="安装类型" v-bind="installTypeCopy">
@@ -452,6 +455,7 @@
           </div>
 
           <div v-if="scriptForm.installType === 'docker' && scriptForm.dockerMode === 'oxidns'" class="flex flex-col gap-3">
+            <Button variant="outline" class="min-h-11 self-start" @click="openDockerHAGuide">打开双机安装与迁移引导</Button>
             <label for="docker-dns-ha" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
               <Checkbox id="docker-dns-ha" v-model="scriptForm.dockerDNSHA" aria-describedby="docker-dns-ha-note" />
               为 DNS 高可用准备容器
@@ -963,6 +967,7 @@ import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
 import AgentDNSHA from '@/components/agents/AgentDNSHA.vue'
+import DockerHAInstallGuide from '@/components/agents/DockerHAInstallGuide.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentUpgradeStatus from '@/components/agents/AgentUpgradeStatus.vue'
@@ -1079,7 +1084,12 @@ const closeAgentSettings = () => {
   void refreshProfiles().catch(() => undefined)
 }
 const scriptDialogVisible = ref(false)
-const installationMode = ref<'ordinary' | 'gateway'>('ordinary')
+const installationMode = ref<'ordinary' | 'gateway' | 'docker-ha'>('ordinary')
+const guideServerUrl = localStorage.getItem('serverDomain') || window.location.origin
+const openDockerHAGuide = () => {
+  installationMode.value = 'docker-ha'
+  scriptDialogVisible.value = true
+}
 const gatewayInstallContext = ref<{ profileId: string; profileName: string } | null>(null)
 const openGatewayInstaller = () => {
   gatewayInstallContext.value = { profileId: profileStore.activeProfileId.value, profileName: activeProfileName.value }
