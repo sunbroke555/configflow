@@ -1,20 +1,17 @@
 <script setup lang="ts">
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
-import { Loader2, RefreshCw } from '@lucide/vue'
+import { Loader2 } from '@lucide/vue'
 import { agentApi } from '@/api'
-import { confirm } from '@/lib/feedback'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import FormField from '@/components/common/FormField.vue'
-import AgentDNSHA from './AgentDNSHA.vue'
+import OxiDNSHAPairing from './OxiDNSHAPairing.vue'
 import DockerHAHostForm from './DockerHAHostForm.vue'
 import DockerHAGuideCommand from './DockerHAGuideCommand.vue'
 import DockerHAComposeDeployment from './DockerHAComposeDeployment.vue'
 import DockerHAPreflightFeedback from './DockerHAPreflightFeedback.vue'
-import type { Agent } from '@/types'
-import type { DockerHAEnvironment, DockerHAGuideResult, DockerHAHostForm as HostForm, DockerHANetwork } from '@/types/dockerHAGuide'
+import type { DockerHAGuideResult, DockerHAHostForm as HostForm, DockerHANetwork } from '@/types/dockerHAGuide'
 
 const props = defineProps<{ profileId: string; profileName: string; serverUrl: string }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -24,6 +21,8 @@ const server = ref(props.serverUrl)
 const image = ref('thsrite/config-flow-agent:latest')
 const network = ref<DockerHANetwork>('host')
 const step = ref(0)
+const pairingVisited = ref(false)
+watch(step, value => { if (value === 4) pairingVisited.value = true }, { flush: 'sync' })
 const commandHost = ref('0')
 const installMethods = ref<('compose_compact' | 'script')[]>(['compose_compact', 'compose_compact'])
 const steps = ['准备环境', '主机 1', '主机 2', '执行安装', '验证与配对']
@@ -112,124 +111,7 @@ async function generate(index: number) {
   }
 }
 
-const agents = ref<Agent[]>([])
-const selections = ref(['', ''])
-const environments = ref<Record<string, DockerHAEnvironment>>({})
-const environmentErrors = ref<Record<string, string>>({})
-const refreshing = ref(false)
-const refreshError = ref('')
-const checkedAt = ref('')
-let refreshId = 0
-const selected = computed(() => selections.value.map(id => agents.value.find(agent => agent.id === id)))
-const candidates = computed(() => agents.value.filter(agent => agent.service_type === 'oxidns'))
-const blockers = computed(() => {
-  const reasons: string[] = []
-  for (let index = 0; index < 2; index++) {
-    const agent = selected.value[index]
-    const label = `主机 ${index + 1}`
-    if (!agent) { reasons.push(`${label}：请选择已安装的 OxiDNS Agent（Docker 或 Shell）。`); continue }
-    if (agent.status !== 'online') reasons.push(`${label}：Agent 离线，检查容器日志、服务器地址和端口连通性。`)
-    if (agent.profile_id !== profile.id) reasons.push(`${label}：尚未绑定配置空间「${profile.name}」。`)
-    const environment = environments.value[agent.id]
-    if (environmentErrors.value[agent.id]) reasons.push(`${label}：${environmentErrors.value[agent.id]}`)
-    else if (!environment) reasons.push(`${label}：尚未实时检查 HA 环境，请刷新。`)
-    else {
-      const detail = environment.oxidns_ha_environment
-      const container = agent.deployment_method === 'docker' || detail?.kind === 'container'
-      if (!environment.oxidns_ha_protocols?.includes(1) || !environment.oxidns_ha_handoff_protocols?.includes(1) || (container && !environment.oxidns_ha_container_protocols?.includes(1))) reasons.push(`${label}：Agent 缺少所需的 HA 或计划迁移能力，请先升级。`)
-      if (environment.service_type !== 'oxidns' || (container ? detail?.kind !== 'container' : detail?.kind !== 'native')) reasons.push(`${label}：实时返回的服务或部署类型不符。`)
-      if (detail?.ready !== true) reasons.push(`${label}：${detail?.blockers?.join('；') || 'HA 环境未就绪。'}`)
-      if (!detail?.host_id) reasons.push(`${label}：无法确认宿主身份。`)
-    }
-  }
-  if (selections.value[0] && selections.value[0] === selections.value[1]) reasons.push('需要选择两台不同的 Agent。')
-  selected.value.forEach((agent, index) => {
-    if (agent?.oxidns_ha?.enabled && agent.oxidns_ha.peer_id !== selections.value[1 - index]) reasons.push(`主机 ${index + 1} 已与其他设备组成 HA，请选择它实际的对端。`)
-  })
-  const identities = selected.value.map(agent => agent && environments.value[agent.id]?.oxidns_ha_environment?.host_id)
-  if (identities[0] && identities[0] === identities[1]) reasons.push('两台 Agent 的宿主身份相同；同一宿主机上的两个容器不能组成这组 HA。')
-  const details = selected.value.map(agent => agent && environments.value[agent.id]?.oxidns_ha_environment)
-  const bootIds = details.map(detail => detail?.host_boot_id)
-  const validBootIds = bootIds.every(id => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id))
-  if (details.some(detail => ['docker-volume', 'installation'].includes(detail?.host_id_source || '')) && !validBootIds) reasons.push('使用自动身份时，两端需提供宿主校验证据；请升级 Agent 后重新检查。')
-  if (details.some(detail => detail?.host_id_source === 'unknown')) reasons.push('无法识别宿主身份来源，请升级 Agent 后重新检查。')
-  if (validBootIds && bootIds[0] === bootIds[1]) reasons.push('两台 Agent 来自同一宿主，不能组成主机高可用。')
-  if (refreshError.value) reasons.push(refreshError.value)
-  return reasons
-})
-const canPair = computed(() => !refreshing.value && blockers.value.length === 0)
-const pairAgent = computed(() => selected.value[0])
-const pairAgents = computed(() => selected.value.filter((agent): agent is Agent => !!agent))
-const binding = ref('')
-async function bind(agent: Agent) {
-  if (!await confirm(`将「${agent.name}」绑定到配置空间「${profile.name}」？后续开启 HA 会将该空间的 OxiDNS 配置和规则同步到两台设备。`, { title: '绑定安装配置空间', confirmText: '绑定' })) return
-  binding.value = agent.id
-  refreshError.value = ''
-  try { await agentApi.bindProfile(agent.id, profile.id); await refresh() }
-  catch (error) { refreshError.value = failureText(error) }
-  finally { binding.value = '' }
-}
-async function refresh() {
-  const token = ++refreshId
-  refreshing.value = true
-  refreshError.value = ''
-  checkedAt.value = ''
-  environments.value = {}
-  environmentErrors.value = {}
-  try {
-    const { data } = await agentApi.getAll()
-    if (disposed || token !== refreshId) return
-    agents.value = data
-    selections.value = selections.value.map((id, index) => {
-      if (candidates.value.some(agent => agent.id === id)) return id
-      const matches = candidates.value.filter(agent => agent.host === hosts[index]!.agent_ip && Number(agent.port) === Number(hosts[index]!.oxidns_port))
-      return matches.length === 1 ? matches[0]!.id : ''
-    })
-    const ids = [...new Set(selections.value.filter(Boolean))]
-    await Promise.all(ids.map(async id => {
-      try {
-        const { data: environment } = await agentApi.getDockerHAEnvironment(id)
-        if (disposed || token !== refreshId) return
-        if (!environment.success) throw new Error(environment.message || '无法实时读取 HA 环境。')
-        environments.value[id] = environment
-      } catch (error) {
-        if (!disposed && token === refreshId) environmentErrors.value[id] = failureText(error)
-      }
-    }))
-    if (!disposed && token === refreshId) { checkedAt.value = new Date().toLocaleTimeString(); emit('changed') }
-  } catch (error) {
-    if (!disposed && token === refreshId) refreshError.value = failureText(error)
-  } finally {
-    if (token === refreshId) refreshing.value = false
-  }
-}
-function selectionChanged(index: number, id: unknown) {
-  selections.value[index] = String(id || '')
-  refreshId++
-  refreshing.value = false
-  checkedAt.value = ''
-  environments.value = {}
-  environmentErrors.value = {}
-}
-const verification = ref('')
-const verificationError = ref('')
-const verificationBusy = ref(false)
-const vip = computed(() => pairAgent.value?.oxidns_ha?.enabled ? pairAgent.value.oxidns_ha.vip : '')
-let verifyId = 0
-watch(vip, () => { verifyId++; verification.value = ''; verificationError.value = ''; verificationBusy.value = false })
-async function generateVerification() {
-  const token = ++verifyId
-  verificationBusy.value = true
-  verificationError.value = ''
-  try {
-    const { data } = await agentApi.generateDockerHAGuide({ action: 'verify', vip: vip.value }, profile.id)
-    if (disposed || token !== verifyId) return
-    if (!data.success || !data.verification_command) throw new Error(data.message || '无法生成 DNS 验证命令。')
-    verification.value = data.verification_command
-  } catch (error) { if (!disposed && token === verifyId) verificationError.value = failureText(error) }
-  finally { if (token === verifyId) verificationBusy.value = false }
-}
-onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach((_, index) => requestIds[index]++); inspectIds.forEach((_, index) => inspectIds[index]++) })
+onUnmounted(() => { disposed = true; requestIds.forEach((_, index) => requestIds[index]++); inspectIds.forEach((_, index) => inspectIds[index]++) })
 </script>
 
 <template>
@@ -324,35 +206,7 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++; requestIds.forEach
       </template>
     </div>
 
-    <div v-else-if="step === 4" class="flex min-w-0 flex-col gap-4">
-      <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">读取两台 Agent 的真实环境</h4><Button variant="outline" class="min-h-11" :disabled="refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
-      <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">可选择已存在的 Shell 节点与新 Docker 节点。先刷新设备列表，再读取两端 HA 能力和环境。在线心跳不能代替安装检查；更换选择后需要重新刷新。</p>
-      <details class="text-[13px] leading-relaxed"><summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或环境检查失败？</summary><ul class="mb-0 list-disc space-y-2 pl-5"><li>先查看对应宿主机的 Docker / Container Manager 容器日志，确认镜像拉取成功、OxiDNS 与 Agent 已启动。{{ network === 'host' ? 'Host 检查宿主机 53 端口冲突。' : 'macvlan 检查容器自身的 DNS 监听和地址冲突，不要求宿主机 53 端口空闲。' }}</li><li>确认填写的 ConfigFlow 地址从容器可达、服务器能访问所填 Agent 地址和端口，防火墙允许流量。新装凭据有效期为 24 小时，过期时保留全部设置不变再重新生成；不要删除已有身份和安装记录。</li><li>Host 检查 companion 是否运行、共享 HA 目录和只读宿主校验挂载是否一致；macvlan 检查网卡、子网、固定地址与宿主隔离限制。按下面实时返回的具体原因修正后重新刷新。</li></ul></details>
-      <div class="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
-        <div v-for="index in [0, 1]" :key="index" class="min-w-0 space-y-2">
-          <FormField :label="`主机 ${index + 1} 的 OxiDNS Agent`" :html-for="`docker-ha-verify-${index + 1}`">
-            <Select :model-value="selections[index]" @update:model-value="selectionChanged(index, $event)"><SelectTrigger :id="`docker-ha-verify-${index + 1}`" class="min-h-11 w-full min-w-0"><SelectValue placeholder="先刷新，再选择设备" /></SelectTrigger><SelectContent><SelectItem v-for="agent in candidates" :key="agent.id" :value="agent.id">{{ agent.name }} · {{ agent.host }} · {{ agent.deployment_method === 'docker' ? 'Docker' : 'Shell' }}</SelectItem></SelectContent></Select>
-          </FormField>
-          <Button v-if="selected[index] && selected[index]!.profile_id !== profile.id" variant="outline" class="min-h-11 h-auto w-full whitespace-normal" :disabled="!!binding" @click="bind(selected[index]!)">绑定到「{{ profile.name }}」</Button>
-          <p v-if="selected[index] && environments[selected[index]!.id]" class="m-0 text-xs text-muted-foreground">实时环境：{{ environments[selected[index]!.id]!.oxidns_ha_environment?.network || (environments[selected[index]!.id]!.oxidns_ha_environment?.kind === 'native' ? 'Shell 原生' : '未知网络') }} · {{ environments[selected[index]!.id]!.oxidns_ha_environment?.ready ? '环境就绪' : '环境未就绪' }}</p>
-        </div>
-      </div>
-      <div v-if="blockers.length" role="status" class="rounded-md border border-warning/30 bg-warning-soft p-3 text-[13px]"><p class="mb-2 mt-0 font-semibold">配对前需要处理</p><ul class="m-0 list-disc space-y-1 pl-5"><li v-for="reason in blockers" :key="reason">{{ reason }}</li></ul></div>
-      <p v-if="checkedAt" class="m-0 text-xs text-muted-foreground">实时检查时间：{{ checkedAt }}。开启 HA 时服务端仍会重新校验两台环境。</p>
-      <template v-if="pairAgent">
-        <p class="m-0 text-[13px] leading-relaxed">以下将主机 1 配置为优先主机，主机 2 为备用，实际角色以 VIP 持有情况为准。填写预留 VIP 后，首次开启会先把同一份配置与规则同步到两台；等待同步和 DNS 检查完成。</p>
-        <AgentDNSHA :agent="pairAgent" :agents="pairAgents" :blocked="!canPair" :show-install-guide="false" @changed="refresh" />
-      </template>
-      <div class="space-y-3 border-t border-border pt-4">
-        <h4 class="m-0 text-sm font-semibold">从第三台局域网设备验证 VIP</h4>
-        <p class="m-0 text-[13px] leading-relaxed">HA 状态正常后，在另一台 LAN 设备查询 VIP；确认 DNS 有正常结果，再把路由器 DHCP / 客户端 DNS 改成 VIP。页面不会把复制命令当作 DNS 验证成功。</p>
-        <Button variant="outline" class="min-h-11" :disabled="!vip || verificationBusy" @click="generateVerification">生成 VIP DNS 验证命令</Button>
-        <p v-if="!vip" class="m-0 text-xs text-muted-foreground">配对成功并刷新后，使用实际保存的 VIP 生成命令。</p>
-        <p v-if="verificationError" role="alert" class="m-0 text-sm text-destructive-accent">{{ verificationError }}</p>
-        <DockerHAGuideCommand v-if="verification" title="从第三台 LAN 设备查询" :command="verification" />
-        <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">以后发布配置和规则会按 HA 顺序同步，并在确认 VIP 迁移后更新原持有者；Docker 镜像升级仍需要手动重建容器。此引导不承诺网络故障或容器强杀时零中断。</p>
-      </div>
-    </div>
+    <OxiDNSHAPairing v-if="pairingVisited" v-show="step === 4" :active="step === 4" :profile-id="profile.id" :profile-name="profile.name" :hosts="hosts" :network="network" @changed="emit('changed')" />
     <div class="flex justify-between gap-2 border-t border-border pt-4">
       <Button variant="outline" class="min-h-11" :disabled="step === 0" @click="step--">上一步</Button>
       <Button v-if="step < steps.length - 1" class="min-h-11" @click="step++">下一步：{{ steps[step + 1] }}</Button>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import DockerHAInstallGuide from '@/components/agents/DockerHAInstallGuide.vue'
+import OxiDNSHAPairing from '@/components/agents/OxiDNSHAPairing.vue'
 import DockerHAGuideCommand from '@/components/agents/DockerHAGuideCommand.vue'
 import { RadioGroup } from '@/components/ui/radio-group'
 import { Select } from '@/components/ui/select'
@@ -487,6 +488,58 @@ describe('Docker HA installation guide', () => {
     expect(agentApi.bindProfile).toHaveBeenCalledWith('a', 'space')
     expect(wrapper.text()).toContain('当前事务运行中')
     expect(wrapper.getComponent(PairStub).props('blocked')).toBe(true)
+  })
+
+  it('keeps selected Docker members when returning to verification but requires fresh checks', async () => {
+    const wrapper = render()
+    await verify(wrapper)
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(false)
+    await click(wrapper, '4. 执行安装')
+    expect(wrapper.findComponent(PairStub).exists()).toBe(false)
+    await click(wrapper, '5. 验证与配对')
+    expect(wrapper.findAllComponents(Select).map(select => select.props('modelValue'))).toEqual(['a', 'b'])
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(true)
+    await click(wrapper, '刷新并检查两台 Agent')
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(false)
+  })
+
+  it('checks two native Shell members without requiring Docker or claiming native dependencies are ready', async () => {
+    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a', { deployment_method: 'shell' }), device('b', { deployment_method: 'shell' })] } as any)
+    vi.mocked(agentApi.getDockerHAEnvironment).mockImplementation(async id => ({ data: environment(id, {
+      oxidns_ha_container_protocols: [], oxidns_ha_environment: { kind: 'native', ready: true, host_id: `host-${id}` },
+    }) } as any))
+    const wrapper = mount(OxiDNSHAPairing, { props: { profileId: 'space', profileName: '家庭 DNS', initialAgentId: 'a' }, global: { stubs: { AgentDNSHA: PairStub } }, attachTo: document.body })
+    wrappers.push(wrapper)
+    await click(wrapper as any, '刷新并检查两台 Agent')
+    expect(wrapper.findAllComponents(Select)[0]!.props('modelValue')).toBe('a')
+    wrapper.findAllComponents(Select)[1]!.vm.$emit('update:modelValue', 'b')
+    await flushPromises()
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(true)
+    await click(wrapper as any, '刷新并检查两台 Agent')
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(false)
+    expect(wrapper.text()).toContain('身份已读取，依赖将在开启时检查')
+    expect(wrapper.text()).toContain('正式开启时还会检查权限、服务管理和 DNS 配置')
+    expect(wrapper.text()).not.toContain('Docker 端查看容器日志')
+    expect(wrapper.text()).not.toContain('Docker 镜像升级')
+  })
+
+  it('ignores native environment responses after hiding the pairing step', async () => {
+    vi.mocked(agentApi.getAll).mockResolvedValue({ data: [device('a', { deployment_method: 'shell' })] } as any)
+    let finish!: (value: any) => void
+    vi.mocked(agentApi.getDockerHAEnvironment).mockReturnValueOnce(new Promise(resolve => { finish = resolve }) as any)
+    const wrapper = mount(OxiDNSHAPairing, { props: { profileId: 'space', profileName: '家庭 DNS', initialAgentId: 'a' }, global: { stubs: { AgentDNSHA: PairStub } }, attachTo: document.body })
+    wrappers.push(wrapper)
+    await click(wrapper as any, '刷新并检查两台 Agent')
+    await wrapper.setProps({ active: false })
+    finish({ data: environment('a', { oxidns_ha_environment: { kind: 'native', ready: true, host_id: 'host-a' } }) })
+    await flushPromises()
+    expect(wrapper.findComponent(PairStub).exists()).toBe(false)
+    expect(wrapper.emitted('changed')).toBeUndefined()
+    expect(wrapper.text()).not.toContain('实时检查时间')
+    await wrapper.setProps({ active: true })
+    expect(wrapper.findAllComponents(Select)[0]!.props('modelValue')).toBe('a')
+    expect(wrapper.getComponent(PairStub).props('blocked')).toBe(true)
+    expect(wrapper.text()).toContain('尚未实时检查')
   })
 
   it('does not assume generated verification commands passed, and uses the actual paired VIP', async () => {

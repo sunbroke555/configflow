@@ -204,7 +204,7 @@
               :agents="agents"
               :blocked="deploymentBusy(agent.id) || upgradeBusy(agent.id) || pushingIds.has(agent.id)"
               @changed="loadAgents"
-              @install-guide="openDockerHAGuide"
+              @install-guide="openOxiDNSHAGuide(agent)"
             />
 
             <OxiDNSRuleUpdate v-if="agent.service_type === 'oxidns'" :ref="instance => setRuleUpdateRef(agent.id, instance)"
@@ -369,7 +369,7 @@
         </DialogHeader>
 
         <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
-          <FormField label="使用模式" hint="安装服务选普通模式，需要局域网分流选 Linux 网关。" :help="optionHelp('普通模式按服务选择 Shell 或 Docker 安装；需要局域网分流时选 Linux 网关。', 'OxiDNS 的 Docker 高可用安装在对应服务内选择；网关向导会安装代理与 DNS，并检查网络转发。')">
+          <FormField label="使用模式" hint="安装服务选普通模式，需要局域网分流选 Linux 网关。" :help="optionHelp('普通模式按服务选择 Shell 或 Docker 安装；需要局域网分流时选 Linux 网关。', 'OxiDNS 的高可用安装在对应服务内选择；网关向导会安装代理与 DNS，并检查网络转发。')">
             <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
               <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
               <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 网关</label>
@@ -421,7 +421,7 @@
               </RadioGroup>
             </FormField>
 
-            <FormField v-if="isDockerOxiDNS" label="OxiDNS 部署方式">
+            <FormField v-if="isOxiDNSInstallation" label="OxiDNS 部署方式">
               <RadioGroup v-model="oxidnsInstallMode" class="flex flex-wrap gap-2" aria-label="OxiDNS 部署方式">
                 <label :class="[chipClass(oxidnsInstallMode === 'standard'), 'min-h-11']"><RadioGroupItem value="standard" />常规安装</label>
                 <label :class="[chipClass(oxidnsInstallMode === 'ha'), 'min-h-11']"><RadioGroupItem value="ha" />高可用安装</label>
@@ -429,8 +429,19 @@
             </FormField>
           </div>
 
-          <DockerHAInstallGuide v-if="showDockerHAGuide" :profile-id="profileStore.activeProfileId.value" :profile-name="activeProfileName" :server-url="guideServerUrl" @changed="loadAgents" />
-          <template v-else>
+          <section v-if="showShellHAGuide" class="flex min-w-0 flex-col gap-4" aria-label="OxiDNS Shell HA 安装引导">
+            <div>
+              <h3 class="m-0 font-display text-xl">两台主机，共用一个 DNS 地址</h3>
+              <p class="mb-0 mt-2 text-[13px] leading-relaxed text-muted-foreground">支持两台 Shell，或 Shell 与 Docker 混合。本次使用配置空间「{{ haGuideProfile.name }}」。</p>
+            </div>
+            <nav class="grid grid-cols-2 gap-2" aria-label="Shell 高可用安装步骤">
+              <Button v-for="item in shellHASteps" :key="item.value" variant="outline" class="min-h-11 h-auto whitespace-normal px-2 py-2 text-xs" :class="shellHAStep === item.value ? 'border-primary-accent bg-primary-soft text-primary-accent' : ''" :aria-current="shellHAStep === item.value ? 'step' : undefined" @click="shellHAStep = item.value">{{ item.label }}</Button>
+            </nav>
+            <ShellHAPreparation v-if="shellHAStep === 'install'" />
+          </section>
+          <DockerHAInstallGuide v-if="showDockerHAGuide" :profile-id="haGuideProfile.id" :profile-name="haGuideProfile.name" :server-url="guideServerUrl" @changed="loadAgents" />
+          <OxiDNSHAPairing v-if="showShellHAGuide && shellHAPairingVisited" v-show="shellHAStep === 'pair'" :active="shellHAStep === 'pair'" :profile-id="haGuideProfile.id" :profile-name="haGuideProfile.name" :initial-agent-id="shellHAAgentId" @changed="loadAgents" />
+          <template v-if="showInstallForm">
           <div class="grid grid-cols-2 gap-4 border-t border-border/60 pt-4">
             <FormField label="Agent 名称" html-for="agent-name" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'min-w-0' : 'col-span-2 sm:col-span-1'">
               <Input id="agent-name" v-model="scriptForm.name" class="min-h-11 bg-background/50" placeholder="例如：home-server" />
@@ -738,7 +749,7 @@
 
         <DialogFooter class="shrink-0 flex-row items-center justify-end gap-2 border-t border-border/60 pt-4">
           <Button variant="outline" class="min-h-11" @click="scriptDialogVisible = false">关闭</Button>
-          <template v-if="installationMode === 'ordinary' && !showDockerHAGuide">
+          <template v-if="showInstallForm">
           <Button v-if="installCommand || dockerComposeContent || dockerRunCommand" variant="outline" class="min-h-11" @click="resetForm">重新生成</Button>
           <Button v-else class="min-h-11" :disabled="scriptLoading" @click="generateScript">
             <Loader2 v-if="scriptLoading" class="size-4 animate-spin" />
@@ -974,6 +985,8 @@ import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSFollow from '@/components/agents/AgentDNSFollow.vue'
 import AgentDNSHA from '@/components/agents/AgentDNSHA.vue'
+import OxiDNSHAPairing from '@/components/agents/OxiDNSHAPairing.vue'
+import ShellHAPreparation from '@/components/agents/ShellHAPreparation.vue'
 import DockerHAInstallGuide from '@/components/agents/DockerHAInstallGuide.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
@@ -1093,13 +1106,29 @@ const closeAgentSettings = () => {
 const scriptDialogVisible = ref(false)
 const installationMode = ref<'ordinary' | 'gateway'>('ordinary')
 const oxidnsInstallMode = ref<'standard' | 'ha'>('standard')
+const shellHAStep = ref<'install' | 'pair'>('install')
+const shellHASteps = [{ value: 'install', label: '1. 安装与准备' }, { value: 'pair', label: '2. 验证与配对' }] as const
+const shellHAAgentId = ref('')
+const shellHAPairingVisited = ref(false)
+const haGuideProfile = ref({ id: '', name: '' })
 const guideServerUrl = localStorage.getItem('serverDomain') || window.location.origin
-const openDockerHAGuide = () => {
+const openOxiDNSHAGuide = (agent: Agent) => {
   installationMode.value = 'ordinary'
-  scriptForm.value.installType = 'docker'
-  scriptForm.value.dockerMode = 'oxidns'
-  onDockerModeChange()
+  if (agent.deployment_method === 'docker') {
+    scriptForm.value.installType = 'docker'
+    scriptForm.value.dockerMode = 'oxidns'
+    onDockerModeChange()
+  } else {
+    scriptForm.value.installType = 'shell'
+    scriptForm.value.shellMode = 'single'
+    scriptForm.value.type = 'oxidns'
+    onServiceTypeChange()
+  }
   oxidnsInstallMode.value = 'ha'
+  const profileId = agent.profile_id || defaultProfileId.value
+  haGuideProfile.value = { id: profileId, name: profileStore.profileName(profileId) }
+  shellHAAgentId.value = agent.id
+  shellHAStep.value = 'pair'
   scriptDialogVisible.value = true
 }
 const gatewayInstallContext = ref<{ profileId: string; profileName: string } | null>(null)
@@ -1200,8 +1229,23 @@ const createScriptForm = () => ({
 })
 const scriptForm = ref(createScriptForm())
 const isDockerOxiDNS = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns')
+const isShellOxiDNS = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && scriptForm.value.type === 'oxidns')
+const isOxiDNSInstallation = computed(() => isDockerOxiDNS.value || isShellOxiDNS.value)
 const showDockerHAGuide = computed(() => installationMode.value === 'ordinary' && isDockerOxiDNS.value && oxidnsInstallMode.value === 'ha')
-watch(isDockerOxiDNS, selected => { if (!selected) oxidnsInstallMode.value = 'standard' }, { flush: 'sync' })
+const showShellHAGuide = computed(() => installationMode.value === 'ordinary' && isShellOxiDNS.value && oxidnsInstallMode.value === 'ha')
+const showInstallForm = computed(() => installationMode.value === 'ordinary' && !showDockerHAGuide.value && !(showShellHAGuide.value && shellHAStep.value === 'pair'))
+watch([showShellHAGuide, shellHAStep], ([shown, step]) => {
+  if (!shown) shellHAPairingVisited.value = false
+  else if (step === 'pair') shellHAPairingVisited.value = true
+}, { flush: 'sync' })
+watch([() => scriptForm.value.installType, isOxiDNSInstallation], ([type, selected], [previousType]) => {
+  if (!selected || type !== previousType) oxidnsInstallMode.value = 'standard'
+}, { flush: 'sync' })
+watch(oxidnsInstallMode, () => {
+  shellHAStep.value = 'install'
+  shellHAAgentId.value = ''
+  haGuideProfile.value = { id: profileStore.activeProfileId.value, name: profileStore.profileName(profileStore.activeProfileId.value) }
+}, { flush: 'sync' })
 const dockerDNSHA = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns' && scriptForm.value.dockerDNSHA)
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
@@ -2127,6 +2171,8 @@ const handleGenerateScript = () => {
 const showGenerateScriptDialog = () => {
   installationMode.value = 'ordinary'
   oxidnsInstallMode.value = 'standard'
+  shellHAStep.value = 'install'
+  shellHAAgentId.value = ''
   // 清空其他值
   installScript.value = ''
   installScriptUrl.value = ''
@@ -2159,6 +2205,8 @@ const resetForm = () => {
   scriptPanelOpen.value = false
 }
 
+// Moving to pairing invalidates unfinished generation but retains any completed command for returning.
+watch(shellHAStep, () => { scriptRequest++; scriptLoading.value = false }, { flush: 'sync' })
 watch([installationMode, oxidnsInstallMode], resetForm, { flush: 'sync' })
 watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
 watch(scriptDialogVisible, resetForm, { flush: 'sync' })

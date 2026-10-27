@@ -227,7 +227,7 @@ try {
     assert.equal(await page.locator('[aria-label="新安装部署方式"]').count(), 0)
     await page.getByRole('button', { name: '生成主机 2 的安装命令', exact: true }).waitFor()
     await step(5)
-    assert.ok(await page.getByText('可选择已存在的 Shell 节点与新 Docker 节点。', { exact: false }).isVisible())
+    assert.ok(await page.getByText('支持两台 Shell、两台 Docker，或 Shell 与 Docker 混合。', { exact: false }).isVisible())
     assert.deepEqual(await ids(), agentsBefore, 'Generating configuration must not register Agents')
     report.cases.push({ width, theme, network, identity_mode: 'installation', service_count: network === 'host' ? 2 : 1, download_bytes_equal: true,
       clipboard_equal: true, no_sidecar_files: true, no_identity_form: true, single_host_shortcut: true, script_and_migration: true,

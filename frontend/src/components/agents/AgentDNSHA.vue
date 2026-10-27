@@ -401,7 +401,7 @@ async function disable(force: boolean) {
             <li>两台 OxiDNS 转发到同一个 Mihomo：代理 DNS 上游填 Mihomo 的局域网地址，不能用 127.0.0.1。</li>
             <li>开启或停用后，到上游路由页重新发布 DHCP DNS 与 DNS 劫持。</li>
           </ul>
-          <Button v-if="includesDocker && showInstallGuide" variant="outline" class="mt-3 min-h-11" :disabled="busy" @click="open = false; emit('install-guide')">打开 Docker 高可用安装引导</Button>
+          <Button v-if="showInstallGuide" variant="outline" class="mt-3 min-h-11" :disabled="busy" @click="open = false; emit('install-guide')">打开高可用安装引导</Button>
         </div>
         <p v-if="error" role="alert" class="m-0 whitespace-pre-wrap text-sm text-destructive-accent [overflow-wrap:anywhere]">{{ error }}</p>
         <DialogFooter class="flex-wrap gap-2">
