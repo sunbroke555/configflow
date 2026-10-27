@@ -381,10 +381,12 @@ def test_normal_republication_requires_fresh_receipt_check_then_recovers(env):
     assert dns.validate_binding(env.repository.get_system(), binding) == '192.0.2.2:15353'
 
 
-def publish_forward_fixture(env, upstreams, **forward_options):
+def publish_forward_fixture(env, upstreams, *, network=None, **forward_options):
     source = deepcopy(env.source)
     document = yaml.safe_load(source['oxidns']['native_config'])
     document['plugins'][0]['args'] = {'upstreams': upstreams, **forward_options}
+    if network is not None:
+        document['network'] = network
     source['oxidns']['native_config'] = yaml.safe_dump(document, sort_keys=False)
     env.repository.save_profile('default', {'oxidns': source['oxidns']})
     candidate = build_deployment_bundle(env.manager.get_agent_by_id(env.agent_id), source,
@@ -439,6 +441,30 @@ def test_reordered_or_changed_published_candidates_reject_stale_id(env):
     publish_forward_fixture(env, [{'addr': '192.0.2.53'}, {'addr': '192.0.2.54'}])
     stale = selected_payload(env)
     publish_forward_fixture(env, [{'addr': '192.0.2.54'}, {'addr': '192.0.2.53'}])
+    with pytest.raises(ValueError, match='已变更'):
+        dns.create(env.manager, stale, verify=env.verify)
+    assert not env.jobs and not env.uploads
+
+
+@pytest.mark.parametrize('profile', [
+    {'proxy': {'socks5': 'user:private-secret@127.0.0.1:1080'}},
+    {'proxy': 'direct', 'resolver': 'system'},
+])
+def test_global_default_outbound_is_not_guessed_from_profile_name(env, profile):
+    publish_forward_fixture(env, [{'addr': '192.0.2.53'}],
+        network={'outbound': {'default': 'direct', 'profiles': {'direct': profile}}})
+    candidate = dns.options(env.manager)['agents'][0]['upstreams'][0]
+    assert not candidate['eligible'] and '全局默认出站' in candidate['reason']
+    assert 'private-secret' not in json.dumps(candidate)
+    with pytest.raises(ValueError, match='全局默认出站'):
+        dns.create(env.manager, selected_payload(env, candidate), verify=env.verify)
+    assert not env.jobs and not env.uploads
+
+
+def test_global_outbound_change_invalidates_previously_selected_candidate(env):
+    stale = selected_payload(env)
+    publish_forward_fixture(env, [{'addr': '192.0.2.53'}], network={'outbound': {
+        'default': 'remote', 'profiles': {'remote': {'proxy': {'socks5': '127.0.0.1:1080'}}}}})
     with pytest.raises(ValueError, match='已变更'):
         dns.create(env.manager, stale, verify=env.verify)
     assert not env.jobs and not env.uploads

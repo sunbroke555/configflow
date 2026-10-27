@@ -132,6 +132,9 @@ def _upstreams(agent, baseline):
     """
     from backend.utils.node_dns import normalize_dns_servers
     document = _document(baseline['source'].get('oxidns'))
+    network = document.get('network') or {}
+    outbound = network.get('outbound') or {} if isinstance(network, dict) else {}
+    outbound_digest = hashlib.sha256(json.dumps(outbound, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     owned = {p['tag'] for record in agent.get(FIELD, {}).values() for p in record.get('plugins', [])}
     public, definitions = [], {}
     for index, plugin in enumerate(document['plugins']):
@@ -149,7 +152,8 @@ def _upstreams(agent, baseline):
         arguments_digest = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         for offset, entry in enumerate(entries):
             fingerprint = {'agent_id': agent['id'], 'profile_id': agent.get('profile_id', 'default'),
-                'position': [index, offset], 'tag': tag, 'args_digest': arguments_digest}
+                'position': [index, offset], 'tag': tag, 'args_digest': arguments_digest,
+                'outbound_digest': outbound_digest}
             ident = hashlib.sha256(json.dumps(fingerprint, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             address, bootstrap, reason = '', [], ''
             try:
@@ -173,6 +177,11 @@ def _upstreams(agent, baseline):
                     raise ValueError('此上游依赖 IPv6 引导解析，暂不支持复用')
                 if entry.get('outbound') or entry.get('socks5'):
                     raise ValueError('此上游依赖代理出站；请选择直接上游或手动填写')
+                # An omitted per-upstream outbound inherits the global default.
+                # Do not infer direct transport from a profile's name or drop
+                # its resolver/proxy policy when copying an executor.
+                if not isinstance(outbound, dict) or outbound.get('default'):
+                    raise ValueError('此上游继承全局默认出站，暂不支持安全复用；请手动填写并检测完整路径')
                 if entry.get('bind_to_device') and not re.fullmatch(r'[\w.:-]{1,64}', str(entry['bind_to_device'])):
                     raise ValueError('无法安全复用设备绑定参数')
             except (ValueError, TypeError) as error:
