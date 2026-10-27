@@ -108,8 +108,8 @@ async function apply() {
       <FormField
         label="DNS（OxiDNS）"
         html-for="rule-dns-batch"
-        :hint="isUpstreamValue(value) ? PINNED_HINT : DNS_COPY[copyKey(value)].hint"
-        :help="DNS_COPY[copyKey(value)].help"
+        :hint="isUpstreamValue(value) ? PINNED_HINT : undefined"
+        :help="`${DNS_COPY[copyKey(value)].hint}\n\n${DNS_COPY[copyKey(value)].help}`"
       >
         <RuleDnsSelect
           id="rule-dns-batch"

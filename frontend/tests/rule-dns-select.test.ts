@@ -47,8 +47,8 @@ describe('rule DNS selector', () => {
     expect(wrapper.get('button').text()).toBe('跟随策略 · 代理 DNS')
     const headings = Array.from(document.querySelectorAll('[data-slot="command-group-heading"]')).map(item => item.textContent?.trim())
     expect(headings).toEqual(['跟随与默认', '解析', '指定上游', '拦截'])
-    expect(option('跟随策略').textContent).toContain('当前：代理 DNS')
-    expect(option('默认上游').textContent).toContain('当前：代理 DNS')
+    expect(option('跟随策略').textContent).toContain('按当前配置：代理 DNS')
+    expect(option('默认上游').textContent).toContain('未匹配时：代理 DNS')
     expect(option('不存在').textContent).toContain('告诉客户端这个域名不存在')
     expect(options().map(item => item.querySelector('.text-sm, .font-mono')?.textContent?.trim())).toEqual([
       '跟随策略', '默认上游', '直连 DNS', '代理 DNS', '直连 · 223.5.5.5', '代理 · 127.0.0.1:1053', '拒绝', '不存在', '空应答', '黑洞'

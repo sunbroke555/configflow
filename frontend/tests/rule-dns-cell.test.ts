@@ -137,7 +137,7 @@ describe('rule DNS column', () => {
     await dnsTrigger(wrapper, 'openai.com').trigger('click')
     await flushPromises()
     const follow = options().find(item => item.querySelector('.block')?.textContent?.trim() === '跟随策略')!
-    expect(follow.textContent).toContain('当前：直连 DNS')
+    expect(follow.textContent).toContain('按当前配置：直连 DNS')
     follow.click()
     await flushPromises()
     expect(network.rules.setDns).toHaveBeenCalledWith({ 'r-ai': 'follow' }, {}, 'default')
