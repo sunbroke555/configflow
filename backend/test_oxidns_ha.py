@@ -146,7 +146,7 @@ def test_invalid_requests_never_reach_an_agent(pair, change, message):
 
 
 @pytest.mark.parametrize(('edit', 'message'), [
-    ({'service_type': 'mihomo'}, '不是 OxiDNS'), ({'deployment_method': 'docker'}, 'Docker'),
+    ({'service_type': 'mihomo'}, '不是 OxiDNS'),
     ({'profile_id': 'other'}, '配置空间'), ({'host': PRIMARY_HOST}, '不能相同'), ({'host': 'dns.local'}, 'IPv4'),
     ({'enabled': False}, '已停用'),
 ])

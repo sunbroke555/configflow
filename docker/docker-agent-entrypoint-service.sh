@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+if [ "${SERVICE_TYPE:-}" = "ha-companion" ]; then
+    exec /ha-companion-entrypoint.sh
+fi
+
 # ==============================================================================
 # ConfigFlow Agent Docker Entrypoint (统一服务入口)
 # ------------------------------------------------------------------------------
@@ -243,6 +247,25 @@ set_supervisor_autostart() {
 # ==============================================================================
 
 echo "Starting ConfigFlow Agent..."
+
+case "${CONFIGFLOW_DNS_HA:-0}" in
+    0) ;;
+    1)
+        if [ "${SERVICE_TYPE:-}" != "oxidns" ] && { [ -n "${SERVICE_TYPE:-}" ] || [ "${ENABLE_OXIDNS:-false}" != "true" ] || [ "${ENABLE_MIHOMO:-false}" = "true" ] || [ "${ENABLE_MOSDNS:-false}" = "true" ]; }; then
+            echo "CONFIGFLOW_DNS_HA=1 requires a dedicated OxiDNS container; Mihomo, MosDNS and AIO are unsupported." >&2
+            exit 1
+        fi
+        case "${CONFIGFLOW_DNS_HA_NETWORK:-}" in
+            host|macvlan) ;;
+            *) echo "CONFIGFLOW_DNS_HA_NETWORK must be host or macvlan." >&2; exit 1 ;;
+        esac
+        mkdir -p /var/lib/configflow-ha
+        chmod 700 /var/lib/configflow-ha
+        ;;
+    *) echo "CONFIGFLOW_DNS_HA must be 0 or 1." >&2; exit 1 ;;
+esac
+# No journal means no keepalived: Agent recovery owns startup after Supervisor.
+set_supervisor_autostart /etc/supervisor/conf.d/configflow-keepalived.conf false
 
 if [ -n "$SERVICE_TYPE" ]; then
     # ---- 单服务模式 ----

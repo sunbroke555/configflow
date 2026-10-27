@@ -47,6 +47,8 @@ COPY --from=oxidns-bin /usr/share/licenses/oxidns/LICENSE /usr/share/licenses/ox
 COPY backend/agents/go-agent/supervisord.conf /etc/supervisor/supervisord.conf
 COPY backend/agents/go-agent/supervisor/ /etc/supervisor/conf.d/
 COPY --chmod=755 docker/docker-agent-entrypoint-service.sh /entrypoint.sh
+COPY --chmod=755 docker/docker-ha-companion-entrypoint.sh /ha-companion-entrypoint.sh
+COPY docker/supervisor-ha-companion.conf /etc/supervisor/ha-companion.conf
 
 # ==============================================================================
 # Final: 统一镜像（Agent + Mihomo + MosDNS）
@@ -59,7 +61,7 @@ FROM alpine:latest
 RUN { sed -i 's/dl-cdn.alpinelinux.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apk/repositories && apk update; } || \
     { echo "镜像源不可用，回退官方源" && \
       sed -i 's/mirrors.tuna.tsinghua.edu.cn/dl-cdn.alpinelinux.org/g' /etc/apk/repositories && apk update; } && \
-    apk add --no-cache ca-certificates tzdata su-exec supervisor python3 py3-pip bash && \
+    apk add --no-cache ca-certificates tzdata su-exec supervisor python3 py3-pip bash keepalived iproute2 && \
     pip3 install --no-cache-dir --disable-pip-version-check --break-system-packages "setuptools<81" && \
     rm -rf /var/cache/apk/* && \
     mkdir -p /etc/mihomo /etc/mosdns /etc/oxidns/state /etc/supervisor/conf.d /var/log/supervisor /run && \

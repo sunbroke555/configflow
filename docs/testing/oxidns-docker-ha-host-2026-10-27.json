@@ -1,0 +1,597 @@
+{
+  "started_at": 1793083657.3102646,
+  "mode": "host",
+  "initial_hashes": {
+    "130": {
+      "/etc/oxidns/config.yaml": "2a18822581294c6e4643429b201f6a396cb790936fa3f9160b2d4e0b3b7efd75",
+      "/etc/oxidns/rules/lab.txt": "6ad02d78130a4a78c372dee5e8bdde784a0138c8a12b58b8a6d3d6e5434f890e"
+    },
+    "131": {
+      "/etc/oxidns/config.yaml": "6d6b958552bcc00b6c668ef2b99163a9f3f772ceb7c4687d242b82837b5b6dcc",
+      "/etc/oxidns/rules/lab.txt": "8e57eaac7285fe5346e03a098739a79d54b4507448e7f14620bdfb37332f701f"
+    }
+  },
+  "initial_dns": {
+    "192.168.79.21": {
+      "ok": true,
+      "rcode": 0,
+      "ip": "198.51.100.10",
+      "ms": 0.984
+    },
+    "192.168.79.22": {
+      "ok": true,
+      "rcode": 0,
+      "ip": "198.51.100.11",
+      "ms": 0.298
+    },
+    "192.168.79.53": {
+      "ok": false,
+      "error": "TimeoutError",
+      "ms": 300.55
+    }
+  },
+  "agent_version": "1.8.47-go",
+  "scenarios": [
+    {
+      "name": "enable-synchronizes-different-real-fallback-upstreams",
+      "publication": {
+        "active_agent_id": null,
+        "id": "920ab3c0c1e141bf864b9ec7bd940eca",
+        "members": [
+          {
+            "agent_id": "agent_1793083529732_2e2ef9",
+            "deployment_id": "ha-6e23b2c20b6585fd531008deaf0b19b8e04eb8ef3e3d9ac4",
+            "name": "Docker HA host 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793083525155_8f2209",
+            "deployment_id": "ha-4cdebc2583d042018cbc5eeebf9880df",
+            "name": "Docker HA host 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793083525155_8f2209",
+        "owner_deployment_id": "ha-4cdebc2583d042018cbc5eeebf9880df",
+        "phase": "done",
+        "routers": [],
+        "status": "succeeded",
+        "updated_at": 1793083689,
+        "warnings": []
+      },
+      "files": {
+        "130": {
+          "/etc/oxidns/config.yaml": "6e5e5caed03b2f547ae11030e52e293ea4ab08238dcf70477fb9957fce6e3647",
+          "/etc/oxidns/rules/lab.txt": "3caf97131f0ea93798a056f80035435fe7b9f0bf0a6812e9a813fd70d76eedf8"
+        },
+        "131": {
+          "/etc/oxidns/config.yaml": "6e5e5caed03b2f547ae11030e52e293ea4ab08238dcf70477fb9957fce6e3647",
+          "/etc/oxidns/rules/lab.txt": "3caf97131f0ea93798a056f80035435fe7b9f0bf0a6812e9a813fd70d76eedf8"
+        }
+      },
+      "dns": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.4
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.291
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.287
+        }
+      },
+      "finished_at": 1793083693.6594849
+    },
+    {
+      "name": "initial-core-kill-smoke",
+      "companion_running_after_core_kill": true,
+      "peer_took_vip": true,
+      "answers_after_failover": {
+        "192.168.79.21": {
+          "ok": false,
+          "error": "TimeoutError",
+          "ms": 300.547
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 1.673
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.20",
+          "ms": 0.565
+        }
+      },
+      "primary_recovered": true,
+      "finished_at": 1793083993.3209577,
+      "started_at": 1793083974.7873945
+    },
+    {
+      "name": "publication-migrates-vip-before-old-core-restart",
+      "started_at": 1793084471.5696378,
+      "finished_at": 1793084520.0964978,
+      "dns_probe": {
+        "samples": 472,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "first_failed_request_at": null,
+        "last_failed_request_at": null
+      },
+      "publication": {
+        "active_agent_id": null,
+        "id": "465965ec549e4140bd63170b24ddd263",
+        "members": [
+          {
+            "agent_id": "agent_1793083529732_2e2ef9",
+            "deployment_id": "24b67a4f49634207920c0876f1e1e60f",
+            "name": "Docker HA host 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793083525155_8f2209",
+            "deployment_id": "ha-7838a0392aea7f6291f54b80b21806368ad2d13eb0c5d957",
+            "name": "Docker HA host 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793083529732_2e2ef9",
+        "owner_deployment_id": "24b67a4f49634207920c0876f1e1e60f",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793084509
+      },
+      "files": {
+        "130": {
+          "agent_id": "agent_1793083525155_8f2209",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "1271",
+          "container_id": "ac2404910ed9e41df535b41de8efc9445c420e2c0041b913e0543117a66ffc9c"
+        },
+        "131": {
+          "agent_id": "agent_1793083529732_2e2ef9",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "2038",
+          "container_id": "9c4f9918c2be557aacb1f39834e0241400487f4f88f3c82f62a4269b083f9428"
+        }
+      },
+      "answers": {
+        "192.168.79.21": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.465
+        },
+        "192.168.79.22": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.277
+        },
+        "192.168.79.53": {
+          "ok": true,
+          "rcode": 0,
+          "ip": "198.51.100.30",
+          "ms": 0.215
+        }
+      },
+      "service_events": {
+        "130": [
+          {
+            "time": 1793084497.257031,
+            "message": "2026-10-27 07:01:37,256 INFO stopped: oxidns (exit status 0)"
+          },
+          {
+            "time": 1793084497.610078,
+            "message": "2026-10-27 07:01:37,609 INFO spawned: 'oxidns' with pid 1271"
+          }
+        ],
+        "131": [
+          {
+            "time": 1793084475.510409,
+            "message": "2026-10-27 07:01:15,510 INFO stopped: oxidns (exit status 0)"
+          },
+          {
+            "time": 1793084475.86204,
+            "message": "2026-10-27 07:01:15,861 INFO spawned: 'oxidns' with pid 2038"
+          }
+        ]
+      },
+      "handoff_proof": {
+        "standby_started_at": 1793084475.86204,
+        "updated_vip_dns_at": 1793084488.0673525,
+        "old_core_stopped_at": 1793084497.257031
+      }
+    },
+    {
+      "name": "core-container-kill-and-recovery",
+      "started_at": 1793084524.2975993,
+      "finished_at": 1793084553.5748496,
+      "dns_probe": {
+        "samples": 198,
+        "vip_failed_samples": 16,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793084525.2285862,
+          1793084525.5295582,
+          1793084525.8304234,
+          1793084526.1313076,
+          1793084526.4320316,
+          1793084526.7328148,
+          1793084527.033554,
+          1793084527.3346608,
+          1793084527.6359391,
+          1793084527.9367988,
+          1793084528.2376628,
+          1793084528.538461,
+          1793084528.8393452,
+          1793084529.1402981,
+          1793084529.4411995,
+          1793084529.741817
+        ],
+        "first_failed_request_at": 1793084525.2285862,
+        "last_failed_request_at": 1793084529.741817
+      },
+      "before": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "1271",
+        "container_id": "ac2404910ed9e41df535b41de8efc9445c420e2c0041b913e0543117a66ffc9c"
+      },
+      "after": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "19",
+        "container_id": "ac2404910ed9e41df535b41de8efc9445c420e2c0041b913e0543117a66ffc9c"
+      },
+      "companion_running": true,
+      "peer_dns": {
+        "ok": true,
+        "rcode": 0,
+        "ip": "198.51.100.30",
+        "ms": 0.183
+      },
+      "source_vip_removed": true
+    },
+    {
+      "name": "normal-stop-and-container-recreation-preserve-identity-and-files",
+      "started_at": 1793084557.9393399,
+      "finished_at": 1793084581.1089191,
+      "dns_probe": {
+        "samples": 153,
+        "vip_failed_samples": 17,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793084560.1030679,
+          1793084560.404738,
+          1793084560.7056706,
+          1793084561.0065055,
+          1793084561.3073137,
+          1793084561.6080759,
+          1793084561.9088414,
+          1793084562.2097545,
+          1793084562.5105383,
+          1793084562.811414,
+          1793084563.1123605,
+          1793084563.4133162,
+          1793084563.7141042,
+          1793084564.0148742,
+          1793084564.315677,
+          1793084564.6164684,
+          1793084564.9173243
+        ],
+        "first_failed_request_at": 1793084560.1030679,
+        "last_failed_request_at": 1793084564.9173243
+      },
+      "before": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "19",
+        "container_id": "ac2404910ed9e41df535b41de8efc9445c420e2c0041b913e0543117a66ffc9c"
+      },
+      "after": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "19",
+        "container_id": "e3d353cf46578d39a97a672ceb1ba04988865385289d0c7566249ef764cc53c4"
+      }
+    },
+    {
+      "name": "normal-guardian-restart-recovers-with-core-untouched",
+      "started_at": 1793084581.1849265,
+      "finished_at": 1793084599.2286904,
+      "dns_probe": {
+        "samples": 176,
+        "vip_failed_samples": 1,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [
+          1793084584.254119
+        ],
+        "first_failed_request_at": 1793084584.254119,
+        "last_failed_request_at": 1793084584.254119
+      },
+      "before": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "19",
+        "container_id": "e3d353cf46578d39a97a672ceb1ba04988865385289d0c7566249ef764cc53c4"
+      },
+      "after": {
+        "agent_id": "agent_1793083525155_8f2209",
+        "hashes": {
+          "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+          "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+        },
+        "core_pid": "19",
+        "container_id": "e3d353cf46578d39a97a672ceb1ba04988865385289d0c7566249ef764cc53c4"
+      },
+      "runtime": {
+        "environment": {
+          "kind": "container",
+          "network": "host",
+          "ready": true,
+          "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+          "interface": "eth0.91",
+          "blockers": []
+        },
+        "error": "",
+        "handoff": null,
+        "managed": {
+          "active": true,
+          "applied_at": "2026-10-27T06:48:08Z",
+          "cidr": "192.168.79.0/24",
+          "interface": "eth0.91",
+          "pending": false,
+          "spec": {
+            "safety_version": 1,
+            "vip": "192.168.79.53",
+            "vrid": 53,
+            "priority": 150,
+            "self_ip": "192.168.79.21",
+            "peer_ip": "192.168.79.22"
+          }
+        },
+        "protocol": 1,
+        "runtime": {
+          "healthy": true,
+          "keepalived_running": true,
+          "role": "master",
+          "vip_healthy": true,
+          "vip_present": true
+        },
+        "success": true
+      }
+    },
+    {
+      "name": "manual-rule-update-completes-for-pair-without-core-restarts",
+      "started_at": 1793085040.6244943,
+      "finished_at": 1793085060.3401895,
+      "dns_probe": {
+        "samples": 196,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "first_failed_request_at": null,
+        "last_failed_request_at": null
+      },
+      "http_status": 202,
+      "publication": {
+        "active_agent_id": null,
+        "id": "0288f0dcb6674edf8735d8c82d182f8e",
+        "members": [
+          {
+            "agent_id": "agent_1793083529732_2e2ef9",
+            "deployment_id": "rules-3cf71ae9847b4c2a9b774e2d11e9277d",
+            "name": "Docker HA host 131",
+            "status": "succeeded"
+          },
+          {
+            "agent_id": "agent_1793083525155_8f2209",
+            "deployment_id": "ha-07616fa48bfda634b3b0b9dbb2c3d4182e0689410171b82a",
+            "name": "Docker HA host 130",
+            "status": "succeeded"
+          }
+        ],
+        "message": "主备配置与规则均已发布成功",
+        "owner_agent_id": "agent_1793083529732_2e2ef9",
+        "owner_deployment_id": "rules-3cf71ae9847b4c2a9b774e2d11e9277d",
+        "phase": "done",
+        "status": "succeeded",
+        "updated_at": 1793085054
+      },
+      "before": {
+        "130": {
+          "agent_id": "agent_1793083525155_8f2209",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "19",
+          "container_id": "e3d353cf46578d39a97a672ceb1ba04988865385289d0c7566249ef764cc53c4"
+        },
+        "131": {
+          "agent_id": "agent_1793083529732_2e2ef9",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "2038",
+          "container_id": "9c4f9918c2be557aacb1f39834e0241400487f4f88f3c82f62a4269b083f9428"
+        }
+      },
+      "after": {
+        "130": {
+          "agent_id": "agent_1793083525155_8f2209",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "19",
+          "container_id": "e3d353cf46578d39a97a672ceb1ba04988865385289d0c7566249ef764cc53c4"
+        },
+        "131": {
+          "agent_id": "agent_1793083529732_2e2ef9",
+          "hashes": {
+            "/etc/oxidns/config.yaml": "ee60b81cd17a51d45a54d4b61a9b04bcf09944baa340d1e867cbe50c2764801b",
+            "/etc/oxidns/rules/lab.txt": "483179c1d9e9b00168590fc1962ee3be115a24fe56648839317e74755dbd6f55"
+          },
+          "core_pid": "2038",
+          "container_id": "9c4f9918c2be557aacb1f39834e0241400487f4f88f3c82f62a4269b083f9428"
+        }
+      }
+    },
+    {
+      "name": "guardian-force-kill-retains-vip-until-guardian-recovery",
+      "started_at": 1793085062.3516169,
+      "finished_at": 1793085089.721742,
+      "dns_probe": {
+        "samples": 272,
+        "vip_failed_samples": 0,
+        "both_nodes_unavailable_samples": 0,
+        "failed_request_start_times": [],
+        "first_failed_request_at": null,
+        "last_failed_request_at": null
+      },
+      "duplicate_vip_holders": [
+        130,
+        131
+      ],
+      "duplicate_arp": [
+        "bc:24:11:25:ed:96",
+        "bc:24:11:e2:f5:57"
+      ],
+      "recovered_arp": [
+        "bc:24:11:e2:f5:57"
+      ],
+      "recovered_vip_holders": [
+        130
+      ],
+      "core_unchanged": true,
+      "limitation": "Killing the host-network HA companion can retain the host VIP; automatic residue removal is not promised."
+    }
+  ],
+  "dns_probe": {
+    "sample_count": 6018,
+    "sha256": "57192f5db6ff1d5b6d1671c03f19ddd92a2b4f9b87ec951b06694e2fb5f8a81c",
+    "vip_failed_samples": 34,
+    "both_nodes_unavailable_samples": 0
+  },
+  "rejections": {
+    "cases": [
+      {
+        "name": "missing-companion-net-admin-is-rejected",
+        "http_status": 409,
+        "environment": {
+          "kind": "container",
+          "network": "host",
+          "ready": false,
+          "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+          "interface": "eth0.91",
+          "blockers": [
+            "独立 HA 辅助容器的网络、权限或宿主身份证据未就绪"
+          ]
+        },
+        "message": "Docker HA host 130 的 Docker 高可用环境未就绪：独立 HA 辅助容器的网络、权限或宿主身份证据未就绪"
+      },
+      {
+        "name": "two-agents-on-same-docker-host-are-rejected",
+        "http_status": 409,
+        "environment": {
+          "kind": "container",
+          "network": "host",
+          "ready": true,
+          "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+          "interface": "eth0.91",
+          "blockers": []
+        },
+        "original_host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+        "message": "两台 OxiDNS 实际位于同一台宿主机，无法提供主机故障接管；请部署到两台独立设备"
+      },
+      {
+        "name": "ordinary-bridge-is-not-a-valid-host-ha-network",
+        "environment": {
+          "kind": "container",
+          "network": "host",
+          "ready": false,
+          "host_id": "66668ed5f54c16ca5b135d4d24521a4c58f618ff77928b7118c32dae8405c68a",
+          "blockers": [
+            "AGENT_IP 不在当前容器的网卡上，请检查 Docker 网络模式与固定地址",
+            "host HA 需要只读宿主网络命名空间证据，并使用 network_mode: host",
+            "独立 HA 辅助容器的网络、权限或宿主身份证据未就绪"
+          ]
+        },
+        "scope": "real Agent capability rejection; no backend mutation submitted"
+      }
+    ],
+    "core_unchanged": true,
+    "vip_absent": true
+  },
+  "versions": {
+    "docker": "29.9.2",
+    "agent": "1.8.47-go",
+    "oxidns": "1.6.1",
+    "keepalived": "2.3.4",
+    "image": "sha256:a5df4033c5711832479ed40075720b40ba6fcd9faa6c23169024139147c2fa4b"
+  },
+  "probe_method": {
+    "observer": "CT132",
+    "target_interval_ms": 100,
+    "dns_timeout_ms": 300,
+    "requests_parallel_per_round": 3,
+    "name": "sync.lab.invalid",
+    "note": "A failed sample is a failed DNS request, not a fixed 100 ms outage; timeouts stretch rounds."
+  },
+  "source_sha256": {
+    "docker/docker-ha-companion-entrypoint.sh": "f1e6889ba0f34641d52e6601361d16e5693a3748e13e7209c375f76b5be284b7",
+    "docker/supervisor-ha-companion.conf": "2fc62e47d9d89a7ac12d8c4227a64bbd5eaa00efa0895c3667b040d54353c1cd",
+    "docker/Dockerfile.agent": "53188967b17f7b4898ad2fcbfa9ed501df9aa98920e4d2d2bdf862406ff6af7a",
+    "docker/docker-agent-entrypoint-service.sh": "32034b52e7162517343c24d2a180b2493eea05229eae1d9d27def38481968d37",
+    "backend/agents/oxidns_ha.py": "29ef52fd8ecbeecd769bb830c29fa06b2cf12756fcc73abb3030de6e883a1fe0",
+    "backend/agents/oxidns_ha_handoff.py": "e965c64099b06a0024116fa16e8aa8af30b1c17f96b60f865f484918733fd77e",
+    "backend/agents/oxidns_ha_publish.py": "3d504f4223cba0695574f4b1dc2c236a655b6bfc34f650bf5e4a126d7ca8ed23",
+    "backend/agents/go-agent/routes/oxidns_ha.go": "e35d94e0e477eff83acff9ed89db4fcfd8c02f3ced4e86086e25aed489f2f901",
+    "backend/agents/go-agent/routes/oxidns_ha_check.go": "a494d8f4decaa5168f06469165dac41142107bcd7848e6c7af29286b1e36bfcc",
+    "backend/agents/go-agent/routes/oxidns_ha_container.go": "3890a7d6d44169b0065edbe2f1d8c75da64d03c19285754a8f0c3595048863c0",
+    "backend/agents/go-agent/routes/oxidns_ha_container_test.go": "ff94f5af00155a8ccbe0899a47f1b9e42d5e82198a0e146f69387ac245a207b7",
+    "backend/agents/go-agent/routes/oxidns_ha_handoff.go": "ed6123867739774a19c3749bc0d2db92e1b13393418d5f6d5f80c4785d71325a",
+    "backend/agents/go-agent/routes/oxidns_ha_handoff_test.go": "c83d225a210429f4f49e61aad64a555d2b37f21cc6dc6e79f0a6742d55023321",
+    "backend/agents/go-agent/routes/oxidns_ha_resources.go": "5a7cc74f6ec8399fd6dbc55d557a67156762c53e4a74eabe28faa2439acc5e23",
+    "backend/agents/go-agent/routes/oxidns_ha_test.go": "ffd82139fe1b34588fb369e87e1bd3c105ef34c34402ae8ab414e0d43d67d88d",
+    "scripts/tests/oxidns_docker_ha_lab.py": "9370e8ddc9265efe71b52863823a7c3d5db6ab830f2c3dd2784b08e0ed7cfe5f"
+  }
+}

@@ -276,6 +276,45 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 若已有外部规则更新定时任务，选择由外部任务或 OxiDNS 原生定时更新负责规则，避免两个任务同时写同一组文件。
 
+### Docker DNS 高可用安装
+
+需要包含 Docker HA 支持的新镜像（Agent 1.8.47-go 起）、两台不同的 Linux 宿主机、同一局域网与配置空间。两台宿主机使用 rootful Docker 和稳定地址，并允许彼此的 VRRP（IP 协议 112）及 DNS 通信。同一宿主机起两个容器不构成这套高可用；普通 bridge 容器、Docker Desktop 和非 Linux 宿主机不支持。每个受管 DNS 容器仅运行 OxiDNS，Mihomo、MosDNS 和 All-in-One 安装不启用此选项。
+
+1. 在 **系统 → Agent → 生成安装脚本** 选择 **Docker 容器 → OxiDNS**，勾选 **为 DNS 高可用准备容器**。
+2. 默认选择 **Host（推荐）**，填写这台宿主机的固定 IPv4。确认宿主机 DNS 的 UDP/TCP 53 及 Agent 端口没有被其他服务占用；不要填写准备分配的虚拟 IP。此模式生成 OxiDNS 与独立高可用容器两个服务，不需要 macvlan，也不映射端口。
+3. 在另一台主机生成另一份配置，修改名称和 IP，仍指向同一个可访问的 ConfigFlow 服务地址。复制 Compose 到各自主机的独立目录，先执行 `docker compose pull` 更新镜像，再执行 `docker compose up -d`；使用页面生成的 Docker Run 脚本时，先执行 `docker pull thsrite/config-flow-agent:latest`，避免复用不支持 HA 的旧缓存镜像。离线安装可先导入包含上述 Agent 版本的镜像。Host 示例见 [docker-compose-oxidns-ha.yaml](../docker/docker-compose-oxidns-ha.yaml)。
+4. 等两台 Agent 上线，绑定到同一配置空间。在其中一张卡片的 **DNS 高可用 → 设置** 中选择对端，填写局域网内未使用、位于 DHCP 池之外的虚拟 IP，然后点击 **开启**。首次同步两台配置与规则完成后才启用 VIP；后续发布会自动按实际 VIP 归属安排更新与迁移，无需另开迁移开关。
+5. 确认两台核心健康、只有一台持有 VIP，并从另一台局域网设备验证 VIP 的 DNS 应答，再到上游路由页重新发布 DHCP DNS 与 DNS 劫持。
+
+Host 模式的独立高可用容器使用同一个官方镜像，仅运行 keepalived 的专用 Supervisor。只有它额外获得 `NET_ADMIN`、`NET_RAW`；OxiDNS 容器通过专用 Unix socket 管理这一项服务，不能经该 socket 操作其他容器。两者共享受管 HA 目录，高可用容器只读访问 Agent 与核心目录。无需 Docker socket、`privileged` 或宿主 `/etc` 整目录挂载。主容器只读挂载 `/proc/1/ns/net`，用于核对实际 host 网络。
+
+两种模式都必须保留三个数据目录：`agent` 保存 Agent 身份、HA 归属与发布让位记录，`oxidns` 保存配置、规则、备份及核心状态，`ha` 保存受管 keepalived 配置与控制 socket。默认只读挂载宿主 `/etc/machine-id` 用于区分宿主机；若系统将稳定身份放在其他文件，可在 **Docker 高级配置 → 宿主机身份文件** 修改源路径。使用现有的稳定主机身份，同一宿主机的所有容器必须指向同一个文件，不要为每个容器随意生成不同 ID。
+
+若没有 `/etc/machine-id`，先检查 `/var/lib/dbus/machine-id`。两个位置都不存在、也没有其他稳定身份文件时，可在**宿主机上**一次性生成专用文件。先将下方路径替换为这台主机实际的**持久目录绝对路径**（例如 NAS 的共享文件夹），不要放在容器层或 `/tmp`。以有权创建该文件的用户执行；已有文件会保留，不会覆盖：
+
+```sh
+CF_HA_HOST_ID_FILE='/请替换为实际持久目录/configflow-host-id'
+umask 077
+mkdir -p "${CF_HA_HOST_ID_FILE%/*}"
+if [ ! -e "$CF_HA_HOST_ID_FILE" ] && [ ! -L "$CF_HA_HOST_ID_FILE" ]; then
+  (set -C; cat /proc/sys/kernel/random/uuid > "$CF_HA_HOST_ID_FILE")
+fi
+```
+
+在 **Docker 高级配置 → 宿主机身份文件** 填写该文件的完整路径后重新生成配置；手工编辑 Compose 时，将各服务身份文件的 `source` 都改为此路径（Host 两处，Macvlan 一处）。有效内容应为单行、去掉首尾空白后 16–128 字节，上述 UUID 满足要求。此文件按**宿主机**保存并长期复用，主容器与高可用容器使用同一个文件；不要为每个容器重建，也不要复制到另一台宿主机。对端在自己的持久目录独立生成一次。
+
+**已有容器接入：** 仅拉取镜像、更新 Agent 或点击开启，不能添加缺失的网络、权限和挂载。先备份原 Compose/启动参数与数据，等待正在进行的发布结束，再保留原 `agent`、`oxidns` 数据目录，按新模式补充 `ha` 目录及相关设置后重建。不要用新安装脚本覆盖已有配置。配置与规则由 ConfigFlow 自动按主备顺序发布；Docker 镜像升级由管理员逐台重建。已有 HA 组更新镜像时，先处理未持有 VIP 的一台，确认正常后再处理另一台；Host 模式更新 OxiDNS 时保留高可用容器运行，不要同时重建两台主机上的服务。
+
+**Host 的故障边界：** 独立高可用容器在 OxiDNS 容器停止或重启时仍可检查 DNS 并撤销 VIP。它正常停止时也会清理 VIP。但如果高可用容器自身遭到强制终止，或整个 Docker 被强制停止，VIP 可能仍留在宿主机网络中，形成地址冲突。故障检测与网络收敛也需要时间，不保证零查询失败。发生这类情况时先核对两台主机的 `ip -4 addr` 和 VIP 归属，恢复高可用服务或明确清理原主机的残留后再继续发布，不能把容器“已停止”当成 VIP 已消失。维护时正常停止高可用服务并确认 VIP 已转移，再关闭 Docker。
+
+### 可选：Macvlan 网络
+
+选择 **Macvlan** 时，为每台容器填写宿主网卡、局域网 CIDR、可选网关和固定 IPv4。容器地址、宿主地址和虚拟 IP 必须互不相同，且都需预留，不能与其他设备或 DHCP 分配冲突。参考 [docker-compose-oxidns-ha-macvlan.yaml](../docker/docker-compose-oxidns-ha-macvlan.yaml)。此模式只有一个容器，keepalived 在容器自己的网络空间内运行；该网络空间销毁时 VIP 随之消失。不要给它再接其他网络。
+
+macvlan 默认不能直接与宿主机通信；ConfigFlow 和 DNS 上游需位于可达的其他局域网主机，或已配置互通的 macvlan 网络。交换机和宿主网络驱动也需允许同一接口承载多个 MAC。无法使用 macvlan 时选择 Host，不需为此改变 NAS 品牌或安装方式。生成的 Run 脚本会新建专用 macvlan 网络；已有同名网络时停止，请沿用原 Compose/启动参数维护，不会盲目复用不明网络。
+
+群晖 Container Manager 可在 **项目 → 新增** 中导入 Compose，并支持 host 网络与自定义容器权限；无需通过定时任务循环执行发布。具体入口参见群晖官方[网络](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_network?version=7)、[容器](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_container?version=7)与[项目](https://kb.synology.com/en-global/DSM/help/ContainerManager/docker_project?version=7)说明。官方说明支持网络和部署入口，不代表本项目已在每个 NAS 型号上验证。
+
 ## 查看 Agent 和核心日志
 
 1. 在 **系统 → Agent** 找到设备，打开卡片上的「日志」。
@@ -344,7 +383,7 @@ OXIDNS_TEST_BINARY=/path/to/oxidns go test ./routes -run '^TestOxiDNSNativeDashb
 
 ## DNS 高可用与主备配置发布
 
-两台位于同一局域网、同一配置空间的 Shell OxiDNS Agent 可在 Agent 卡片的「DNS 高可用」中配对。两台需安装 keepalived，并支持高可用与事务发布接口；虚拟 IP 必须未被其他设备或 DHCP 地址池占用。代理 DNS 上游使用两台都可访问的同一个 Mihomo 地址。
+两台位于同一局域网、同一配置空间的 OxiDNS Agent 可在 Agent 卡片的「DNS 高可用」中配对。Shell 安装需预先安装 keepalived；Docker 需按上方专用高可用方式部署并通过环境检查。两台均需支持高可用与事务发布接口，且位于不同宿主机；虚拟 IP 必须未被其他设备或 DHCP 地址池占用。代理 DNS 上游使用两台都可访问的同一个 Mihomo 地址。
 
 开启时，ConfigFlow 捕获当前已保存的配置空间快照，只生成和下载一次配置及规则文件，再将相同内容依次发布到备机和主机。备机发布成功并通过 DNS 健康检查后，才开始更新主机；两台都成功后才启用 keepalived 和虚拟 IP。页面显示每台的实际进度，收到请求或备机成功不代表整组完成。开启成功后仍需到上游路由页重新发布 DHCP DNS 与 DNS 劫持。
 

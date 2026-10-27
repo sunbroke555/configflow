@@ -39,8 +39,13 @@ def prepare(manager, job, members, bundle):
     required = not bundle.manifest.get('reload_only')
     paired = all((member.get('oxidns_ha') or {}).get('enabled') is True for member in members.values())
     if required:
+        from .oxidns_ha import validate_pair_environments
+        capabilities = []
         for member in members.values():
             capability = manager._deployment_request(member, 'get', 'capabilities', timeout=5)
+            if not isinstance(capability, dict):
+                raise ValueError('Agent 的 DNS 高可用能力响应无效，请升级 Agent 后重试')
+            capabilities.append(capability)
             protocols = capability.get('oxidns_ha_handoff_protocols') or []
             if not isinstance(protocols, list) or 1 not in protocols:
                 raise ValueError(f'{member.get("name") or member["id"]} 的 Agent 不支持发布前迁移虚拟 IP，请先升级两台 Agent')
@@ -48,6 +53,7 @@ def prepare(manager, job, members, bundle):
                 record = _request(manager, member, 'get', job['id']).get('handoff')
                 if record and record.get('operation_id') != job['id']:
                     raise ValueError('设备仍有其他虚拟 IP 迁移记录，请先确认上一任务的清理结果')
+        validate_pair_environments(list(members.values()), capabilities)
     job['handoff_required'] = bool(required and paired)
     _save(manager, job)
 

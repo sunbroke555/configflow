@@ -1,0 +1,40 @@
+# Optional isolated LAN-address mode. Change parent/subnet/gateway/IP to your LAN.
+# The container IP must be unused and distinct from the host and the future VIP.
+services:
+  agent:
+    image: thsrite/config-flow-agent:latest
+    container_name: configflow-oxidns
+    restart: unless-stopped
+    stop_grace_period: 30s
+    cap_add: [NET_ADMIN, NET_RAW]
+    networks:
+      dns-ha:
+        ipv4_address: 192.168.1.31
+    environment:
+      SERVICE_TYPE: oxidns
+      SERVER_URL: http://192.168.1.10:5010
+      AGENT_NAME: dns-a
+      AGENT_IP: 192.168.1.31
+      AGENT_PORT: "8082"
+      CONFIGFLOW_DNS_HA: "1"
+      CONFIGFLOW_DNS_HA_NETWORK: macvlan
+      TZ: Asia/Shanghai
+    volumes:
+      - ./agent:/opt/configflow-agent
+      - ./oxidns:/etc/oxidns
+      - ./ha:/var/lib/configflow-ha
+      - type: bind
+        source: /etc/machine-id
+        target: /run/configflow-host-machine-id
+        read_only: true
+        bind: {create_host_path: false}
+
+networks:
+  dns-ha:
+    driver: macvlan
+    driver_opts:
+      parent: eth0
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1

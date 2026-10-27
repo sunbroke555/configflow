@@ -297,6 +297,11 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 		if cfg.ServiceType == "oxidns" {
 			result["oxidns_ha_protocols"] = []int{oxidnsHAProtocol}
 			result["oxidns_ha_handoff_protocols"] = []int{oxidnsHAHandoffProtocol}
+			environment := haEnvironment(cfg)
+			result["oxidns_ha_environment"] = environment
+			if environment.Kind == "container" && environment.Ready {
+				result["oxidns_ha_container_protocols"] = []int{oxidnsHAContainerProtocol}
+			}
 		}
 		JsonResponse(w, 200, result)
 	}

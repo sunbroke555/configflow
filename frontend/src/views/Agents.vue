@@ -430,8 +430,8 @@
               <Input id="agent-port" v-model.number="scriptForm.port" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
             </FormField>
 
-            <FormField label="Agent IP（可选）" html-for="agent-ip" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'col-span-2' : 'col-span-2 sm:col-span-1'">
-              <Input id="agent-ip" v-model="scriptForm.agent_ip" class="min-h-11 bg-background/50 font-mono" placeholder="留空则自动获取" />
+            <FormField :label="dockerDNSHA ? (scriptForm.haNetworkMode === 'host' ? '宿主机固定 IPv4（必填）' : '容器固定 IPv4（必填）') : 'Agent IP（可选）'" html-for="agent-ip" :hint="dockerDNSHA ? (scriptForm.haNetworkMode === 'host' ? '填写这台 Linux 主机的静态局域网地址，不是虚拟 IP。' : '使用未占用的局域网地址，与宿主机地址、虚拟 IP 分别不同。') : undefined" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'col-span-2' : 'col-span-2 sm:col-span-1'">
+              <Input id="agent-ip" v-model="scriptForm.agent_ip" class="min-h-11 bg-background/50 font-mono" :placeholder="dockerDNSHA ? '例如：192.168.1.21' : '留空则自动获取'" :aria-required="dockerDNSHA" />
             </FormField>
 
             <FormField v-if="scriptForm.installType === 'docker'" label="Agent 容器名" html-for="docker-container" class="col-span-2">
@@ -448,6 +448,42 @@
               <FormField v-if="shellAio || scriptForm.dockerMode === 'oxidns' || scriptForm.dockerMode === 'aio'" label="OxiDNS Agent 端口" html-for="oxidns-agent-port">
                 <Input id="oxidns-agent-port" v-model.number="scriptForm.oxidnsAgentPort" type="number" :min="1024" :max="65535" class="min-h-11 bg-background/50 font-mono" />
               </FormField>
+            </template>
+          </div>
+
+          <div v-if="scriptForm.installType === 'docker' && scriptForm.dockerMode === 'oxidns'" class="flex flex-col gap-3">
+            <label for="docker-dns-ha" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
+              <Checkbox id="docker-dns-ha" v-model="scriptForm.dockerDNSHA" aria-describedby="docker-dns-ha-note" />
+              为 DNS 高可用准备容器
+            </label>
+            <p id="docker-dns-ha-note" class="m-0 text-[12px] leading-relaxed text-muted-foreground">
+              为两台不同 Linux 宿主机准备 OxiDNS 高可用服务。已有容器需按原数据挂载重建，不能只更新 Agent 或打开开关获得所需网络与权限。
+            </p>
+            <template v-if="dockerDNSHA">
+              <FormField label="高可用网络">
+                <RadioGroup v-model="scriptForm.haNetworkMode" class="flex flex-wrap gap-2" aria-label="高可用网络">
+                  <label :class="[chipClass(scriptForm.haNetworkMode === 'host'), 'min-h-11']"><RadioGroupItem value="host" />Host（推荐）</label>
+                  <label :class="[chipClass(scriptForm.haNetworkMode === 'macvlan'), 'min-h-11']"><RadioGroupItem value="macvlan" />Macvlan</label>
+                </RadioGroup>
+              </FormField>
+              <p v-if="scriptForm.haNetworkMode === 'host'" class="m-0 text-[12px] leading-relaxed text-muted-foreground">
+                使用宿主机网络与固定地址，另起独立的高可用容器管理虚拟 IP。请确认宿主机的 DNS 53 端口与 Agent 端口未被其他服务占用，并保留高可用容器运行。
+              </p>
+              <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="宿主机网卡（必填）" html-for="docker-ha-parent" hint="接入这段局域网的网卡，可用 ip -br addr 查看。">
+                  <Input id="docker-ha-parent" v-model="scriptForm.haParent" class="min-h-11 font-mono" placeholder="例如：eth0 或 enp1s0" aria-required="true" />
+                </FormField>
+                <FormField label="局域网网段（必填）" html-for="docker-ha-subnet">
+                  <Input id="docker-ha-subnet" v-model="scriptForm.haSubnet" class="min-h-11 font-mono" placeholder="例如：192.168.1.0/24" aria-required="true" />
+                </FormField>
+                <FormField label="局域网网关（可选）" html-for="docker-ha-gateway" hint="留空由 Docker 选择该网段的默认网关；建议填写实际路由器地址。" class="sm:col-span-2">
+                  <Input id="docker-ha-gateway" v-model="scriptForm.haGateway" class="min-h-11 font-mono" placeholder="例如：192.168.1.1" />
+                </FormField>
+              </div>
+              <p v-if="scriptForm.haNetworkMode === 'macvlan'" class="m-0 rounded-md border border-warning/30 bg-warning-soft p-3 text-[12px] leading-relaxed text-foreground">
+                macvlan 默认不能与本宿主机通信。ConfigFlow 和 DNS 上游须位于可达的其他局域网主机，或已配置互通的 macvlan 网络；不支持 macvlan 的主机可选择 Host。
+              </p>
+              <p class="m-0 text-[12px] leading-relaxed text-muted-foreground">两台上线后还需在「DNS 高可用」中配对。普通 bridge 网络不支持此模式。</p>
             </template>
           </div>
 
@@ -566,7 +602,11 @@
                 <FormField label="Docker 镜像" html-for="docker-image">
                   <Input id="docker-image" v-model="scriptForm.dockerImage" class="min-h-11 bg-background/50 font-mono" placeholder="留空使用官方镜像" />
                 </FormField>
-                <FormField label="网络模式" hint="共享主机网络，或用端口映射访问容器服务。" :help="optionHelp('使用 Docker 安装，需决定设备如何访问容器内服务。', 'host 直接使用主机网络，bridge 通过端口映射访问。使用 bridge 时需确认所需端口已映射；切换网络方式不代表自动配置局域网网关。')">
+                <FormField v-if="dockerDNSHA" label="宿主机身份文件" html-for="docker-ha-host-id" hint="默认 /etc/machine-id。若系统使用其他位置，填写现有的稳定主机身份文件；同一宿主机上的容器必须使用同一个文件。">
+                  <Input id="docker-ha-host-id" v-model="scriptForm.haHostIdPath" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/machine-id" />
+                </FormField>
+                <p v-if="dockerDNSHA" class="m-0 text-[13px]">网络模式：{{ scriptForm.haNetworkMode === 'host' ? 'Host，配合独立高可用容器' : '专用 Macvlan，使用固定局域网地址' }}，不设置端口映射。</p>
+                <FormField v-else label="网络模式" hint="共享主机网络，或用端口映射访问容器服务。" :help="optionHelp('使用 Docker 安装，需决定设备如何访问容器内服务。', 'host 直接使用主机网络，bridge 通过端口映射访问。使用 bridge 时需确认所需端口已映射；切换网络方式不代表自动配置局域网网关。')">
                   <RadioGroup v-model="scriptForm.networkMode" class="flex flex-wrap gap-2">
                     <label v-for="option in networkModeOptions" :key="option.value" :class="[chipClass(scriptForm.networkMode === option.value), 'min-h-11']">
                       <RadioGroupItem :value="option.value" />
@@ -1103,6 +1143,12 @@ const createScriptForm = () => ({
   installCore: false,
   skipIpv4Forwarding: false,
   dockerMode: 'mihomo', // mihomo, mosdns, oxidns, aio
+  dockerDNSHA: false,
+  haNetworkMode: 'host',
+  haHostIdPath: '/etc/machine-id',
+  haParent: '',
+  haSubnet: '',
+  haGateway: '',
   name: '',
   type: 'mihomo',
   port: 8080,
@@ -1131,6 +1177,7 @@ const createScriptForm = () => ({
   oxidnsServiceBinary: 'oxidns'
 })
 const scriptForm = ref(createScriptForm())
+const dockerDNSHA = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns' && scriptForm.value.dockerDNSHA)
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
 const singleCoreInstall = computed(() => singleCoreSupported.value && scriptForm.value.installCore)
@@ -1974,6 +2021,7 @@ const showMetricsDetail = async (agent: any) => {
 
 // 安装类型变化时重置相关字段
 const onInstallTypeChange = () => {
+  scriptForm.value.dockerDNSHA = false
   // 清空之前生成的命令
   installScriptUrl.value = ''
   installLinkExpiry.value = ''
@@ -1996,6 +2044,7 @@ const onInstallTypeChange = () => {
 
 // Docker 模式变化时
 const onDockerModeChange = () => {
+  scriptForm.value.dockerDNSHA = false
   installScriptUrl.value = ''
   installLinkExpiry.value = ''
   dockerComposeContent.value = ''
@@ -2099,6 +2148,14 @@ const generateScript = async () => {
     notify.warning('请输入 Agent 名称')
     return
   }
+  if (dockerDNSHA.value) {
+    const fields = scriptForm.value.haNetworkMode === 'host'
+      ? [scriptForm.value.agent_ip] : [scriptForm.value.agent_ip, scriptForm.value.haParent, scriptForm.value.haSubnet]
+    if (!fields.every(value => value.trim())) {
+      notify.warning(scriptForm.value.haNetworkMode === 'host' ? '请填写宿主机固定 IPv4' : '请填写容器固定 IPv4、宿主机网卡和局域网网段')
+      return
+    }
+  }
 
   // Shell 安装时检查配置文件路径是否为文件而非目录
   if (scriptForm.value.installType === 'shell') {
@@ -2157,7 +2214,16 @@ const generateScript = async () => {
         server_url: serverUrl,
         agent_name: scriptForm.value.containerName || scriptForm.value.name,
         agent_ip: scriptForm.value.agent_ip || '',
-        network_mode: scriptForm.value.networkMode,
+        network_mode: dockerDNSHA.value ? scriptForm.value.haNetworkMode : scriptForm.value.networkMode,
+        ...(dockerDNSHA.value ? {
+          enable_dns_ha: true,
+          ha_host_id_path: scriptForm.value.haHostIdPath.trim(),
+          ...(scriptForm.value.haNetworkMode === 'macvlan' ? {
+            ha_parent: scriptForm.value.haParent.trim(),
+            ha_subnet: scriptForm.value.haSubnet.trim(),
+            ha_gateway: scriptForm.value.haGateway.trim(),
+          } : {}),
+        } : {}),
         enable_mihomo: scriptForm.value.dockerMode === 'mihomo' || scriptForm.value.dockerMode === 'aio',
         enable_oxidns: scriptForm.value.dockerMode === 'oxidns' || scriptForm.value.dockerMode === 'aio',
         oxidns_port: scriptForm.value.oxidnsAgentPort,

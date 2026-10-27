@@ -1,0 +1,459 @@
+{
+  "started_at": 1793082629.3310409,
+  "hosts": [
+    130,
+    131
+  ],
+  "observer": 132,
+  "kernel_image": "sha256:9fb7f546f1a2369f3f4315b18cbb52a7d6e0b8aab7a237b1d7ad4edca8f739fd",
+  "cases": [
+    {
+      "mode": "macvlan",
+      "termination": "stop",
+      "arp_before": [
+        "d2:9e:d1:b3:50:dc"
+      ],
+      "arp_after": [],
+      "host_retained_vip": false,
+      "container_running": "false",
+      "network_namespace": "/run/cf-docker-ha-docker/netns/a9eba1e135d3",
+      "links": [
+        {
+          "ifindex": 1,
+          "ifname": "lo",
+          "flags": [
+            "LOOPBACK",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 65536,
+          "qdisc": "noqueue",
+          "operstate": "UNKNOWN",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "loopback",
+          "address": "00:00:00:00:00:00",
+          "broadcast": "00:00:00:00:00:00",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 0,
+          "netns-immutable": true,
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 5,
+          "link_index": 3,
+          "ifname": "eth0",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "link_type": "ether",
+          "address": "d2:9e:d1:b3:50:dc",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "link_netnsid": 0,
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 68,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "macvlan",
+            "info_data": {
+              "mode": "bridge",
+              "bcqueuelen": 1000,
+              "usedbcqueuelen": 1000
+            }
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        }
+      ]
+    },
+    {
+      "mode": "macvlan",
+      "termination": "kill",
+      "arp_before": [
+        "66:b5:9f:24:34:2b"
+      ],
+      "arp_after": [],
+      "host_retained_vip": false,
+      "container_running": "false",
+      "network_namespace": "/run/cf-docker-ha-docker/netns/b972a276d3e5",
+      "links": [
+        {
+          "ifindex": 1,
+          "ifname": "lo",
+          "flags": [
+            "LOOPBACK",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 65536,
+          "qdisc": "noqueue",
+          "operstate": "UNKNOWN",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "loopback",
+          "address": "00:00:00:00:00:00",
+          "broadcast": "00:00:00:00:00:00",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 0,
+          "netns-immutable": true,
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 6,
+          "link_index": 3,
+          "ifname": "eth0",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "link_type": "ether",
+          "address": "66:b5:9f:24:34:2b",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "link_netnsid": 0,
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 68,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "macvlan",
+            "info_data": {
+              "mode": "bridge",
+              "bcqueuelen": 1000,
+              "usedbcqueuelen": 1000
+            }
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        }
+      ]
+    },
+    {
+      "mode": "host",
+      "termination": "stop",
+      "arp_before": [
+        "bc:24:11:e2:f5:57"
+      ],
+      "arp_after": [],
+      "host_retained_vip": false,
+      "container_running": "false",
+      "network_namespace": "/run/cf-docker-ha-docker/netns/default",
+      "links": [
+        {
+          "ifindex": 1,
+          "ifname": "lo",
+          "flags": [
+            "LOOPBACK",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 65536,
+          "qdisc": "noqueue",
+          "operstate": "UNKNOWN",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "loopback",
+          "address": "00:00:00:00:00:00",
+          "broadcast": "00:00:00:00:00:00",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 0,
+          "netns-immutable": true,
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 2,
+          "link_index": 572,
+          "ifname": "eth0",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "ether",
+          "address": "bc:24:11:e2:f5:57",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "link_netnsid": 0,
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 68,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "veth"
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 8,
+          "num_rx_queues": 8,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 3,
+          "link": "eth0",
+          "ifname": "eth0.91",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "ether",
+          "address": "bc:24:11:e2:f5:57",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "vlan",
+            "info_data": {
+              "protocol": "802.1Q",
+              "id": 91,
+              "flags": [
+                "REORDER_HDR"
+              ]
+            }
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        }
+      ]
+    },
+    {
+      "mode": "host",
+      "termination": "kill",
+      "arp_before": [
+        "bc:24:11:e2:f5:57"
+      ],
+      "arp_after": [
+        "bc:24:11:e2:f5:57"
+      ],
+      "host_retained_vip": true,
+      "container_running": "false",
+      "network_namespace": "/run/cf-docker-ha-docker/netns/default",
+      "links": [
+        {
+          "ifindex": 1,
+          "ifname": "lo",
+          "flags": [
+            "LOOPBACK",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 65536,
+          "qdisc": "noqueue",
+          "operstate": "UNKNOWN",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "loopback",
+          "address": "00:00:00:00:00:00",
+          "broadcast": "00:00:00:00:00:00",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 0,
+          "netns-immutable": true,
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 2,
+          "link_index": 572,
+          "ifname": "eth0",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "ether",
+          "address": "bc:24:11:e2:f5:57",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "link_netnsid": 0,
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 68,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "veth"
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 8,
+          "num_rx_queues": 8,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        },
+        {
+          "ifindex": 3,
+          "link": "eth0",
+          "ifname": "eth0.91",
+          "flags": [
+            "BROADCAST",
+            "MULTICAST",
+            "UP",
+            "LOWER_UP"
+          ],
+          "mtu": 1500,
+          "qdisc": "noqueue",
+          "operstate": "UP",
+          "linkmode": "DEFAULT",
+          "group": "default",
+          "txqlen": 1000,
+          "link_type": "ether",
+          "address": "bc:24:11:e2:f5:57",
+          "broadcast": "ff:ff:ff:ff:ff:ff",
+          "promiscuity": 0,
+          "allmulti": 0,
+          "min_mtu": 0,
+          "max_mtu": 65535,
+          "linkinfo": {
+            "info_kind": "vlan",
+            "info_data": {
+              "protocol": "802.1Q",
+              "id": 91,
+              "flags": [
+                "REORDER_HDR"
+              ]
+            }
+          },
+          "inet6_addr_gen_mode": "eui64",
+          "num_tx_queues": 1,
+          "num_rx_queues": 1,
+          "gso_max_size": 65536,
+          "gso_max_segs": 65535,
+          "tso_max_size": 524280,
+          "tso_max_segs": 65535,
+          "gro_max_size": 65536,
+          "gso_ipv4_max_size": 65536,
+          "gro_ipv4_max_size": 65536
+        }
+      ]
+    }
+  ],
+  "passed": true,
+  "finished_at": 1793082706.5005574,
+  "test_vip_removed": true,
+  "host_checks": {
+    "130": {
+      "machine_id_sha256": "de4794964d19ab9e843d8bab1cfbb2fab081ff3da3d99c25ea9a9c3d7b2ec4ab",
+      "remaining_docker_netns": []
+    },
+    "131": {
+      "machine_id_sha256": "bee9373a1d288ac0df5b3e740296e11030ca5dccccc458e1d797ba02a050a931",
+      "remaining_docker_netns": []
+    }
+  },
+  "static_docker_sha256": "9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb"
+}

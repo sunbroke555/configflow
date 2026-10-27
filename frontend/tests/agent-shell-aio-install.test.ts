@@ -205,6 +205,80 @@ describe('Shell Mihomo + OxiDNS installation', () => {
   })
 })
 
+describe('Docker OxiDNS HA installation', () => {
+  async function prepare() {
+    await radio('docker')
+    expect(document.getElementById('docker-dns-ha')).toBeNull()
+    await radio('oxidns')
+    expect(document.getElementById('docker-dns-ha')?.getAttribute('aria-checked')).toBe('false')
+    document.getElementById('docker-dns-ha')!.click()
+    await flushPromises()
+  }
+
+  it('defaults HA to host without asking for a macvlan interface or subnet', async () => {
+    await prepare()
+    expect(document.body.textContent).toContain('宿主机固定 IPv4（必填）')
+    expect(document.getElementById('docker-ha-parent')).toBeNull()
+    expect(document.body.textContent).toContain('独立的高可用容器')
+    await input('agent-ip', '192.168.50.20')
+    await click('生成 Docker 部署命令')
+    for (const endpoint of ['compose', 'run']) {
+      expect(api.get).toHaveBeenCalledWith(`/agents/docker-agent-${endpoint}`, { params: expect.objectContaining({
+        network_mode: 'host', agent_ip: '192.168.50.20', enable_dns_ha: true,
+        enable_mihomo: false, enable_mosdns: false, enable_oxidns: true,
+        ha_host_id_path: '/etc/machine-id',
+      }) })
+    }
+    const params = vi.mocked(api.get).mock.calls.at(-1)![1]!.params
+    expect(params).not.toHaveProperty('ha_parent')
+    expect(params).not.toHaveProperty('ha_subnet')
+  })
+
+  it('requires a fixed host address and accepts an existing custom host identity file', async () => {
+    await prepare()
+    await click('生成 Docker 部署命令')
+    expect(notify.warning).toHaveBeenCalledWith('请填写宿主机固定 IPv4')
+    expect(api.get).not.toHaveBeenCalled()
+    await input('agent-ip', '192.168.50.20')
+    await expand('Docker 高级配置')
+    await input('docker-ha-host-id', '/volume1/configflow/host-id')
+    await click('生成 Docker 部署命令')
+    expect(api.get).toHaveBeenCalledWith('/agents/docker-agent-compose', { params: expect.objectContaining({
+      ha_host_id_path: '/volume1/configflow/host-id',
+    }) })
+  })
+
+  it('requires macvlan addressing only after choosing macvlan', async () => {
+    await prepare()
+    await radio('macvlan')
+    expect(document.body.textContent).toContain('容器固定 IPv4（必填）')
+    expect(document.body.textContent).toContain('macvlan 默认不能与本宿主机通信')
+    await input('agent-ip', '192.168.50.21')
+    await click('生成 Docker 部署命令')
+    expect(api.get).not.toHaveBeenCalled()
+    await input('docker-ha-parent', 'enp1s0')
+    await input('docker-ha-subnet', '192.168.50.0/24')
+    await input('docker-ha-gateway', '192.168.50.1')
+    await click('生成 Docker 部署命令')
+    expect(api.get).toHaveBeenCalledWith('/agents/docker-agent-run', { params: expect.objectContaining({
+      network_mode: 'macvlan', ha_parent: 'enp1s0', ha_subnet: '192.168.50.0/24', ha_gateway: '192.168.50.1',
+    }) })
+  })
+
+  it('does not carry the opt-in into AIO or normal OxiDNS Docker installation', async () => {
+    await prepare()
+    await radio('aio')
+    expect(document.getElementById('docker-dns-ha')).toBeNull()
+    await radio('oxidns')
+    expect(document.getElementById('docker-dns-ha')?.getAttribute('aria-checked')).toBe('false')
+    await click('生成 Docker 部署命令')
+    const params = vi.mocked(api.get).mock.calls.at(-1)![1]!.params
+    expect(params.network_mode).toBe('bridge')
+    expect(params).not.toHaveProperty('enable_dns_ha')
+    expect(params).not.toHaveProperty('ha_host_id_path')
+  })
+})
+
 describe('curl and wget installation commands', () => {
   it.each([
     { mode: 'single', type: 'mihomo', includeCore: false },

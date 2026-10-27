@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.46-go"
+LATEST_AGENT_VERSION = "1.8.47-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.47-go": {
+        "date": "2026-10-27",
+        "features": [
+            "OxiDNS Docker 支持两台独立 Linux 宿主机的 DNS 高可用，提供 host 独立高可用服务和 macvlan 部署方式",
+            "容器环境通过权限、网络和持久化预检后，复用主备配置规则同步与先迁移 VIP 再更新原主机的发布流程"
+        ]
+    },
     "1.8.46-go": {
         "date": "2026-10-27",
         "features": [

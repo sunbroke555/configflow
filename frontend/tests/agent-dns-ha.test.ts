@@ -81,6 +81,23 @@ const publication = (status = 'applying') => ({
 })
 
 describe('ordered configuration synchronization', () => {
+  it('shows Docker preparation instead of a host package command for a Docker pair', async () => {
+    render({ deployment_method: 'docker' }, [agent('oxi-2', { deployment_method: 'docker' })])
+    await click('设置 DNS 高可用')
+    expect(document.body.textContent).toContain('Host 配合独立高可用容器')
+    expect(document.body.textContent).toContain('普通容器不能只点开关启用')
+    expect(document.body.textContent).not.toContain('apt install keepalived')
+  })
+
+  it('keeps native installation advice when pairing a Docker member with a Shell member', async () => {
+    const wrapper = render({ deployment_method: 'docker' }, [agent('oxi-2', { deployment_method: 'shell' })])
+    await click('设置 DNS 高可用')
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', 'oxi-2')
+    await flushPromises()
+    expect(document.body.textContent).toContain('Docker 成员需使用专用高可用安装')
+    expect(document.body.textContent).toContain('Shell 安装的成员需先安装 keepalived')
+  })
+
   it('does not announce enable success until both members and keepalived finish', async () => {
     vi.useFakeTimers()
     vi.mocked(agentApi.setDNSHA).mockResolvedValueOnce({ data: { success: true, config: null, publication: publication() } } as any)

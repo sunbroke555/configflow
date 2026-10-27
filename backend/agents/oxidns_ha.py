@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import fcntl
 import ipaddress
 import logging
+import re
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -98,8 +99,6 @@ def normalize(request, agent, peer, agents):
     for item in (agent, peer):
         if not item.get('enabled', True):
             raise HAError(f'{_name(item)} 已停用，请先启用')
-        if item.get('deployment_method') == 'docker':
-            raise HAError(f'{_name(item)} 是 Docker 部署，不能管理宿主机的虚拟 IP；请改用 Shell 安装的 Agent')
     if agent.get('profile_id') != peer.get('profile_id'):
         raise HAError('两台 OxiDNS 必须使用同一个配置空间，才能给出相同的应答')
     hosts = [_unicast_ipv4(item.get('host')) for item in (agent, peer)]
@@ -157,9 +156,47 @@ def _require_protocol(manager, agent):
         capability = manager._deployment_request(agent, 'get', 'capabilities', timeout=5)
     except requests.RequestException:
         raise HAError(f'{_name(agent)} 无法连接，请检查网络后重试') from None
+    if not isinstance(capability, dict):
+        raise HAError(f'{_name(agent)} 的 DNS 高可用能力响应无效，请升级 Agent 后重试')
     protocols = capability.get('oxidns_ha_protocols')
     if not isinstance(protocols, list) or PROTOCOL not in protocols:
         raise HAError(f'{_name(agent)} 的 Agent 版本不支持 DNS 高可用，请先升级 Agent')
+    return capability
+
+
+def _require_pair_protocols(manager, members):
+    """Use live environment proofs; registration metadata cannot enable Docker HA."""
+    capabilities = [_require_protocol(manager, member) for member in members]
+    validate_pair_environments(members, capabilities)
+
+
+def validate_pair_environments(members, capabilities):
+    """Also used by publications before either container's core can change."""
+    environments = [cap.get('oxidns_ha_environment') for cap in capabilities]
+    environments = [env if isinstance(env, dict) else {} for env in environments]
+    containers = [member.get('deployment_method') == 'docker' or env.get('kind') == 'container'
+                  for member, env in zip(members, environments)]
+    for member, capability, env, container in zip(members, capabilities, environments, containers):
+        if not container:
+            continue
+        protocols = capability.get('oxidns_ha_container_protocols')
+        if (not isinstance(protocols, list) or PROTOCOL not in protocols
+                or env.get('kind') != 'container' or env.get('ready') is not True
+                or env.get('network') not in ('host', 'macvlan')):
+            findings = env.get('blockers')
+            blockers = [failure_text(item, (member.get('token'),))
+                        for item in findings if isinstance(item, str) and item] if isinstance(findings, list) else []
+            detail = '；'.join(blockers) or '请按 Docker 高可用部署说明升级并重新创建容器'
+            raise HAError(f'{_name(member)} 的 Docker 高可用环境未就绪：{detail}', blockers=blockers)
+    host_ids = [env.get('host_id') for env in environments]
+    # Containers on one Docker host do not provide host failover. Mixed deployments
+    # also need both live host identities so two IP aliases cannot bypass this rule.
+    if any(containers) and not all(isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
+                                   for value in host_ids):
+        raise HAError('Docker DNS 高可用需要确认两台独立宿主机；请升级两端 Agent，并按部署说明提供宿主机身份')
+    if (isinstance(host_ids[0], str) and re.fullmatch(r'[0-9a-f]{64}', host_ids[0])
+            and host_ids[0] == host_ids[1]):
+        raise HAError('两台 OxiDNS 实际位于同一台宿主机，无法提供主机故障接管；请部署到两台独立设备')
 
 
 def _loopback(value):
@@ -351,8 +388,7 @@ def configure(manager, agent_id, request, *, base_url=''):
         blockers, warnings = upstream_findings(manager, agent, peer)
         if blockers:
             raise HAError('无法开启 DNS 高可用：' + '；'.join(blockers), blockers=blockers)
-        for member in (agent, peer):
-            _require_protocol(manager, member)
+        _require_pair_protocols(manager, (agent, peer))
         specs = {agent['id']: _spec(settings['vip'], settings['vrid'], 'primary', agent, peer),
                  peer['id']: _spec(settings['vip'], settings['vrid'], 'secondary', peer, agent)}
         blockers = _preview(manager, [agent, peer], specs)
@@ -378,8 +414,7 @@ def _configure_keepalived(manager, agent_id, request, *, rule_sync_settings=None
         blockers, warnings = upstream_findings(manager, agent, peer)
         if blockers:
             raise HAError('无法开启 DNS 高可用：' + '；'.join(blockers), blockers=blockers)
-        for member in (agent, peer):
-            _require_protocol(manager, member)
+        _require_pair_protocols(manager, (agent, peer))
         roles = {agent['id']: 'primary', peer['id']: 'secondary'}
         specs = {agent['id']: _spec(settings['vip'], settings['vrid'], 'primary', agent, peer),
                  peer['id']: _spec(settings['vip'], settings['vrid'], 'secondary', peer, agent)}

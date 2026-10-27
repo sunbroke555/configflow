@@ -19,7 +19,7 @@ const haBlockBegin = "# BEGIN CONFIGFLOW OXIDNS-HA"
 const haBlockEnd = "# END CONFIGFLOW OXIDNS-HA"
 const haHeaderPrefix = "# configflow-oxidns-ha:"
 
-var haKeepalivedDir = "/etc/keepalived"
+var haKeepalivedDir = defaultHAKeepalivedDirectory()
 
 // haScriptSecure mirrors keepalived's script security: the health check binary
 // and every parent directory must be root owned and not writable by others.
@@ -341,6 +341,8 @@ func haFilesDrift(cfg *Config, state *haState) error {
 
 func haServiceRunning(manager string) bool {
 	switch manager {
+	case "supervisor":
+		return haSupervisorState() == "RUNNING"
 	case "systemd":
 		_, err := haRun("systemctl", "is-active", "--quiet", haServiceUnit)
 		return err == nil
@@ -353,6 +355,9 @@ func haServiceRunning(manager string) bool {
 
 func haServiceEnabled(manager string) bool {
 	switch manager {
+	case "supervisor":
+		// The managed journal, rather than Supervisor autostart, drives recovery.
+		return haSupervisorState() != ""
 	case "systemd":
 		_, err := haRun("systemctl", "is-enabled", "--quiet", haServiceUnit)
 		return err == nil
@@ -374,6 +379,14 @@ func haServiceEnabled(manager string) bool {
 func haServiceAction(manager, action string) error {
 	var err error
 	switch manager {
+	case "supervisor":
+		if action == "enable" || action == "disable" {
+			return nil
+		}
+		if action != "start" && action != "stop" && action != "restart" {
+			return fmt.Errorf("不支持的 HA 服务操作")
+		}
+		_, err = haRun("supervisorctl", haSupervisorArgs(action)...)
 	case "systemd":
 		_, err = haRun("systemctl", action, haServiceUnit)
 	case "openrc":
@@ -513,6 +526,9 @@ func applyOxiDNSHA(cfg *Config, spec OxiDNSHASpec) error {
 	manager := cfg.ServiceManager
 	wasRunning, wasEnabled := haServiceRunning(manager), haServiceEnabled(manager)
 	state := &haState{Version: 1, Spec: spec, Interface: iface, CIDR: cidr, Service: haService{Manager: manager, Unit: haServiceUnit, WasEnabled: wasEnabled, WasRunning: wasRunning}}
+	if cfg.ServiceManager == "supervisor" {
+		state.ContainerHostID = haEnvironment(cfg).HostID
+	}
 	if previous != nil {
 		// The first apply recorded keepalived's original state; keep it for removal.
 		state.Token, state.Service = previous.Token, previous.Service
