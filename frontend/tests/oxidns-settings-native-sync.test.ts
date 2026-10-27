@@ -4,7 +4,7 @@ import { load as loadYaml, dump as dumpYaml } from 'js-yaml'
 import OxidnsNativeEditor from '@/components/generate/OxidnsNativeEditor.vue'
 import OxidnsConfigNavigation from '@/components/generate/OxidnsConfigNavigation.vue'
 import OxidnsCommonSettings from '@/components/generate/OxidnsCommonSettings.vue'
-import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
+import { agentApi, profileApi, oxidnsApi } from '@/api'
 import { confirmState, settleConfirm } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 
@@ -14,7 +14,6 @@ vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
   oxidnsApi: { getSettings: vi.fn(), saveSettings: vi.fn(), prepareEditor: vi.fn(), readCommonSettings: vi.fn(), applyCommonSettings: vi.fn(), applyNativeSettings: vi.fn(), validateSettings: vi.fn() },
-  ruleApi: { getAll: vi.fn() }, ruleSetApi: { getAll: vi.fn() }
 }))
 describe('unified OxiDNS profile settings', () => {
   it('saves all settings metadata returned by native deletion and dependency reconciliation', async () => {

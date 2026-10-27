@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { load as loadYaml } from 'js-yaml'
-import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
+import { agentApi, profileApi, oxidnsApi } from '@/api'
 import { confirmState, notify, settleConfirm } from '@/lib/feedback'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
@@ -12,7 +12,6 @@ vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
   profileApi: { list: vi.fn() },
   oxidnsApi: { getSettings: vi.fn(), saveSettings: vi.fn(), prepareEditor: vi.fn(), readCommonSettings: vi.fn(), applyCommonSettings: vi.fn(), applyNativeSettings: vi.fn(), validateSettings: vi.fn() },
-  ruleApi: { getAll: vi.fn() }, ruleSetApi: { getAll: vi.fn() }
 }))
 describe('unified OxiDNS profile settings', () => {
   it('saves and publishes the returned version without closing the editor or marking unsaved changes', async () => {

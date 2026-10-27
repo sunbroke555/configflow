@@ -4,7 +4,7 @@ import { load as loadYaml, dump as dumpYaml } from 'js-yaml'
 import OxidnsSettings from '@/components/generate/OxidnsSettings.vue'
 import OxidnsNativeEditor from '@/components/generate/OxidnsNativeEditor.vue'
 import OxidnsConfigNavigation from '@/components/generate/OxidnsConfigNavigation.vue'
-import { agentApi, profileApi, oxidnsApi, ruleApi, ruleSetApi } from '@/api'
+import { agentApi, profileApi, oxidnsApi } from '@/api'
 import { notify, settleConfirm } from '@/lib/feedback'
 
 // These suites mount the whole OxiDNS settings form per test; leave headroom for
@@ -68,8 +68,6 @@ beforeEach(() => {
     const settings = {...JSON.parse(JSON.stringify(value)), native_config}
     return {data: {settings, ...projection(settings), notices: []}} as any
   })
-  vi.mocked(ruleApi.getAll).mockResolvedValue({ data: [{ id: 'direct', name: 'Direct rule', itemType: 'rule' }] } as any)
-  vi.mocked(ruleSetApi.getAll).mockResolvedValue({ data: [] } as any)
   vi.spyOn(notify, 'success').mockImplementation(() => 0)
   vi.spyOn(notify, 'error').mockImplementation(() => 0)
 })
