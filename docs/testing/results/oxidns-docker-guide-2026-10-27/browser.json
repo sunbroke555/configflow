@@ -1,0 +1,704 @@
+{
+  "realBackend": true,
+  "mockedAPIs": false,
+  "commandExecution": "See separate real Docker lab report.",
+  "scenarios": [
+    {
+      "theme": "light",
+      "width": 375,
+      "network": "host",
+      "accent": "clay",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-identity",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "validation-error",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "live-check",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "light",
+      "width": 375,
+      "network": "macvlan",
+      "accent": "kraft",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-identity",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "validation-error",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "live-check",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "network": "host",
+      "accent": "sky",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-identity",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "validation-error",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "live-check",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "network": "macvlan",
+      "accent": "clay",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-identity",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "validation-error",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "live-check",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "dark",
+      "width": 375,
+      "network": "host",
+      "accent": "kraft",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-identity",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "validation-error",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "live-check",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "dark",
+      "width": 375,
+      "network": "macvlan",
+      "accent": "sky",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-identity",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "new-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "validation-error",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        },
+        {
+          "name": "live-check",
+          "viewport": 375,
+          "pageWidth": 375,
+          "dialogWidth": 341,
+          "dialogScroll": 341
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "network": "host",
+      "accent": "clay",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-identity",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "validation-error",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "live-check",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "network": "macvlan",
+      "accent": "kraft",
+      "requests": [
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 400
+        },
+        {
+          "path": "/api/agents/docker-oxidns-ha-guide",
+          "status": 200
+        },
+        {
+          "path": "/api/agents/agent_1793088670758_a0fbe8/oxidns-ha-environment",
+          "status": 502
+        }
+      ],
+      "metrics": [
+        {
+          "name": "prepare",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-identity",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "new-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "migration-commands",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "validation-error",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        },
+        {
+          "name": "live-check",
+          "viewport": 1440,
+          "pageWidth": 1440,
+          "dialogWidth": 758,
+          "dialogScroll": 758
+        }
+      ],
+      "liveEnvironmentRead": true,
+      "copyWorks": true,
+      "validationRecovery": true,
+      "realEnrollmentCommand": true
+    }
+  ],
+  "errors": []
+}
