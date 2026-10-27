@@ -12,6 +12,42 @@
   "nodes": [],
   "rule_configs": [
     {
+      "enabled": true,
+      "id": "rule_lan_0",
+      "itemType": "rule",
+      "no_resolve": true,
+      "policy": "DIRECT",
+      "rule_type": "IP-CIDR",
+      "value": "127.0.0.0/8"
+    },
+    {
+      "enabled": true,
+      "id": "rule_lan_1",
+      "itemType": "rule",
+      "no_resolve": true,
+      "policy": "DIRECT",
+      "rule_type": "IP-CIDR",
+      "value": "10.0.0.0/8"
+    },
+    {
+      "enabled": true,
+      "id": "rule_lan_2",
+      "itemType": "rule",
+      "no_resolve": true,
+      "policy": "DIRECT",
+      "rule_type": "IP-CIDR",
+      "value": "172.16.0.0/12"
+    },
+    {
+      "enabled": true,
+      "id": "rule_lan_3",
+      "itemType": "rule",
+      "no_resolve": true,
+      "policy": "DIRECT",
+      "rule_type": "IP-CIDR",
+      "value": "192.168.0.0/16"
+    },
+    {
       "behavior": "classical",
       "enabled": true,
       "id": "ruleset_1760433378053",
