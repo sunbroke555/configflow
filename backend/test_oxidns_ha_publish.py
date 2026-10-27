@@ -13,7 +13,7 @@ import requests
 
 from backend.agents import oxidns_ha
 from backend.agents.deployment_bundle import build_deployment_bundle
-from backend.agents.manager import AgentManager
+from backend.agents.manager import AgentDeploymentConflict, AgentManager
 from backend.common import config as config_store
 from backend.common.config_repository import ProfileRepository
 
@@ -21,7 +21,21 @@ from backend.common.config_repository import ProfileRepository
 PRIMARY = '192.0.2.20'
 SECONDARY = '192.0.2.21'
 VIP = '192.0.2.53'
-CONFIG = 'plugins:\n  - tag: shared_rules\n    type: domain_set\n    args:\n      files: [rules/shared.txt]\n'
+CONFIG = '''plugins:
+  - tag: shared_rules
+    type: domain_set
+    args:
+      files: [rules/shared.txt]
+  - tag: response
+    type: sequence
+    args:
+      - exec: reject 3
+  - tag: udp
+    type: udp_server
+    args:
+      entry: response
+      listen: 0.0.0.0:53
+'''
 
 
 def archive_files(raw):
@@ -198,8 +212,10 @@ def test_publish_from_either_member_installs_identical_files_standby_first(ha_pu
 
 
 def test_initial_enable_materializes_once_and_synchronizes_different_configs_before_keepalived(ha_publish, monkeypatch):
+    from backend.agents import rule_sync
     from backend.routes import agents as agent_routes
     env = ha_publish
+    rule_sync.configure(env.manager, env.primary['id'], {'library': True, 'rules': False})
     env.repository.save_profile('default', {'oxidns': {
         'config_mode': 'native', 'native_config': CONFIG,
         'additional_files': [{'path': 'rules/shared.txt', 'content': 'domain:first-enable.example'}]}})
@@ -231,6 +247,8 @@ def test_initial_enable_materializes_once_and_synchronizes_different_configs_bef
     assert [item['host'] for item in env.devices.uploads] == [SECONDARY, PRIMARY]
     assert env.devices.ha_applied == [SECONDARY, PRIMARY]
     assert env.devices.installed[PRIMARY] == env.devices.installed[SECONDARY]
+    for agent in (env.primary, env.secondary):
+        assert rule_sync.settings_for(env.manager.get_agent_by_id(agent['id'])) == {'library': True, 'rules': False}
 
 
 @pytest.mark.parametrize('standby_status', ['failed', 'rolled_back', 'rollback_failed'])
@@ -247,6 +265,26 @@ def test_standby_failure_never_uploads_or_activates_primary(ha_publish, standby_
     assert all(host == SECONDARY for host, _ in env.devices.mutations())
     assert env.devices.installed[PRIMARY] == original
     assert 'applied_content' not in env.manager.get_agent_by_id(env.primary['id'])
+    primary = next(item for item in result['ha_publication']['members'] if item['agent_id'] == env.primary['id'])
+    assert primary['status'] == 'skipped'
+
+
+def test_repeating_initial_enable_reuses_one_pending_publication(ha_publish):
+    env = ha_publish
+    env.repository.save_profile('default', {'oxidns': {
+        'config_mode': 'native', 'native_config': CONFIG,
+        'additional_files': [{'path': 'rules/shared.txt', 'content': 'domain:first-enable.example'}]}})
+    request = {'peer_id': env.secondary['id'], 'vip': VIP}
+    first = oxidns_ha.configure(env.manager, env.primary['id'], request)
+    repeated = oxidns_ha.configure(env.manager, env.primary['id'], request)
+    assert repeated['publication']['id'] == first['publication']['id']
+    assert env.devices.uploads == []
+    env.devices.upload_status[SECONDARY] = 'unknown'
+    env.drain()
+    repeated = oxidns_ha.configure(env.manager, env.primary['id'], request)
+    assert repeated['publication']['id'] == first['publication']['id']
+    env.drain()
+    assert [item['host'] for item in env.devices.uploads] == [SECONDARY]
 
 
 def test_unhealthy_standby_blocks_primary_despite_successful_deployment_receipt(ha_publish):
@@ -261,6 +299,29 @@ def test_unhealthy_standby_blocks_primary_despite_successful_deployment_receipt(
     assert '健康检查' in result['message']
     assert [item['host'] for item in env.devices.uploads] == [SECONDARY]
     assert env.devices.installed[PRIMARY] == {'config.yaml': b'primary original'}
+
+
+def test_unknown_health_after_standby_success_blocks_primary_until_confirmed(ha_publish, monkeypatch):
+    env = ha_publish
+    env.pair()
+    real_status = env.devices.status
+    unreachable = {'value': True}
+
+    def status(agent):
+        if agent['host'] == SECONDARY and env.devices.installed[SECONDARY] != {'config.yaml': b'secondary original'} and unreachable['value']:
+            raise RuntimeError('health reply is temporarily unavailable')
+        return real_status(agent)
+    monkeypatch.setattr(env.devices, 'status', status)
+    candidate = env.bundle()
+    env.manager.publish_deployment(env.primary['id'], candidate)
+    env.drain()
+    result = env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])
+    assert result['status'] == 'unknown'
+    assert [item['host'] for item in env.devices.uploads] == [SECONDARY]
+    unreachable['value'] = False
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])['status'] == 'succeeded'
+    assert [item['host'] for item in env.devices.uploads] == [SECONDARY, PRIMARY]
 
 
 def test_primary_failure_is_not_hidden_by_successful_secondary_entry_record(ha_publish):
@@ -338,6 +399,22 @@ def test_completed_group_replay_does_not_reupload_either_member(ha_publish):
     assert len(env.devices.uploads) == 2
 
 
+def test_reusing_group_deployment_id_with_different_rule_bytes_is_rejected(ha_publish):
+    env = ha_publish
+    env.pair()
+    first = env.bundle()
+    env.manager.publish_deployment(env.primary['id'], first)
+    env.drain()
+    changed = env.bundle(rule='domain:different.example')
+    try:
+        result = env.manager.publish_deployment(env.primary['id'], changed)
+    except ValueError:
+        pass
+    else:
+        assert not result['success'] and result['http_status'] == 409
+    assert len(env.devices.uploads) == 2
+
+
 def test_staged_pair_resumes_after_manager_restart_and_activates_standby_before_primary(ha_publish):
     env = ha_publish
     env.pair()
@@ -361,6 +438,113 @@ def test_staged_pair_resumes_after_manager_restart_and_activates_standby_before_
     activations = [host for host, path in env.devices.mutations() if path.endswith('/activate')]
     assert activations == [SECONDARY, PRIMARY]
     assert env.devices.installed[PRIMARY] == env.devices.installed[SECONDARY] == archive_files(candidate.archive)[1]
+
+
+def test_staged_activation_rechecks_vip_holder_instead_of_using_stale_order(ha_publish):
+    env = ha_publish
+    env.pair()
+    candidate = env.bundle()
+    env.manager.publish_deployment(env.primary['id'], candidate, activate=False)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])['status'] == 'ready'
+    env.devices.vip_holder = SECONDARY
+    env.manager.activate_deployment(env.primary['id'], candidate.manifest['deployment_id'])
+    env.drain()
+    assert [host for host, path in env.devices.mutations() if path.endswith('/activate')] == [PRIMARY, SECONDARY]
+
+
+def test_failed_staging_releases_unactivated_peer_for_a_new_group(ha_publish):
+    env = ha_publish
+    env.pair()
+    env.devices.upload_status[PRIMARY] = 'failed'
+    first = env.bundle(ident='staged-failure')
+    env.manager.publish_deployment(env.primary['id'], first, activate=False)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], first.manifest['deployment_id'])['status'] == 'failed'
+    assert env.devices.installed == {PRIMARY: {'config.yaml': b'primary original'},
+                                     SECONDARY: {'config.yaml': b'secondary original'}}
+    env.devices.upload_status.clear()
+    replacement = env.bundle(ident='retry-staging')
+    env.manager.publish_deployment(env.primary['id'], replacement)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], replacement.manifest['deployment_id'])['status'] == 'succeeded'
+
+
+def test_agent_side_rollback_recovery_is_reconciled_before_republishing_pair(ha_publish):
+    env = ha_publish
+    env.pair()
+    env.devices.upload_status[SECONDARY] = 'rollback_failed'
+    first = env.bundle(ident='needs-recovery')
+    env.manager.publish_deployment(env.primary['id'], first)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], first.manifest['deployment_id'])['status'] == 'rollback_failed'
+    secondary_id = env.devices.uploads[0]['id']
+    # Explicit Agent-side recovery restored the old files; it is not a successful new publication.
+    env.devices.journals[SECONDARY, secondary_id].update(status='rolled_back', success=False)
+    for _ in range(3):
+        result = env.manager.get_deployment(env.primary['id'], first.manifest['deployment_id'])
+    assert result['status'] == 'failed'
+    assert env.manager.get_agent_by_id(env.secondary['id'])['deployments'][secondary_id]['status'] == 'rolled_back'
+    env.devices.upload_status.clear()
+    replacement = env.bundle(ident='after-recovery')
+    env.manager.publish_deployment(env.primary['id'], replacement)
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], replacement.manifest['deployment_id'])['status'] == 'succeeded'
+
+
+@pytest.mark.parametrize('operation', ['restart_agent_service', 'uninstall_agent'])
+def test_group_reservation_blocks_lifecycle_on_a_locally_successful_member(ha_publish, monkeypatch, operation):
+    env = ha_publish
+    env.pair()
+    env.devices.upload_status[PRIMARY] = 'verifying'
+    env.manager.publish_deployment(env.primary['id'], env.bundle())
+    env.drain()
+    secondary = env.manager.get_agent_by_id(env.secondary['id'])
+    assert secondary['latest_deployment']['status'] == 'succeeded'
+    calls = []
+    def post(*args, **kwargs):
+        calls.append(args)
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"success":true}'
+        return response
+    monkeypatch.setattr('backend.agents.manager.requests.post', post)
+    result = getattr(env.manager, operation)(env.secondary['id'])
+    assert not result['success']
+    assert calls == []
+
+
+def test_group_reservation_blocks_upgrade_after_local_child_succeeds(ha_publish, monkeypatch):
+    from backend.agents import upgrades
+    env = ha_publish
+    env.pair()
+    env.devices.upload_status[PRIMARY] = 'verifying'
+    env.manager.publish_deployment(env.primary['id'], env.bundle())
+    env.drain()
+    calls = []
+    def request(agent, method, path, **_kwargs):
+        calls.append((method, path))
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps({'agent_id': agent['id'], 'deployment_method': 'shell',
+                                        'architecture': 'linux-amd64'} if method == 'GET' else {}).encode()
+        return response
+    monkeypatch.setattr(upgrades, '_request', request)
+    monkeypatch.setattr(upgrades, 'artifacts', lambda: {'linux-amd64': {'sha256': 'a' * 64, 'size': 100}})
+    with pytest.raises(ValueError):
+        upgrades.start(env.manager, env.secondary['id'])
+    assert not any(method == 'POST' for method, _ in calls)
+
+
+def test_pending_group_blocks_port_change_via_reregistration(ha_publish):
+    env = ha_publish
+    env.pair()
+    env.devices.upload_status[SECONDARY] = 'unknown'
+    env.manager.publish_deployment(env.primary['id'], env.bundle())
+    primary = env.manager.get_agent_by_id(env.primary['id'])
+    with pytest.raises(AgentDeploymentConflict):
+        env.manager.register_agent({**primary, 'port': 8999}, existing_token=primary['token'])
+    assert env.manager.get_agent_by_id(primary['id'])['port'] == 8082
 
 
 def test_competing_publish_from_other_worker_cannot_reserve_peer_during_upload(ha_publish):
@@ -398,3 +582,119 @@ def test_non_ha_oxidns_preserves_single_agent_publish_behavior(ha_publish):
     assert env.devices.uploads[0]['activate'] is True
     assert env.devices.installed[SECONDARY] == {'config.yaml': b'secondary original'}
     assert 'oxidns_ha_publication' not in env.manager.get_agent_by_id(env.primary['id'])
+
+
+@pytest.mark.parametrize('listen', ['127.0.0.1:53', '192.0.2.20:53', '0.0.0.0:5353'])
+def test_candidate_without_wildcard_udp53_is_rejected_before_any_device_write(ha_publish, listen):
+    env = ha_publish
+    env.pair()
+    candidate = build_deployment_bundle(env.primary, env.config, CONFIG.replace('0.0.0.0:53', listen),
+        deployment_id='invalid-ha-listener',
+        custom_files=[{'path': 'rules/shared.txt', 'content': 'domain:unchanged.example'}],
+        local_dns_watchdog=False)
+    env.manager.publish_deployment(env.primary['id'], candidate)
+    env.drain()
+    result = env.manager.get_deployment(env.primary['id'], candidate.manifest['deployment_id'])
+    assert result['status'] == 'failed'
+    assert 'UDP 53' in result['message']
+    assert env.devices.mutations() == []
+
+
+def publish_generated_rule_baseline(env):
+    from backend.converters.oxidns import generate_oxidns_config, get_oxidns_ruleset_downloads
+    env.repository.update_shared_transaction(lambda shared: shared['rule_library'].append(
+        {'id': 'ha-library', 'name': 'HA library', 'source_type': 'content',
+         'behavior': 'domain', 'content': 'old.example'}))
+    env.repository.update_profile_fields('default', {'rule_configs': [
+        {'id': 'ha-rule', 'itemType': 'ruleset', 'library_rule_id': 'ha-library',
+         'policy': 'DIRECT', 'enabled': True}]})
+    env.repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        listen='0.0.0.0:53', direct_rulesets=['ha-rule'], proxy_rulesets=[]))
+    source, _ = env.repository.get_publish_snapshot('default')
+    bundle = build_deployment_bundle(env.primary, source,
+        generate_oxidns_config(source, base_url='https://config.test'),
+        ruleset_downloads=get_oxidns_ruleset_downloads(source, base_url='https://config.test'),
+        base_url='https://config.test', deployment_id='ha-baseline')
+    env.manager.publish_deployment(env.primary['id'], bundle, source_snapshot=source,
+                                   base_url='https://config.test')
+    env.drain()
+    assert env.manager.get_deployment(env.primary['id'], 'ha-baseline')['status'] == 'succeeded'
+    return source, bundle
+
+
+def test_manual_rule_update_uses_committed_source_and_same_bundle_on_both_members(ha_publish, monkeypatch):
+    from backend.agents import oxidns_rule_update, rule_sync, rule_sync_snapshot
+    env = ha_publish
+    env.pair()
+    source, baseline = publish_generated_rule_baseline(env)
+    monkeypatch.setattr(rule_sync_snapshot, 'fetch_snapshot', lambda _manager, _agent, saved: saved['bundle'])
+    preparations = []
+    prepare = rule_sync.prepare_candidate
+
+    def counted_prepare(agent, selected, *args, **kwargs):
+        assert selected['oxidns'] == source['oxidns']
+        preparations.append(agent['id'])
+        return prepare(agent, selected, *args, **kwargs)
+    monkeypatch.setattr(rule_sync, 'prepare_candidate', counted_prepare)
+    # The current editor draft is deliberately unsuitable for HA; updating
+    # already-deployed rules must keep the published listener and upstreams.
+    env.repository.update_profile_transaction('default', lambda profile: profile['oxidns'].update(
+        listen='127.0.0.1:5353', local_dns='udp://192.0.2.99'))
+    result, code = oxidns_rule_update.call(env.manager, env.secondary['id'], 'POST')
+    assert code in (200, 202)
+    env.drain(env.secondary)
+    result, code = oxidns_rule_update.call(env.manager, env.primary['id'], 'GET')
+    assert code == 200 and result['task']['status'] == 'succeeded'
+    updates = env.devices.uploads[2:]
+    assert [item['host'] for item in updates] == [SECONDARY, PRIMARY]
+    assert len(preparations) == 1
+    assert updates[0]['files'] == updates[1]['files']
+    assert updates[0]['files'][baseline.manifest['config_path']] == archive_files(baseline.archive)[1][baseline.manifest['config_path']]
+
+
+def test_automatic_rule_workers_on_both_members_create_only_one_pair_publication(ha_publish, monkeypatch):
+    from backend.agents import rule_sync, rule_sync_store
+    env = ha_publish
+    env.pair()
+    _, baseline = publish_generated_rule_baseline(env)
+    monkeypatch.setattr(rule_sync, 'fetch_snapshot', lambda _manager, _agent, saved: saved['bundle'])
+    for agent in (env.primary, env.secondary):
+        rule_sync.configure(env.manager, agent['id'], {'library': True, 'rules': False})
+    env.repository.update_shared_transaction(lambda shared: next(
+        item for item in shared['rule_library'] if item['id'] == 'ha-library').update(content='new.example'))
+    now = [100.0]
+    preparations = []
+
+    def prepare(*args, **kwargs):
+        preparations.append(args[0]['id'])
+        return rule_sync.prepare_candidate(*args, **kwargs)
+    workers = [rule_sync.RuleSyncWorker(AgentManager(env.repository), clock=lambda: now[0], prepare=prepare)
+               for _ in range(2)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        for _ in range(12):
+            futures = [pool.submit(worker.run, agent['id'])
+                       for worker, agent in zip(workers, (env.primary, env.secondary))]
+            for future in futures:
+                future.result(timeout=10)
+            now[0] += 5
+    assert preparations == [env.primary['id']]
+    updates = env.devices.uploads[2:]
+    assert [item['host'] for item in updates] == [SECONDARY, PRIMARY]
+    assert updates[0]['files'] == updates[1]['files']
+    assert updates[0]['files'][baseline.manifest['config_path']] == archive_files(baseline.archive)[1][baseline.manifest['config_path']]
+    assert any(b'new.example' in value for path, value in updates[0]['files'].items() if path.startswith('rules/'))
+    for agent in (env.primary, env.secondary):
+        saved = rule_sync_store.load(env.repository, env.manager.get_agent_by_id(agent['id']))
+        assert next(item for item in saved['source']['rule_library'] if item['id'] == 'ha-library')['content'] == 'new.example'
+
+
+@pytest.mark.parametrize('entry', ['primary', 'secondary'])
+def test_rule_sync_scopes_are_shared_when_changed_from_either_member(ha_publish, entry):
+    from backend.agents import rule_sync
+    env = ha_publish
+    env.pair()
+    for scopes in ({'library': True, 'rules': False}, {'library': False, 'rules': True},
+                   {'library': False, 'rules': False}):
+        rule_sync.configure(env.manager, getattr(env, entry)['id'], scopes)
+        for agent in (env.primary, env.secondary):
+            assert rule_sync.settings_for(env.manager.get_agent_by_id(agent['id'])) == scopes

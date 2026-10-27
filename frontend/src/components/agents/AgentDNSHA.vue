@@ -100,6 +100,10 @@ const bothHold = computed(() => members.value.length === 2 && members.value.ever
 const health = computed(() => status.value?.config ? status.value.health : undefined)
 
 const row = computed<{ status: string; tone: 'success' | 'warning' | 'danger' | 'progress' | 'neutral' }>(() => {
+  if (publication.value?.status === 'ready') return { status: '主备配置待激活', tone: 'warning' }
+  if (publication.value?.status === 'unknown') return { status: '同步结果待确认', tone: 'warning' }
+  if (publishing.value) return { status: '正在同步主备', tone: 'progress' }
+  if (publication.value && publication.value.status !== 'succeeded') return { status: '主备同步失败', tone: 'danger' }
   if (haState.value?.status === 'applying') return { status: '正在开启', tone: 'progress' }
   if (haState.value?.status === 'failed') return { status: '操作失败', tone: 'danger' }
   if (!status.value) {
@@ -323,8 +327,8 @@ async function disable(force: boolean) {
       </div>
     </AgentStatusRow>
     <AgentStatusRow v-else-if="publication || enableUnknown" label="DNS 高可用"
-      :status="enableUnknown ? '开启结果待确认' : publishing ? '正在同步主备' : '开启未完成'"
-      :tone="enableUnknown ? 'warning' : publishing ? 'progress' : 'danger'">
+      :status="enableUnknown ? '开启结果待确认' : row.status"
+      :tone="enableUnknown ? 'warning' : row.tone">
       <template #actions><Button variant="ghost" size="sm" class="min-h-11 text-xs" :disabled="busy" aria-label="设置 DNS 高可用" @click="open = true">设置</Button></template>
       <template #notice>
         <AgentHAPublication v-if="publication" :publication="publication" />
@@ -386,6 +390,7 @@ async function disable(force: boolean) {
           <p class="m-0 font-medium text-foreground">开启前请确认</p>
           <ul class="m-0 mt-1.5 list-disc space-y-1 pl-4">
             <li>开启时会把本配置空间已保存的配置与规则发布到两台；备机检查成功后才更新主机，任一步失败都会停止后续步骤。</li>
+            <li>规则自动同步开关以本次主机设置为准；开启后修改任一台的开关都会同时作用于两台。</li>
             <li>两台在同一局域网（同一网段），虚拟 IP 未被其他设备或 DHCP 地址池占用。</li>
             <li>两台都已安装 keepalived（如 <span class="font-mono">apt install keepalived</span>），且 Agent 已更新到支持高可用的版本。</li>
             <li>两台 OxiDNS 转发到同一个 Mihomo：代理 DNS 上游填 Mihomo 的局域网地址，不能用 127.0.0.1。</li>

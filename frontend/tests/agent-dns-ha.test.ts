@@ -113,11 +113,20 @@ describe('ordered configuration synchronization', () => {
     await vi.advanceTimersByTimeAsync(2000)
     await flushPromises()
     expect(wrapper.text()).toContain('备机健康检查失败，主机未更新')
-    expect(wrapper.text()).toContain('开启未完成')
+    expect(wrapper.text()).toContain('主备同步失败')
     expect(notify.success).not.toHaveBeenCalled()
     const calls = vi.mocked(agentApi.getDNSHA).mock.calls.length
     await vi.advanceTimersByTimeAsync(6000)
     expect(agentApi.getDNSHA).toHaveBeenCalledTimes(calls)
+  })
+
+  it('distinguishes an unknown first-enable result from active synchronization', async () => {
+    const pending = publication('unknown')
+    vi.mocked(agentApi.getDNSHA).mockResolvedValueOnce({ data: { success: true, config: null, publication: pending } } as any)
+    const wrapper = render({ oxidns_ha_publication: pending })
+    await flushPromises()
+    expect(wrapper.findComponent(AgentStatusRow).props()).toMatchObject({ status: '同步结果待确认', tone: 'warning' })
+    expect(notify.success).not.toHaveBeenCalled()
   })
 })
 

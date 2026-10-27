@@ -101,13 +101,16 @@ def api(method, path, body=None, allow_error=False, timeout=240):
     return code, data
 
 
-def document(address, workers=2):
-    return {'runtime': {'worker_threads': workers}, 'log': {'level': 'info'}, 'plugins': [
+def document(address, workers=2, *, main_tag='main', native_api=False):
+    result = {'runtime': {'worker_threads': workers}, 'log': {'level': 'info'}, 'plugins': [
         {'tag': 'lab_domains', 'type': 'domain_set', 'args': {'files': ['rules/lab.txt']}},
         {'tag': 'lab_answer', 'type': 'black_hole', 'args': {'mode': 'custom', 'ips': [address], 'short_circuit': True}},
-        {'tag': 'main', 'type': 'sequence', 'args': [{'exec': '$lab_answer'}]},
-        {'tag': 'udp', 'type': 'udp_server', 'args': {'entry': 'main', 'listen': '0.0.0.0:53'}},
-        {'tag': 'tcp', 'type': 'tcp_server', 'args': {'entry': 'main', 'listen': '0.0.0.0:53'}}]}
+        {'tag': main_tag, 'type': 'sequence', 'args': [{'exec': '$lab_answer'}]},
+        {'tag': 'udp', 'type': 'udp_server', 'args': {'entry': main_tag, 'listen': '0.0.0.0:53'}},
+        {'tag': 'tcp', 'type': 'tcp_server', 'args': {'entry': main_tag, 'listen': '0.0.0.0:53'}}]}
+    if native_api:
+        result['api'] = {'http': {'listen': '127.0.0.1:9199'}}
+    return result
 
 
 def server():
@@ -188,6 +191,10 @@ def prepare():
         guest(cid, 'systemctl', 'stop', 'configflow-agent', 'oxidns', 'keepalived', check=False)
         # Original journals/configuration are protected by the stopped pre-test snapshot.
         guest(cid, 'mkdir', '-p', GROOT, '/etc/oxidns/rules')
+        # Retained lab images have /opt owned by a former fixture UID.
+        # keepalived correctly requires every executable ancestor to be root-owned.
+        # The pre-test snapshot restores that original ownership afterwards.
+        guest(cid, 'chown', 'root:root', '/opt')
         put(cid, '/etc/oxidns/config.yaml', json.dumps(document(initial)))
         put(cid, '/etc/oxidns/rules/lab.txt', 'full:initial-' + str(cid) + '.invalid\n')
         put(cid, GROOT + '/configflow-agent', binary, 0o755)
@@ -259,7 +266,7 @@ def wait_ha(agent_id, expected='succeeded', timeout=180):
     while time.monotonic() < deadline:
         _, state = api('GET', f'/api/agents/{agent_id}/oxidns-ha')
         job = state.get('publication') or {}
-        if job.get('status') in {'succeeded', 'failed', 'rollback_failed'}:
+        if job.get('status') in {'succeeded', 'failed', 'rollback_failed', expected}:
             if job['status'] != expected:
                 raise AssertionError('HA publication ended as ' + job['status'] + ': ' + job.get('message', ''))
             return state
@@ -267,16 +274,17 @@ def wait_ha(agent_id, expected='succeeded', timeout=180):
     raise AssertionError('HA publication did not finish within timeout')
 
 
-def set_draft(address, *, workers=2, rule='full:shared.lab.invalid\n'):
+def set_draft(address, *, workers=2, rule='full:shared.lab.invalid\n', main_tag='main', native_api=False):
     _, settings = api('GET', '/api/oxidns/settings')
-    settings.update(config_mode='native', native_config=json.dumps(document(address, workers)),
+    settings.update(config_mode='native', native_config=json.dumps(document(address, workers, main_tag=main_tag, native_api=native_api)),
                     additional_files=[{'path': 'rules/lab.txt', 'encoding': 'text', 'content': rule}])
     return api('POST', '/api/oxidns/settings', settings)[1]
 
 
-def publish(agent_id, deployment_id=None, *, allow_error=False):
+def publish(agent_id, deployment_id=None, *, allow_error=False, restart=True):
     return api('POST', f'/api/agents/{agent_id}/push-config', {
-        'base_url': SERVER_URL, 'deployment_id': deployment_id or uuid.uuid4().hex}, allow_error=allow_error)
+        'base_url': SERVER_URL, 'deployment_id': deployment_id or uuid.uuid4().hex,
+        'restart': restart}, allow_error=allow_error)
 
 
 def matching_files():
@@ -347,6 +355,52 @@ def test():
             record(f'publish-from-{cid}-updates-both-members', started, publication=complete['publication'],
                    files=states, answers=answers)
 
+        started = time.time()
+        previous = {cid: snapshot(cid) for cid in (130, 131)}
+        set_draft('198.51.100.45', workers=8, rule='full:staged-candidate.invalid\n')
+        publish(ids[130], restart=False)
+        ready = wait_ha(ids[130], 'ready')
+        assert {cid: snapshot(cid) for cid in (130, 131)} == previous, 'Staging changed live files or restarted a core'
+        secondary = next(member for member in ready['publication']['members'] if member['agent_id'] == ids[131])
+        api('POST', f'/api/agents/{ids[131]}/deployments/{secondary["deployment_id"]}/activate', {})
+        complete = wait_ha(ids[131]); states = matching_files()
+        assert dns_snapshot()[VIP].get('ip') == '198.51.100.45'
+        record('stage-both-without-restart-then-activate-from-secondary', started,
+               ready_publication=ready['publication'], publication=complete['publication'], files=states)
+
+        started = time.time()
+        put(131, '/run/systemd/system/oxidns.service.d/ha-sync-delay.conf', '[Service]\nExecStartPre=/bin/sleep 8\n')
+        guest(131, 'systemctl', 'daemon-reload')
+        try:
+            set_draft('198.51.100.48', workers=9, rule='full:recover-after-backend-restart.invalid\n')
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                accepted = pool.submit(publish, ids[130], uuid.uuid4().hex, allow_error=True)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    state = guest(131, 'systemctl', 'is-active', 'oxidns', check=False).decode().strip()
+                    if state == 'activating': break
+                    time.sleep(.1)
+                else: raise AssertionError('Standby did not enter delayed startup before backend restart')
+                guest(132, 'systemctl', 'restart', 'cf-ha-sync-backend')
+                try:
+                    first_code = accepted.result()[0]
+                except (OSError, urllib.error.URLError):
+                    first_code = 'connection-closed-during-restart'
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    api('GET', '/api/agents?summary=1'); break
+                except (OSError, urllib.error.URLError): time.sleep(.3)
+            complete = wait_ha(ids[130]); states = matching_files()
+            assert dns_snapshot()[VIP].get('ip') == '198.51.100.48'
+            item = record('backend-restart-resumes-publication-without-restarting-a-member-twice', started,
+                          initial_http_status=first_code, publication=complete['publication'], files=states)
+            for entries in item['service_events'].values():
+                assert sum(event['message'].startswith('Stopping ') for event in entries) <= 1
+        finally:
+            guest(131, 'rm', '-f', '/run/systemd/system/oxidns.service.d/ha-sync-delay.conf')
+            guest(131, 'systemctl', 'daemon-reload')
+
         # A real failure of the next standby startup. Removing its sentinel in
         # ExecStartPre lets the Agent's normal automatic rollback start the old core.
         started = time.time()
@@ -362,7 +416,7 @@ def test():
             after = {cid: snapshot(cid) for cid in (130, 131)}
             assert after[130] == previous[130], 'Primary was touched after standby failed'
             assert after[131]['hashes'] == previous[131]['hashes'], 'Standby did not restore old files'
-            assert dns_snapshot()[VIP].get('ip') == '198.51.100.40'
+            assert dns_snapshot()[VIP].get('ip') == '198.51.100.48'
             record('standby-start-failure-rolls-back-and-leaves-primary-untouched', started,
                    publication=complete['publication'], before=previous, after=after)
         finally:
@@ -447,7 +501,84 @@ def test():
                           'dns_probe': report['dns_probe']}))
 
 
-def cleanup():
+
+def edge_tests():
+    """Final HTTP guard checks against an already completed laboratory run."""
+    guard(); start_tunnel()
+    credentials = json.loads((ROOT / 'private.json').read_text())
+    ids = {cid: credentials['members'][str(cid)]['id'] for cid in (130, 131)}
+    report = json.loads((ROOT / 'report.json').read_text())
+    results = []
+    try:
+        # A disabled pair must not keep showing a finished publication as active HA.
+        api('DELETE', f'/api/agents/{ids[130]}/oxidns-ha')
+        for cid in (130, 131):
+            _, state = api('GET', f'/api/agents/{ids[cid]}/oxidns-ha')
+            assert state.get('config') is None and not state.get('publication'), state
+        results.append({'name': 'disable-clears-config-and-publication-for-both-members', 'passed': True})
+
+        # Pin an in-flight first enable before keepalived has been configured.
+        put(131, '/run/systemd/system/oxidns.service.d/ha-sync-delay.conf', '[Service]\nExecStartPre=/bin/sleep 8\n')
+        guest(131, 'systemctl', 'daemon-reload')
+        try:
+            set_draft('198.51.100.70', workers=10, rule='full:guard-check.invalid\n', main_tag='sequence_main', native_api=True)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                enabling = pool.submit(api, 'PUT', f'/api/agents/{ids[130]}/oxidns-ha', {'peer_id': ids[131], 'vip': VIP})
+                deadline = time.monotonic() + 20
+                while time.monotonic() < deadline:
+                    _, state = api('GET', f'/api/agents/{ids[130]}/oxidns-ha')
+                    publication = state.get('publication') or {}
+                    if publication.get('status') and publication['status'] not in TERMINAL:
+                        assert not state.get('config'), 'Expected pre-keepalived initial enable'
+                        break
+                    time.sleep(.1)
+                else: raise AssertionError('Initial enable was not observed in progress')
+                blocked = [api('POST', f'/api/agents/{ids[cid]}/oxidns/rules/update', {}, allow_error=True)[0] for cid in (130, 131)]
+                assert blocked == [409, 409], blocked
+                enabling.result()
+            complete = wait_ha(ids[130])
+            results.append({'name': 'manual-native-rules-blocked-during-initial-enable', 'passed': True,
+                            'http_statuses': blocked, 'publication': complete['publication']})
+        finally:
+            guest(131, 'rm', '-f', '/run/systemd/system/oxidns.service.d/ha-sync-delay.conf')
+            guest(131, 'systemctl', 'daemon-reload')
+
+        # The settings endpoint accepts either member, while the pair remains equal.
+        settings_checks = []
+        for cid, settings in ((131, {'library': True, 'rules': True}), (130, {'library': False, 'rules': False})):
+            api('PUT', f'/api/agents/{ids[cid]}/rule-sync', settings)
+            actual = {str(member): api('GET', f'/api/agents/{ids[member]}/rule-sync')[1]['settings'] for member in (130, 131)}
+            assert all(value == settings for value in actual.values()), actual
+            settings_checks.append({'request_member': cid, 'settings': actual})
+        results.append({'name': 'rule-sync-settings-propagate-from-either-member', 'passed': True, 'checks': settings_checks})
+
+        started = time.time()
+        code, requested = api('POST', f'/api/agents/{ids[131]}/oxidns/rules/update', {})
+        assert requested.get('success') is True, requested
+        complete = wait_ha(ids[131])
+        _, task = api('GET', f'/api/agents/{ids[131]}/oxidns/rules/update')
+        assert task.get('success') is True and task['task']['status'] == 'succeeded', task
+        events = service_events(started); assert_serial(events)
+        results.append({'name': 'manual-rules-keep-success-contract-and-complete-for-pair', 'passed': True,
+                        'http_status': code, 'task': task, 'publication': complete['publication'],
+                        'files': matching_files(), 'service_events': events})
+
+        api('DELETE', f'/api/agents/{ids[131]}/oxidns-ha')
+        for cid in (130, 131):
+            _, state = api('GET', f'/api/agents/{ids[cid]}/oxidns-ha')
+            assert state.get('config') is None and not state.get('publication'), state
+        results.append({'name': 'disable-after-rules-clears-both-members', 'passed': True})
+    finally:
+        paths = ('backend/agents/oxidns_ha_publish.py', 'backend/agents/oxidns_ha.py',
+                 'backend/agents/oxidns_rule_update.py', 'backend/agents/rule_sync.py',
+                 'backend/routes/agents.py', 'scripts/tests/oxidns_ha_sync_lab.py')
+        report['final_guard_checks'] = {'source_sha256': {path: hashlib.sha256((REPO / path).read_bytes()).hexdigest() for path in paths},
+                                      'checks': results, 'finished_at': time.time()}
+        private(ROOT / 'report.json', report)
+    print(json.dumps({'passed': True, 'final_guard_checks': len(results)}))
+
+
+def cleanup(*, reset=False):
     guard()
     path = ROOT / 'tunnel.pid'
     if path.exists():
@@ -457,13 +588,19 @@ def cleanup():
     for cid in (130, 131, 132):
         pve('pct', 'stop', cid, check=False)
         pve('pct', 'rollback', cid, SNAPSHOT)
-        pve('pct', 'delsnapshot', cid, SNAPSHOT)
-    print(json.dumps({'restored_stopped_guests': list(GUESTS), 'removed_snapshot': SNAPSHOT}))
+        if not reset: pve('pct', 'delsnapshot', cid, SNAPSHOT)
+    if reset:
+        for name in ('report.json', 'dns-probe.jsonl'):
+            path = ROOT / name
+            if path.exists(): path.rename(ROOT / ('previous-' + str(int(time.time())) + '-' + name))
+        (ROOT / 'private.json').unlink(missing_ok=True)
+        for cid in GUESTS: pve('pct', 'start', cid)
+    print(json.dumps({'restored_guests': list(GUESTS), 'snapshot': SNAPSHOT, 'reset_for_new_run': reset}))
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['prepare','update-source','server','probe','test','cleanup'])
+    parser.add_argument('command', choices=['prepare','update-source','server','probe','test','edge-tests','cleanup','reset'])
     args = parser.parse_args()
     if args.command == 'server': server()
     elif args.command == 'probe': probe()
@@ -471,7 +608,9 @@ def main():
     elif args.command == 'update-source':
         guard(); stage_source(); guest(132, 'systemctl', 'restart', 'cf-ha-sync-backend'); start_tunnel()
     elif args.command == 'cleanup': cleanup()
+    elif args.command == 'reset': cleanup(reset=True)
     elif args.command == 'test': test()
+    elif args.command == 'edge-tests': edge_tests()
 
 if __name__ == '__main__':
     main()

@@ -366,7 +366,7 @@ def configure(manager, agent_id, request, *, base_url=''):
             'warnings': warnings, 'routers': routers_using(manager, {agent['id'], peer['id']})}
 
 
-def _configure_keepalived(manager, agent_id, request):
+def _configure_keepalived(manager, agent_id, request, *, rule_sync_settings=None):
     """Enable (or change) the pair with this Agent as primary."""
     with _lock(manager):
         agents = manager.get_all_agents()
@@ -412,6 +412,8 @@ def _configure_keepalived(manager, agent_id, request):
                 stored['oxidns_ha'] = {'enabled': True, 'group_id': group_id, 'peer_id': other['id'],
                                        'vip': settings['vip'], 'vrid': settings['vrid'], 'role': roles[member['id']]}
                 stored['oxidns_ha_state'] = {'status': 'succeeded', 'error': '', 'updated_at': now}
+                if rule_sync_settings is not None:
+                    stored.setdefault('rule_sync', {})['settings'] = dict(rule_sync_settings)
         try:
             manager._update_agents(save)
         except Exception as error:  # noqa: BLE001 - both devices are applied; any failure must undo them
@@ -435,6 +437,19 @@ def _settled_status(manager, agent_id):
 
 
 def disable(manager, agent_id, force=False):
+    from . import oxidns_ha_publish as publications
+    agent = manager.get_agent_by_id(agent_id) or {}
+    children = (agent.get(publications.FIELD) or {}).get('children') or {agent_id: ''}
+    peer_id = (agent.get('oxidns_ha') or {}).get('peer_id')
+    if peer_id:
+        children = {agent_id: '', peer_id: ''}
+    with publications._lock(manager, {'children': children}) as acquired:
+        if not acquired:
+            raise HAError('主备配置正在处理，请等待完成后再停用高可用')
+        return _disable(manager, agent_id, force)
+
+
+def _disable(manager, agent_id, force=False):
     """Remove keepalived from both members, then delete the fields from both records.
 
     An unreachable member blocks unless ``force``: its keepalived would keep the
@@ -487,6 +502,7 @@ def disable(manager, agent_id, force=False):
                 if item['id'] in ids and (cleaning or not enabled(item)):
                     item.pop('oxidns_ha', None)
                     item.pop('oxidns_ha_state', None)
+                    item.pop('oxidns_ha_publication', None)
         manager._update_agents(save)
     return {'success': True, 'config': None, 'routers': routers_using(manager, ids), 'warnings': errors}
 
@@ -543,6 +559,8 @@ def status(manager, agent_id):
         raise HAError('Agent 不存在')
     publication = publications.summary(agent.get(publications.FIELD) or {}) or None
     if not enabled(agent):
+        if publication is None:
+            return {'success': True, 'config': None}
         return {'success': True, 'config': None, 'publication': publication,
                 'warnings': (publication or {}).get('warnings', []), 'routers': (publication or {}).get('routers', [])}
     ha = agent['oxidns_ha']
