@@ -1,0 +1,38 @@
+{
+  "finished_at": 1793085697.514637,
+  "guests": {
+    "130": {
+      "status": "stopped",
+      "memory_mib": 384,
+      "task_snapshot_removed": true,
+      "disk_and_configuration_rolled_back": true
+    },
+    "131": {
+      "status": "stopped",
+      "memory_mib": 384,
+      "task_snapshot_removed": true,
+      "disk_and_configuration_rolled_back": true
+    },
+    "132": {
+      "status": "stopped",
+      "memory_mib": 1536,
+      "task_snapshot_removed": true,
+      "disk_and_configuration_rolled_back": true
+    }
+  },
+  "builder_service_state": "inactive",
+  "tunnel_pid_file_removed": true,
+  "production_guests_modified": false,
+  "test_server_packages_retained": [
+    "docker",
+    "docker-buildx",
+    "containerd",
+    "runc",
+    "libpathrs"
+  ],
+  "task_directory_removed": true,
+  "tunnel_port_closed": true,
+  "temporary_credentials_removed": true,
+  "builder_images_and_runtime_removed": true,
+  "verified_at": 1793085741.394919
+}

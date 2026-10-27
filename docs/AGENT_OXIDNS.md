@@ -278,11 +278,11 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 ### Docker DNS 高可用安装
 
-需要包含 Docker HA 支持的新镜像（Agent 1.8.47-go 起）、两台不同的 Linux 宿主机、同一局域网与配置空间。两台宿主机使用稳定地址，并允许彼此的 VRRP（IP 协议 112）及 DNS 通信。同一宿主机起两个容器不构成这套高可用；普通 bridge 容器、Docker Desktop 和非 Linux 宿主机不支持。每个受管 DNS 容器仅运行 OxiDNS，Mihomo、MosDNS 和 All-in-One 安装不启用此选项。
+需要包含 Docker HA 支持的新镜像（Agent 1.8.47-go 起）、两台不同的 Linux 宿主机、同一局域网与配置空间。两台宿主机使用 rootful Docker 和稳定地址，并允许彼此的 VRRP（IP 协议 112）及 DNS 通信。同一宿主机起两个容器不构成这套高可用；普通 bridge 容器、Docker Desktop 和非 Linux 宿主机不支持。每个受管 DNS 容器仅运行 OxiDNS，Mihomo、MosDNS 和 All-in-One 安装不启用此选项。
 
 1. 在 **系统 → Agent → 生成安装脚本** 选择 **Docker 容器 → OxiDNS**，勾选 **为 DNS 高可用准备容器**。
 2. 默认选择 **Host（推荐）**，填写这台宿主机的固定 IPv4。确认宿主机 DNS 的 UDP/TCP 53 及 Agent 端口没有被其他服务占用；不要填写准备分配的虚拟 IP。此模式生成 OxiDNS 与独立高可用容器两个服务，不需要 macvlan，也不映射端口。
-3. 在另一台主机生成另一份配置，修改名称和 IP，仍指向同一个可访问的 ConfigFlow 服务地址。复制 Compose 到各自主机的独立目录执行 `docker compose up -d`，或使用页面生成的 Docker Run 安装脚本。Host 示例见 [docker-compose-oxidns-ha.yaml](../docker/docker-compose-oxidns-ha.yaml)。
+3. 在另一台主机生成另一份配置，修改名称和 IP，仍指向同一个可访问的 ConfigFlow 服务地址。复制 Compose 到各自主机的独立目录，先执行 `docker compose pull` 更新镜像，再执行 `docker compose up -d`；使用页面生成的 Docker Run 脚本时，先执行 `docker pull thsrite/config-flow-agent:latest`，避免复用不支持 HA 的旧缓存镜像。离线安装可先导入包含上述 Agent 版本的镜像。Host 示例见 [docker-compose-oxidns-ha.yaml](../docker/docker-compose-oxidns-ha.yaml)。
 4. 等两台 Agent 上线，绑定到同一配置空间。在其中一张卡片的 **DNS 高可用 → 设置** 中选择对端，填写局域网内未使用、位于 DHCP 池之外的虚拟 IP，然后点击 **开启**。首次同步两台配置与规则完成后才启用 VIP；后续发布会自动按实际 VIP 归属安排更新与迁移，无需另开迁移开关。
 5. 确认两台核心健康、只有一台持有 VIP，并从另一台局域网设备验证 VIP 的 DNS 应答，再到上游路由页重新发布 DHCP DNS 与 DNS 劫持。
 
@@ -305,7 +305,7 @@ fi
 
 **已有容器接入：** 仅拉取镜像、更新 Agent 或点击开启，不能添加缺失的网络、权限和挂载。先备份原 Compose/启动参数与数据，等待正在进行的发布结束，再保留原 `agent`、`oxidns` 数据目录，按新模式补充 `ha` 目录及相关设置后重建。不要用新安装脚本覆盖已有配置。配置与规则由 ConfigFlow 自动按主备顺序发布；Docker 镜像升级由管理员逐台重建。已有 HA 组更新镜像时，先处理未持有 VIP 的一台，确认正常后再处理另一台；Host 模式更新 OxiDNS 时保留高可用容器运行，不要同时重建两台主机上的服务。
 
-**Host 的故障边界：** 独立高可用容器在 OxiDNS 容器停止或重启时仍可检查 DNS 并撤销 VIP。它正常停止时也会清理 VIP。但如果高可用容器自身遭到强制终止，或整个 Docker 被强制停止，VIP 可能仍留在宿主机网络中，形成地址冲突；这不是宿主机级故障隔离，也不保证零查询失败。发生这类情况时先核对两台主机的 `ip -4 addr` 和 VIP 归属，恢复高可用服务或明确清理原主机的残留后再继续发布，不能把容器“已停止”当成 VIP 已消失。维护时正常停止高可用服务并确认 VIP 已转移，再关闭 Docker。
+**Host 的故障边界：** 独立高可用容器在 OxiDNS 容器停止或重启时仍可检查 DNS 并撤销 VIP。它正常停止时也会清理 VIP。但如果高可用容器自身遭到强制终止，或整个 Docker 被强制停止，VIP 可能仍留在宿主机网络中，形成地址冲突。故障检测与网络收敛也需要时间，不保证零查询失败。发生这类情况时先核对两台主机的 `ip -4 addr` 和 VIP 归属，恢复高可用服务或明确清理原主机的残留后再继续发布，不能把容器“已停止”当成 VIP 已消失。维护时正常停止高可用服务并确认 VIP 已转移，再关闭 Docker。
 
 ### 可选：Macvlan 网络
 
