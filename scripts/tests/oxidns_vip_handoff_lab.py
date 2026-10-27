@@ -252,7 +252,9 @@ def test():
             time.sleep(5)
             assert lab.dns_snapshot()[lab.VIP].get('ip') == '198.51.100.60'
         finally:
-            lab.guest(132, 'systemctl', 'start', lab.UNIT_PREFIX + '-backend')
+            lab.guest(132, 'systemd-run', '--unit=' + lab.UNIT_PREFIX + '-backend',
+                      '--property=WorkingDirectory=' + lab.GROOT, '/opt/cf-retest/venv/bin/python',
+                      lab.GROOT + '/source/' + lab.SCRIPT, 'server')
         time.sleep(2)
         complete = lab.wait_ha(ids[source])
         item = collect_phase('configflow-and-agent-restarts-resume-same-handoff', started,
@@ -329,7 +331,8 @@ def test():
             raw, samples = read_samples()
             (lab.ROOT / 'dns-probe.jsonl').write_bytes(raw)
             report['dns_probe'] = {'sample_count': len(samples), 'sha256': hashlib.sha256(raw).hexdigest(),
-                'both_nodes_unavailable_samples': sum(not sample['nodes'][0]['ok'] and not sample['nodes'][1]['ok'] for sample in samples)}
+                'both_nodes_unavailable_samples': sum(not sample['nodes'][0]['ok'] and not sample['nodes'][1]['ok'] for sample in samples),
+                'vip_failed_samples': sum(not sample['nodes'][2]['ok'] for sample in samples)}
         report['finished_at'] = time.time()
         lab.private(lab.ROOT / 'report.json', report)
         print(json.dumps({'passed': report['passed'], 'scenarios': len(report['scenarios']), 'report': str(lab.ROOT / 'report.json')}))
