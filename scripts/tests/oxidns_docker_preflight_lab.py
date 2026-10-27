@@ -204,10 +204,71 @@ def test_api():
     print(json.dumps({'real_api_cases': len(results) + 1, 'all_expected': True}), flush=True)
 
 
+def remote_probe():
+    import threading
+    guard(); tested = module(); stop = threading.Event(); connections = []
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0)); listener.listen(); listener.settimeout(.1)
+        endpoint = 'tcp://127.0.0.1:' + str(listener.getsockname()[1])
+        def observe():
+            while not stop.is_set():
+                try:
+                    client, _ = listener.accept(); connections.append(time.time()); client.close()
+                except socket.timeout: pass
+        worker = threading.Thread(target=observe, daemon=True); worker.start()
+        try:
+            raw = run(['sudo', '-n', 'env', '-u', 'DOCKER_CONTEXT', 'DOCKER_HOST=' + endpoint, 'bash', '-s'],
+                      data=tested.collector_script().encode(), timeout=45).stdout.decode()
+        finally:
+            stop.set(); worker.join(timeout=1)
+    assert not connections and endpoint not in raw
+    sample = record_sample('fixture-live-remote-trap', raw,
+        'Actual collector with explicit DOCKER_HOST fixture pointing to a temporary local TCP connection counter; no real remote Docker daemon', tested)
+    for report in sample['reports'].values():
+        checks = {v['id']: v['status'] for v in report['checks']}
+        assert checks['docker_endpoint'] == 'fail' and checks['docker_daemon'] == 'unknown'
+    report = json.loads((ROOT / 'report.json').read_text())
+    report['fixtures'] = [v for v in report['fixtures'] if v['name'] != sample['name']] + [sample]
+    report['remote_no_contact_probe'] = {'collector_executed': True, 'tcp_connections': len(connections),
+                                       'endpoint_echoed': False, 'remote_daemon_simulated': True}
+    write_json(ROOT / 'report.json', report)
+    print(json.dumps(report['remote_no_contact_probe']), flush=True)
+
+
+def refresh_parser():
+    guard(); tested = module(); report = json.loads((ROOT / 'report.json').read_text())
+    assert hashlib.sha256(tested.collector_script().encode()).hexdigest() == report['collector_script_sha256'], 'Collector changed: recapture actual samples instead'
+    for sample in report['real_samples'] + report['fixtures']:
+        raw = (ROOT / 'samples' / (sample['name'] + '.txt')).read_text()
+        assert hashlib.sha256(raw.encode()).hexdigest() == sample['sha256']
+        sample['reports'] = {mode: tested.parse_report(raw, mode) for mode in ('host', 'macvlan')}
+    report['final_parser_source_sha256'] = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+    write_json(ROOT / 'report.json', report)
+    print(json.dumps({'unchanged_collector_script': True, 'parser_source_sha256': report['final_parser_source_sha256']}), flush=True)
+
+
+def export():
+    guard(); report = json.loads((ROOT / 'report.json').read_text())
+    browser = ROOT / 'browser/browser.json'
+    if browser.exists(): report['browser'] = json.loads(browser.read_text())
+    screenshots = ROOT / 'browser/screenshots.json'
+    if screenshots.exists(): report['screenshot_capture'] = json.loads(screenshots.read_text())
+    # Keep the outcome of duplicate detection, never the machine fingerprint itself.
+    def without_fingerprint(value):
+        if isinstance(value, dict): return {k: without_fingerprint(v) for k, v in value.items() if k != 'host_fingerprint'}
+        if isinstance(value, list): return [without_fingerprint(v) for v in value]
+        return value
+    report = without_fingerprint(report)
+    report['raw_samples_exported'] = False
+    report['machine_fingerprints_exported'] = False
+    write_json(ROOT / 'public-report.json', report)
+    print(json.dumps({'public_evidence_ready': True, 'raw_samples_and_machine_fingerprints_omitted': True}), flush=True)
+
+
 def cleanup():
     guard(); state = json.loads((ROOT / 'daemon-state.json').read_text())
     assert state['unit'].startswith('cf-docker-preflight-20261027-') and state['directory'] == str(ROOT / 'daemon')
-    run(['sudo', '-n', 'systemctl', 'stop', state['unit']])
+    run(['sudo', '-n', 'systemctl', 'stop', state['unit']], check=False)
     assert service_state(state['unit']) == 'inactive'
     before = json.loads((ROOT / 'report.json').read_text())['baseline']
     after = {'docker_service': service_state('docker'), 'docker_socket': service_state('docker.socket'),
@@ -221,9 +282,10 @@ def cleanup():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['collect', 'fixtures', 'test-api', 'cleanup'])
+    parser.add_argument('command', choices=['collect', 'fixtures', 'remote-probe', 'refresh-parser', 'test-api', 'export', 'cleanup'])
     command = parser.parse_args().command
-    {'collect': collect, 'fixtures': fixtures, 'test-api': test_api, 'cleanup': cleanup}[command]()
+    {'collect': collect, 'fixtures': fixtures, 'remote-probe': remote_probe, 'refresh-parser': refresh_parser,
+     'test-api': test_api, 'export': export, 'cleanup': cleanup}[command]()
 
 
 if __name__ == '__main__': main()
