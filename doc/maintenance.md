@@ -69,11 +69,19 @@
 
 ```bash
 rt -- npm --prefix doc ci --ignore-scripts --no-audit --no-fund
-rt -- npm --prefix doc run build
-rt -- python scripts/docs/check-site.py
-rt -- npm --prefix doc run preview -- --port 15673 --strictPort
+rt --no-sync -- npm --prefix doc run build
+rt --no-sync -- python scripts/docs/check-site.py
+rt --no-sync -- npm --prefix doc run preview -- --port 15673 --strictPort
 ```
 
-预览启动后，本机浏览器访问 `http://192.168.0.32:15673`。检查桌面目录、手机菜单、搜索、段落链接和截图后，停止这次预览进程。默认从站点根路径访问；需要挂在子目录时，构建时用 `rt -e DOCS_BASE=/configflow/ -- npm --prefix doc run build`，再按该前缀部署。
+第一条命令同步当前文件并准备依赖，之后用 `--no-sync` 检查同一份代码；改过文件后从第一条重新开始。预览启动后，本机浏览器访问 `http://192.168.0.32:15673`。检查桌面目录、手机菜单、搜索、段落链接和截图后，停止这次预览进程并确认端口已释放。默认从站点根路径访问；需要挂在子目录时，构建时用 `rt --no-sync -e DOCS_BASE=/configflow/ -- npm --prefix doc run build`，再按该前缀部署。
 
 构建生成 `doc/.vitepress/dist/`，不提交生成文件，也不会自动发布网站。本仓库未在本轮擅自新增公开托管；将来确定部署位置后再配置发布流程。
+
+浏览器检查脚本 `scripts/docs/check-browser.mjs` 会临时启动并关闭文档预览，验证桌面目录、本页目录、本地搜索、六行 HA 组合表和手机导航。按[截图依赖准备方法](https://github.com/thsrite/configflow/blob/main/doc/img/guide/README.md)在服务器准备 Playwright 后运行：
+
+```bash
+rt --no-sync -e PLAYWRIGHT_MODULE=/tmp/configflow-guide-browser/node_modules/playwright/index.mjs --back .ci-results/docs -- node scripts/docs/check-browser.mjs
+```
+
+报告及桌面、手机预览图保存在 `.ci-results/docs/`，不进入产品配置或用户数据目录。
