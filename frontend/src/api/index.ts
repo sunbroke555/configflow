@@ -678,6 +678,20 @@ export const serverDomainApi = {
   update: (data: { new_domain: string }) => api.post('/server-domain', data)
 }
 
+export interface WebPortStatus {
+  supported: boolean
+  port: number | null
+  editable: boolean
+  message?: string
+  ipv6: boolean
+  source: 'default' | 'saved' | 'environment'
+}
+
+export const webPortApi = {
+  get: () => api.get<WebPortStatus>('/settings/web-port'),
+  update: (data: { port: number }) => api.post<WebPortStatus & { success: boolean }>('/settings/web-port', data),
+}
+
 // 配置令牌管理
 export const configTokenApi = {
   get: () => api.get('/config-token'),

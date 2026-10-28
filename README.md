@@ -283,9 +283,12 @@ RouterOS 可通过 DHCP 下发 OxiDNS 地址；对手动指定其他 DNS 的设�
 | `DATA_DIR` | `/data` | 数据保存目录，需要持久挂载 |
 | `TZ` | 镜像中为 `Asia/Shanghai` | 容器时区 |
 | `CONFIGFLOW_HTTP_THREADS` | `8` | 后端同时处理请求的工作线程数，可设为 `1–64` |
+| `CONFIGFLOW_WEB_PORT` | 未设置时使用已保存的端口，首次为 `80` | Docker 内 Web 监听端口，`1–65535`；显式设置后覆盖 Web 保存值，页面只读 |
 | `LOG_LEVEL` | `INFO` | 日志级别；`DEBUG` 会启用开发调试模式 |
 
 示例已开启登录验证。若用户名或密码未设置完整，则不会开启账号密码登录。
+
+Docker 镜像支持在「系统设置 → 服务配置 → Web 监听端口」修改容器内的 Web 端口，保存后立即生效，重建容器后沿用数据目录中的设置。Bridge 模式通常只需修改 Compose 左侧宿主机端口；Host 模式直接使用监听端口。Host 部署、IPv6 与访问恢复方法见 [部署指南](doc/module/deployment.md#自定义-web-端口与-host-网络)。
 
 ## 备份与升级
 
