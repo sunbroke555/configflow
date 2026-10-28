@@ -110,5 +110,3 @@ MosDNS、OxiDNS 的配置 URL 提供主 YAML，不等于 ZIP 中的全部配套�
 ## 下一步
 
 逐项设置请看[核心设置](core-settings.md)；设备发布和回滚看[Agent 管理](agents.md)；尚未安装服务从[首次使用](../guide/first-run.md)开始。
-
-实现核对入口：[生成页面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Generate.vue)、[生成工作台](https://github.com/thsrite/configflow/blob/main/frontend/src/components/generate/GenerateStudio.vue)、[保存与发布栏](https://github.com/thsrite/configflow/blob/main/frontend/src/components/generate/SettingsPublishBar.vue)、[生成路由](https://github.com/thsrite/configflow/blob/main/backend/routes/generate.py)。

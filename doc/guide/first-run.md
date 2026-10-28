@@ -225,7 +225,7 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 3. 查看差异报告，核对要添加或修改的路由、DHCP DNS 和所用设备，再确认发布。
 4. 成功后点击「检查路由器并完成」。在此之前，添加账号或保存连接信息不会自行改主路由。
 
-安装还没结束时可以先填写主路由信息，但实际发布要等安装、核心发布与检查完成。更多字段和撤销方法见 [RouterOS 接入手册](https://github.com/thsrite/configflow/blob/main/docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md#4-接入-routeros-并下发路由)；其他品牌按手动流程处理。
+安装还没结束时可以先填写主路由信息，但实际发布要等安装、核心发布与检查完成。更多字段和撤销方法见 [上游路由设置](../manual/routers.md)；其他品牌按手动流程处理。
 
 <a id="client"></a>
 ## 第 5 步 B：设置测试客户端
@@ -282,7 +282,7 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 | 主路由分流 | 将测试设备／DHCP DNS 恢复为原值，撤销本次加到主路由的静态路由；自动发布的设置按路由器页面的差异与恢复流程处理 | 确认客户端恢复正常，再排查 Linux、Mihomo、OxiDNS；不要先停止仍被主路由指向的核心 |
 | Linux 网关 | 将测试设备网关和 DNS 恢复为原值，恢复原 IPv6／安全 DNS 设置 | 在「管理网络与撤销转发」或安装向导中撤销受管转发；只撤销转发不会关闭 Mihomo TUN，完全停用还需在「配置生成 → Mihomo → Linux 网关」关闭模式、保存并发布 |
 
-老向导若提示「旧版 Linux 网关接管」，应按该提示维护：它依赖旧接管记录，不能照新完整 TUN 方案随意撤销。迁移和技术细节见 [Linux 网关技术手册](https://github.com/thsrite/configflow/blob/main/docs/LINUX_GATEWAY.md)。
+老向导若提示「旧版 Linux 网关接管」，应按该提示维护：它依赖旧接管记录，不能照新完整 TUN 方案随意撤销。具体看 [Linux 网关的调整与停用](../manual/core-settings.md#linux-网关)。
 
 ### 后续常用入口
 
@@ -294,5 +294,3 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 | DNS 上游、查询记录 | OxiDNS 的「设置」 | 保存草稿或保存并发布，按按钮区分 |
 | 主路由转发哪些网段 | 「上游路由」 | 查看差异，再确认发布 |
 | 更多设备或另一种部署方式 | [安装与接入设备](agent-install.md) | 先安装、检查，再接入网络 |
-
-实现依据：[首次向导](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Setup.vue)、[方式说明](https://github.com/thsrite/configflow/blob/main/frontend/src/lib/setupFlow.ts)、[安装与网络检查](https://github.com/thsrite/configflow/blob/main/frontend/src/components/agents/GatewayInstallWizard.vue)、[客户端接入提示](https://github.com/thsrite/configflow/blob/main/frontend/src/components/agents/GatewayClientInstructions.vue)、[默认空间判断](https://github.com/thsrite/configflow/blob/main/backend/common/setup_completion.py)。

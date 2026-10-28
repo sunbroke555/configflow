@@ -5,7 +5,7 @@ export default defineConfig({
   title: 'ConfigFlow 使用手册',
   description: '从安装、首次配置到日常维护，用日常话说明每个选择和按钮。',
   base: process.env.DOCS_BASE || '/',
-  srcExclude: ['module/**', 'design/**', 'img/**', 'install_guide.md',
+  srcExclude: ['design/**', 'img/**',
     'UI-REFACTOR-PLAN.md', 'client-fixed-ip-validation.md', 'oxidns-coverage.md',
     'oxidns-device-policies.md', 'oxidns-validation-20261016.md'],
   cleanUrls: true,
@@ -20,6 +20,7 @@ export default defineConfig({
         { text: '安装管理面板', link: '/guide/install' },
         { text: '首次使用向导', link: '/guide/first-run' },
         { text: '设备安装组合', link: '/guide/agent-install' },
+        { text: 'RouterOS 容器安装', link: '/guide/routeros-install' },
         { text: 'OxiDNS 双机备用', link: '/guide/oxidns-ha' },
       ] },
       { text: '总览与运行面板', collapsed: true, items: [
@@ -44,6 +45,7 @@ export default defineConfig({
       ] },
       { text: '系统与维护', collapsed: true, items: [
         { text: '系统设置', link: '/manual/system-settings' },
+        { text: '连接 AI 工具（MCP）', link: '/manual/mcp' },
         { text: '配置空间', link: '/manual/profiles' },
         { text: 'Agent', link: '/manual/agents' },
         { text: '日志', link: '/manual/logs' },

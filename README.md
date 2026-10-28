@@ -1,64 +1,40 @@
 # ConfigFlow
 
-**在一个网页里整理代理订阅、安排上网规则，并管理家里的网络设备。**
+**用一个网页管理代理订阅、上网规则和网络设备。**
 
-ConfigFlow 可以帮你把订阅和节点整理成 Mihomo、Surge、Loon、MosDNS 或 OxiDNS 能用的配置。也可以把配置发到设备上，查看运行情况。你仍需准备自己的订阅或节点。
+ConfigFlow 将订阅和节点整理成 Mihomo、Surge、Loon、MosDNS、OxiDNS 可用的配置，也能把配置发送到设备并查看运行状态。代理订阅或节点需要自行准备。
 
-第一次用，不必先理解所有网络术语。按下面的顺序走，遇到不明白的按钮再查对应页面。
+[使用手册](https://thsrite.github.io/configflow/) · [Docker 镜像](https://hub.docker.com/r/thsrite/config-flow) · [反馈问题](https://github.com/thsrite/configflow/issues)
+
+## 可以做什么
+
+- 整理订阅和节点，检查连通性，安排自动更新。
+- 设置网站和设备的上网规则，生成配置给手机、电脑或路由器使用。
+- 管理 Linux、Docker、RouterOS 上的服务，发送配置、查看日志和运行情况。
+- 为两台 OxiDNS 配置共同的 DNS 地址，在其中一台故障时由另一台接替。
 
 <a id="快速开始"></a>
 <a id="第一次使用"></a>
-## 从这里开始
+## 开始使用
 
-1. **[选好安装方式并安装面板](doc/guide/install.md)**：Docker、NAS 怎么填；端口、数据目录和账号各是什么。
-2. **[完成首次使用向导](doc/guide/first-run.md)**：先选你希望达到的效果，再填订阅、规则和设备。每个选择都说明打开与关闭的结果。
-3. **[按设备组合安装](doc/guide/agent-install.md)**：只生成配置、单独安装一个程序、Mihomo + OxiDNS 同机、已有程序接管，分别该选什么。
-4. **检查一台设备，再扩展到全家**：确认能上网、规则正确、关闭或重启后能恢复，再调整全家设备。
-
-**已有安装？** 从 [完整使用手册](doc/README.md) 直接找到当前页面。准备让两台 OxiDNS 互相接替？看 [OxiDNS 双机备用指南](doc/guide/oxidns-ha.md)。
-
-## 我想做什么
-
-| 你的目标 | 从哪里开始 |
-| --- | --- |
-| 把订阅变成手机或电脑能用的配置 | [订阅来源](doc/manual/subscriptions.md) → [配置生成](doc/manual/generate.md) |
-| 给不同设备安排不同上网方式 | [客户端设备](doc/manual/client-devices.md) → [上游路由](doc/manual/routers.md) |
-| 自动选速度更好的节点 | [节点库](doc/manual/nodes.md) → [策略组](doc/manual/proxy-groups.md) |
-| 指定哪些网站直连、哪些走代理 | [规则库](doc/manual/rule-library.md) → [策略规则](doc/manual/rules.md) |
-| 查看设备有没有正常工作 | [Agent](doc/manual/agents.md)、[Mihomo 面板](doc/manual/mihomo-panel.md)、[OxiDNS 面板](doc/manual/oxidns-panel.md) |
-| 一台 DNS 设备坏了，另一台自动接替 | [OxiDNS 双机备用](doc/guide/oxidns-ha.md) |
-| 备份、升级、改端口，或者查错误 | [系统设置](doc/manual/system-settings.md)、[常见问题](doc/guide/troubleshooting.md) |
-
-## 先分清这三样东西
-
-- **ConfigFlow 面板**：你现在要安装的管理网页。它负责整理配置、下发配置和查看状态。
-- **Mihomo / OxiDNS 等程序**：真正处理网络连接或“网站名称查询”的程序。可以与面板装在同一台机器，也可以装在其他设备。
-- **Agent**：安装在被管理设备上的“小助手”，帮助面板更新配置、控制程序和读取状态。只下载配置给客户端使用时，不必安装。
-
-安装了面板，不等于全家设备已经开始通过它上网；还需要按所选方案连接设备。安装指引会分开说明每一步。
+1. [安装管理面板](https://thsrite.github.io/configflow/guide/install)：选择 Docker 或 NAS 部署，设置账号和数据保存目录。
+2. [完成首次使用向导](https://thsrite.github.io/configflow/guide/first-run)：填入订阅，选择适合自己的使用方式。
+3. [安装和接入设备](https://thsrite.github.io/configflow/guide/agent-install)：按实际设备选择安装组合；只下载配置给客户端使用时可跳过。
+4. 先测试一台设备，确认正常后再让其他设备使用。
 
 <a id="详细文档"></a>
-## 文档怎么读
+## 使用文档
 
-手册按 **安装 → 首次配置 → 设备组合 → 页面操作 → 排查** 排列。页面名称、按钮名称与实际界面对应；推荐选择和软件原本的默认值会分开写。
+安装步骤、每个页面的按钮和选项、推荐选择及修改方法，都在[完整使用手册](https://thsrite.github.io/configflow/)中。
 
-- [文档目录与阅读路线](doc/README.md)
-- [常见名词，用日常话解释](doc/guide/terms.md)
-- [安装组合与选项说明](doc/guide/agent-install.md)
-- [OxiDNS 高可用支持组合与逐步配置](doc/guide/oxidns-ha.md)
+| 需要什么 | 打开这里 |
+| --- | --- |
+| 在 RouterOS 中安装 Mihomo 和 OxiDNS | [RouterOS 容器安装](https://thsrite.github.io/configflow/guide/routeros-install) |
+| 配置两台 OxiDNS 互为备用 | [OxiDNS 高可用](https://thsrite.github.io/configflow/guide/oxidns-ha) |
+| 改端口、备份或升级 | [系统设置](https://thsrite.github.io/configflow/manual/system-settings) |
+| 页面打不开、安装或上网失败 | [常见问题](https://thsrite.github.io/configflow/guide/troubleshooting) |
 
-截图使用隔离演示数据，不含真实订阅或生产设备信息。本文档按 **2026-10-28 的项目代码**核对；旧镜像缺少某项按钮时，先按 [备份与升级](doc/manual/system-settings.md#备份与升级) 更新，不能只靠刷新浏览器增加功能。
-
-<a id="部署参数"></a>
-<a id="备份与升级"></a>
-<a id="常见问题"></a>
-## 部署与维护
-
-环境变量说明见 [部署参数](doc/guide/install.md#deployment-parameters)；升级和迁移前先读 [备份与升级](doc/manual/system-settings.md#备份与升级)。遇到访问、安装或发布问题，按 [排查顺序](doc/guide/troubleshooting.md) 处理。
-
-## 项目链接
-
-[Docker 镜像](https://hub.docker.com/r/thsrite/config-flow) · [使用手册](doc/README.md) · [反馈问题](https://github.com/thsrite/configflow/issues) · [Telegram 交流群](https://t.me/+fLt02_w38205OTNh)
+也可以在仓库中阅读[手册目录](doc/README.md)。
 
 ## 许可证
 

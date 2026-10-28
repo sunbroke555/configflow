@@ -84,5 +84,3 @@ URL-Test、Fallback、Load-Balance 提供「健康检查」。新建组默认 UR
 删除组前先改好引用它的规则、其他组和代理链；出现依赖提示时按提示处理。停用、改名、批量改 URL 或保存后，都需重新生成并发布才会改变设备配置；在这里操作不会直接替所有设备切换网络出口。
 
 下一步：[策略规则](rules.md) → [配置生成](generate.md)。
-
-核对入口：[策略组界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/ProxyGroups.vue)、[批量测速地址](https://github.com/thsrite/configflow/blob/main/frontend/src/components/BatchHealthUrlDialog.vue)、[默认与校验](https://github.com/thsrite/configflow/blob/main/backend/utils/health_check.py)、[策略组接口](https://github.com/thsrite/configflow/blob/main/backend/routes/proxy_groups.py)。

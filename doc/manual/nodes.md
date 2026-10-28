@@ -45,6 +45,22 @@
 
 默认测试地址是 `https://www.gstatic.com/generate_204`，超时为 5000 毫秒；这些运行参数由部署环境设置，不在本页提供一个任意修改超时的输入框。设备上的核心健康检查也有各自的 URL 与超时，别把两处结果混在一起比较。
 
+<details>
+<summary>需要更换测速地址或等待时间时怎么改</summary>
+
+普通使用保持默认即可。确需修改时，在 ConfigFlow 面板容器的环境变量中添加对应项，然后重新创建容器；Compose 用户修改 `environment` 后运行 `docker compose up -d`。这些设置只影响节点库测速。
+
+| 环境变量 | 默认值 | 修改后的结果 |
+| --- | --- | --- |
+| `CONFIGFLOW_NODE_TEST_URL` | `https://www.gstatic.com/generate_204` | 改为通过节点访问的测试网址，需支持 HEAD 请求，建议使用 HTTPS |
+| `CONFIGFLOW_NODE_TEST_TIMEOUT_MS` | `5000` | 每个节点最多等待多少毫秒，允许 `500–10000`；调长会等待更久，不会让节点变快 |
+| `CONFIGFLOW_NODE_TEST_UNIFIED_DELAY` | `1` | 默认先连接一次，再计时第二次请求；改为 `0` 或 `false` 后显示包含首次连接过程的耗时 |
+| `CONFIGFLOW_NODE_PROBE_BIN` | 自动查找 | 测速程序的路径。官方镜像无需填写，只有自行部署程序时才按实际位置设置 |
+
+若提示测速组件缺失或版本不匹配，Docker 用户应更新完整镜像并重新创建容器，保留原数据目录。仅替换面板的部分文件不能补齐测速程序；面板和测速程序需要配套更新。
+
+</details>
+
 ## 测速 DNS 怎么选
 
 DNS 负责先把节点服务器的域名查成 IP。测速需要真实 IP；如果查到 Mihomo 提供的临时 Fake-IP，独立测速可能无法连接。
@@ -88,5 +104,3 @@ DNS 负责先把节点服务器的域名查成 IP。测速需要真实 IP；如�
 完整数据导出可用于备份节点配置，其中可能有密码和密钥；脱敏导出不适合恢复真实连接。测速历史等运行文件不能只靠配置 JSON 保全，迁移时按部署指南备份整个数据目录。
 
 下一步：[策略组](proxy-groups.md)，或把独立节点与订阅放进 [订阅聚合](subscription-aggregation.md)。
-
-核对入口：[节点界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Nodes.vue)、[测速 DNS 界面](https://github.com/thsrite/configflow/blob/main/frontend/src/components/nodes/NodeLatencySettings.vue)、[测速实现](https://github.com/thsrite/configflow/blob/main/backend/utils/node_latency.py)、[节点接口](https://github.com/thsrite/configflow/blob/main/backend/routes/nodes.py)。

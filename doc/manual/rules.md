@@ -105,5 +105,3 @@
 保存规则的 DNS 修改会写入同一配置空间的 OxiDNS 草稿，因此重新打开 [OxiDNS 设置](core-settings.md#oxidns-编辑入口) 能看到它。需要让连接与解析都改变时，分别检查 Mihomo 和 OxiDNS 的生成结果，并向相应设备发布；只发布其中一个，另一侧可能仍运行旧设置。
 
 下一步：[配置生成](generate.md)，需要调整 DNS 上游时读 [核心设置](core-settings.md)。
-
-核对入口：[规则界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Rules.vue)、[统一编辑器](https://github.com/thsrite/configflow/blob/main/frontend/src/components/rules/RuleEditorDialog.vue)、[DNS 选项定义](https://github.com/thsrite/configflow/blob/main/frontend/src/lib/ruleDns.ts)、[规则接口](https://github.com/thsrite/configflow/blob/main/backend/routes/rules.py)。

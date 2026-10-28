@@ -92,5 +92,3 @@
 - **网络恢复但规则仍停用：**批量连通性测试可能停用了它；恢复网络后需要核对并重新启用。
 
 下一步：[策略规则](rules.md) → [配置生成](generate.md)。
-
-核对入口：[规则库界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/RuleLibrary.vue)、[规则库接口](https://github.com/thsrite/configflow/blob/main/backend/routes/rule_library.py)、[来源编辑器](https://github.com/thsrite/configflow/blob/main/frontend/src/components/rules/RuleSourceEditor.vue)。

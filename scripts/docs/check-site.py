@@ -39,6 +39,10 @@ for source, page in pages.items():
     source_url = base + source.relative_to(root).as_posix()
     for href in page.links:
         url = urlsplit(href)
+        if (url.hostname == 'github.com' and '/blob/' in url.path
+                and unquote(url.path).lower().endswith(('.md', '.markdown'))):
+            failures.append(f'{source.relative_to(root)}: documentation link leaves the site: {href}')
+            continue
         if url.scheme or url.netloc:
             continue
         resolved = urlsplit(urljoin(source_url, href))

@@ -10,9 +10,11 @@
 
 - [先选安装路线](#choose)
 - [开始前准备](#prepare)
+- [iKuai 虚拟机：先准备 Linux](#ikuai-vm)
 - [Shell 单服务](#shell-single)
 - [Shell 同机双服务](#shell-aio)
 - [接管已有服务与高级字段](#shell-existing)
+- [替换旧 DNS，继续使用原地址](#replace-dns)
 - [只安装核心](#cores-only)
 - [Docker 单服务与双服务](#docker)
 - [Linux 网关与完整 TUN 的入口](#gateway)
@@ -31,6 +33,7 @@
 | 同机已有 Mihomo 与 OxiDNS | 同机模式，不勾选安装核心，核对两项服务的路径 | 两个独立 Agent，接管两个现有服务 |
 | 只想先安装核心，不接入面板 | 同机模式，不勾选安装核心，展开「仅安装核心」 | 按选择安装 Mihomo、OxiDNS 或两者；不安装／登记 Agent |
 | NAS 或 Linux 上想用 Docker | 「普通模式 → Docker 容器」，选单服务或 All-in-One | 容器内已含 Agent 和选中的核心，没有“仅装 Agent”的勾选 |
+| 想装在 iKuai 的虚拟机里 | 先按 [虚拟机准备](#ikuai-vm)装好 Linux，再选择 Shell 安装 | 程序运行在 Linux 虚拟机中；不是直接装到 iKuai 系统里 |
 | 想让一台 Linux 做客户端网关 | 「使用模式 → Linux 网关」 | 专用向导准备规则、双核心、Agent，并在检查后显式应用转发 |
 | 想通过主路由静态路由分流 | [首次使用向导](first-run.md#choose)选「Mihomo + OxiDNS 分流」 | Linux 双核心与完整 TUN，然后另行接入主路由 |
 | 核心要放在 RouterOS 自己的容器里 | [RouterOS 路线](#routeros) | 使用 RouterOS Container 创建核心与 Agent，不能执行普通 Linux Shell 安装命令 |
@@ -51,6 +54,20 @@
 **Agent 端口、DNS 端口、面板端口是三件事。** `5010` 是本指南的面板访问示例；`8080／8082` 常用作两个 Agent 的管理端口；DNS 通常使用 `53`，同机 Mihomo DNS 常使用 `1053`。不能把 Agent 端口填到手机的 DNS 地址中。
 
 普通安装入口：进入「系统 → Agent」，点击「生成安装脚本」。新开窗口默认「普通模式 → Shell 安装 → 单服务 → Mihomo」。填完后生成的是命令文本，**还需在目标设备执行才开始安装**。
+
+<a id="ikuai-vm"></a>
+## iKuai 虚拟机：先准备 Linux
+
+iKuai 负责提供一台虚拟电脑，Alpine 等 Linux 系统运行在里面，Mihomo、OxiDNS 和 Agent 再安装到 Linux。ConfigFlow 的安装命令不负责创建虚拟机或安装操作系统。
+
+1. 在 iKuai 的「高级服务 → 虚拟机」添加 Linux 虚拟机，准备系统磁盘和 Linux 安装镜像。网卡桥接到实际使用的 LAN，让它能取得独立的局域网 IP；不要照抄其他设备的接口名称。
+2. 从安装镜像启动，按 Linux 安装程序完成磁盘安装。选择 Alpine 时使用与机器架构相符的虚拟机镜像；安装到磁盘后，改为从系统磁盘启动并移除安装光盘。**安装时只选择为这台虚拟机新建的磁盘**，不要覆盖存放其他数据的磁盘。
+3. 先确认 Linux 能联网，并能打开面板的服务地址。为它保留一个未被占用的固定 IP，默认网关填写 iKuai 的 LAN 地址；若用 DHCP 固定分配，核对绑定的是这台虚拟机的 MAC 地址。
+4. 准备 root 终端与远程登录方式。Alpine 使用 OpenRC，其他系统可能使用 systemd，安装器会按实际系统处理。若网页 VNC 粘贴长命令后符号不对，先完成网络和 SSH 登录，再在 SSH 终端执行面板生成的命令。
+5. 按实际组合继续：只增加 OxiDNS、已有另一台 Mihomo 时，使用 [Shell 单服务](#shell-single)；两项核心都放在这台 Linux 时，使用 [Shell 同机双服务](#shell-aio)。新机器勾选安装对应核心，已有服务按 [接管已有服务](#shell-existing)填写。
+6. 发布配置并检查一台客户端，确认 DNS、代理和重启后运行都正常，再启用虚拟机开机自启或扩大接入范围。
+
+**主路由分流时，地址按作用填写：**客户端网关仍指向 iKuai，DNS 指向运行 OxiDNS 的设备；转交给 Mihomo 的连接，下一跳填运行 Mihomo 的设备 IP。两项核心同机时，这两个设备 IP 才可能相同。需要主路由把连接交给 Mihomo 时，接着看 [上游路由](../manual/routers.md)：同网段部署确实需要回复经过主路由时，使用“自动配置回流”，核对差异后发布。它会处理相应受管规则；不要再叠加旧教程中的手工回流命令。若选择的是让客户端直接使用 Linux 作网关，按 [首次向导中的方案说明](first-run.md#choose)接入，不照搬这里的客户端网关地址。
 
 <a id="shell-single"></a>
 ## Shell 单服务
@@ -143,6 +160,23 @@ TUN 是 Mihomo 接收连接用的虚拟网卡。新装 Mihomo 启用自动路由
 OxiDNS 有额外要求：启动参数 `-d` 指定的工作目录必须和配置文件所在目录一致，例如 `/opt/oxidns/config.yaml` 对应 `-d /opt/oxidns`。配置在 `/etc`、工作数据在 `/var/lib` 的分离布局不能直接套用这里的接管流程，应先按原服务的部署方式调整布局和规则资源，再接入。
 
 安装接管期间会检查环境和现有核心；新配置真正投入使用要等后面的发布。先保留备份，读清检查结果，再发布，避免把“Agent 在线”当作旧配置已转换完成。
+
+<a id="replace-dns"></a>
+## 替换旧 DNS，继续使用原地址
+
+已有 MosDNS 或其他 DNS 服务时，建议先让新 OxiDNS 使用**另一个未占用的固定 IP**，完整测试后再替换。以下是普通单机迁移；使用双机备用时按 [OxiDNS 高可用](oxidns-ha.md)管理共同地址，不要手工占用其虚拟 IP。
+
+**不必保留旧 DNS 地址时，推荐直接使用新地址。** 完成下面第 1、2 步后，按 [上游路由的 DHCP DNS 设置](../manual/routers.md#dhcp-dns-和强制-dns)把主路由下发的 DNS 改成新 IP，并让客户端重新连接或续租；手动填写 DNS 的设备也要修改。若启用过强制 DNS，核对它的转发目标一并改好并发布。确认设备都在使用新 DNS 后，再停止旧服务，无需执行第 3–5 步的旧 IP 接管。
+
+1. **保留恢复材料。** 记录旧 DNS 的 IP、主路由 DHCP DNS、固定地址绑定、旧设备的启动方式，并备份原服务配置。新旧设备此时使用不同 IP，旧 DNS 继续服务。
+2. **在新地址完成安装和发布。** 按本文 Shell 安装 OxiDNS，核对配置空间、上游 DNS、内网名称和分流规则。只把一台测试客户端的 DNS 改成新 IP，检查直连网站、需要代理的网站、内网设备名称，并确认重启新设备后仍正常。测试完成前不改全网 DNS。
+3. **先让旧地址空出来。** 切换时停止旧 DNS，并关闭旧设备或移除它的旧 IP；同时取消会让旧设备再次获得该地址的 DHCP 绑定和开机自启设置。**仅停止 DNS 程序不会释放设备的 IP，两台设备不能同时使用同一个地址。**
+4. **让新设备接收原 DNS 地址。** 为保留已经验证的 Agent 管理连接，建议继续保留新机的测试 IP，并在 Linux 网络设置中把旧 DNS IP 添加为第二个固定地址，保存为重启后仍生效的设置。原来由 DHCP 分配旧地址时，先调整对应绑定，保证不会再分给旧设备或其他设备。OxiDNS 若仅监听测试 IP，添加原 DNS IP 后，还要在其设置中调整 DNS 监听地址并发布，使它能够接收原 DNS IP 上的查询。
+5. **从原地址再次验证。** 让测试客户端的 DNS 改回原地址，确认查询和上网正常；再检查 Agent 在线、面板能读取 OxiDNS 状态。客户端原本已经使用这个 DNS IP 时，无需逐台改地址。仍要保留旧设备和配置，等运行稳定后再清理。
+
+这次切换可能短暂影响 DNS，不保证连接完全不中断。出现问题时，先从新设备移除接管的旧 DNS IP，确认地址已经空出，再恢复旧设备及其原地址绑定、DNS 服务和启动设置；不要让新旧设备同时抢占旧地址。
+
+**先保留新机的管理地址。** Agent 已登记的地址不会因为 Linux 改 IP 就自动跟随变化。上述步骤保留测试 IP，是为了继续通过原地址管理新 Agent；不要在切换 DNS 时顺手删除它。需要让新机最终只保留旧 IP，或同时迁移面板、Mihomo、HA 服务时，应另行安排对应管理地址和依赖关系的迁移。
 
 <a id="cores-only"></a>
 ## 只安装核心
@@ -246,7 +280,7 @@ OxiDNS 和 MosDNS 都默认使用 DNS 53；不要在同一容器同时启用二�
 
 同一安装组件进入这种空间时，IP 规则选择显示为「主路由转发」：勾选的真实 IPv4 网段用于主路由静态路由，fake-IP 网段始终包含。真实网段需要在主路由按来源排除 Linux 本机；只能按目的地址配置时，先不加这些可选真实网段。
 
-完整 TUN 空间不适用 Linux 网关的选择性接管开关。已有旧版接管记录时按页面提示清理或保留，不直接套用新方案。详细原理与迁移边界见 [Linux 网关技术手册](https://github.com/thsrite/configflow/blob/main/docs/LINUX_GATEWAY.md)。
+完整 TUN 空间不适用 Linux 网关的选择性接管开关。已有旧版接管记录时按页面提示清理或保留，不直接套用新方案。具体看 [Linux 网关的调整与停用](../manual/core-settings.md#linux-网关)。
 
 <a id="routeros"></a>
 ## RouterOS 容器
@@ -255,12 +289,12 @@ RouterOS 上运行核心与“把 RouterOS 添加为上游路由器”是两件�
 
 1. 先在 NAS 或其他 Docker 主机安装 ConfigFlow 面板，填写可从 RouterOS 容器访问的服务地址。
 2. 确认 RouterOS 已有 Container 软件包、容器功能和可写磁盘；准备不冲突的 Mihomo、OxiDNS 容器 IP。
-3. 按 [RouterOS 容器安装步骤](https://github.com/thsrite/configflow/blob/main/docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md#container-install)选择 WinBox 或命令行创建容器。镜像已带核心和 Agent，不要在 RouterOS 终端执行普通 Linux Shell 安装脚本。
+3. 按 [RouterOS 容器安装步骤](routeros-install.md#container-install)选择 WinBox 或命令行创建容器。镜像已带核心和 Agent，不要在 RouterOS 终端执行普通 Linux Shell 安装脚本。
 4. 在 ConfigFlow「Agent」页看到两项在线记录后，把它们绑定到需要的配置空间，分别发布 Mihomo、OxiDNS 配置。
 5. 需要自动配置路由时，再到「上游路由」添加 RouterOS、检查连接、预览改动并确认发布。
 6. 先验证一台设备，再推广 DHCP DNS 或其他全网设置。
 
-此路线的两个容器通常各有自己的 IP，不能照抄 Docker bridge 的主机端口映射。架构、虚拟网卡、挂载、环境变量和开机启动的完整步骤见 [RouterOS 安装手册](https://github.com/thsrite/configflow/blob/main/docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
+此路线的两个容器通常各有自己的 IP，不能照抄 Docker bridge 的主机端口映射。架构、虚拟网卡、挂载、环境变量和开机启动的完整步骤见 [RouterOS 安装手册](routeros-install.md)。
 
 <a id="ha"></a>
 ## OxiDNS 高可用入口
@@ -306,5 +340,3 @@ Docker 旧容器自动迁移只接受受支持的官方单 OxiDNS 部署，需�
 不要在仍有设备把它作为网关或 DNS 时直接停核心。普通 Shell 安装持久化的 IPv4 转发会为避免影响仍运行的服务而保留；完整停用前先核对是否还有其他服务依赖它。
 
 下一步：日常发布、日志、重启、更新和设备管理见 [Agent 使用说明](../manual/agents.md)；从零接入局域网见 [首次使用向导](first-run.md)，双机 DNS 见 [OxiDNS 高可用](oxidns-ha.md)。
-
-实现依据：[安装页面与默认值](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Agents.vue)、[Shell 安装器](https://github.com/thsrite/configflow/blob/main/backend/agents/go_install_script.py)、[仅安装核心脚本](https://github.com/thsrite/configflow/blob/main/backend/agents/scripts/install-cores.sh)、[Docker 生成器](https://github.com/thsrite/configflow/blob/main/backend/agents/install_script.py)、[网关安装页面](https://github.com/thsrite/configflow/blob/main/frontend/src/components/agents/GatewayInstallWizard.vue)。

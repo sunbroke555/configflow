@@ -12,6 +12,7 @@
 
 - [先选部署组合](#combinations)
 - [所有组合都要满足的条件](#requirements)
+- [按所选组合完成部署](#combination-steps)
 - [Shell、Host、macvlan 各怎么准备](#prepare)
 - [已有服务如何迁移并保留身份](#migration)
 - [配对、填写 VIP、开启](#pair)
@@ -19,7 +20,6 @@
 - [主备、抢占、发布和规则同步怎样工作](#operation)
 - [升级、修改、停用与回退](#maintenance)
 - [检查失败与常见问题](#troubleshooting)
-- [支持判断与实测范围](#evidence)
 
 <a id="combinations"></a>
 ## 先选部署组合
@@ -28,12 +28,12 @@
 
 | 两端组合 | 当前支持情况 | 实际怎么准备 |
 | --- | --- | --- |
-| Shell + Shell | 支持 | 两台分别运行 Shell 高可用安装/准备命令，再在同一个配置空间配对。两端可分别使用 systemd 或 OpenRC。 |
-| Docker Host + Docker Host | 支持，Docker 新装默认推荐 | 每台独立宿主机各建一份 Host 高可用项目。每份都有 OxiDNS 容器和独立的 HA 辅助容器。 |
-| Docker macvlan + Docker macvlan | 支持，要求网络支持 macvlan | 两台宿主机各建一份 macvlan 高可用项目；两个容器各有固定局域网地址，再另留一个 VIP。 |
-| Shell + Docker Host | 支持，有混合部署实测 | Shell 端准备原生依赖；只为 Docker 端生成 Host 项目，然后选择这两个 Agent 配对。 |
-| Shell + Docker macvlan | 支持，有混合部署实测 | Shell 端用本机地址，Docker 端用容器独立地址，两者与 VIP 都在同一网段。 |
-| Docker Host + Docker macvlan | 代码允许逐端检查通过后配对；本页没有该组合的独立实机验收结论 | 分别按 Host 和 macvlan 生成各自项目，再选这两个已上线的 Agent。当前向导一次只选一种 Docker 网络模式，需要分两次生成，保留第一台的文件。先在自己的网络完成验证。 |
+| [Shell + Shell](#combination-shell-shell) | 支持 | 两台分别运行 Shell 高可用安装/准备命令，再在同一个配置空间配对。两端可分别使用 systemd 或 OpenRC。 |
+| [Docker Host + Docker Host](#combination-host-host) | 支持，Docker 新装默认推荐 | 每台独立宿主机各建一份 Host 高可用项目。每份都有 OxiDNS 容器和独立的 HA 辅助容器。 |
+| [Docker macvlan + Docker macvlan](#combination-macvlan-macvlan) | 支持，要求网络支持 macvlan | 两台宿主机各建一份 macvlan 高可用项目；两个容器各有固定局域网地址，再另留一个 VIP。 |
+| [Shell + Docker Host](#combination-shell-host) | 支持 | Shell 端准备原生依赖；只为 Docker 端生成 Host 项目，然后选择这两个 Agent 配对。 |
+| [Shell + Docker macvlan](#combination-shell-macvlan) | 支持 | Shell 端用本机地址，Docker 端用容器独立地址，两者与 VIP 都在同一网段。 |
+| [Docker Host + Docker macvlan](#combination-host-macvlan) | 允许配对，但尚未单独完成这组组合的实机全流程验证 | 分别按 Host 和 macvlan 生成各自项目，再选这两个已上线的 Agent。当前向导一次只选一种 Docker 网络模式，需要分两次生成，保留第一台的文件。先在自己的网络完成验证。 |
 
 配对时可以把任意一端选为优先主机；Shell 并不天然比 Docker 优先。要减少首次部署的变量，选两台 Shell，或两台 Docker Host。
 
@@ -70,6 +70,80 @@
 
 **IPv6 的范围：**当前 VIP、两端配对地址和自动下发的 HA DNS 入口都是 IPv4。这不等于 DNS 不能查询 AAAA 记录，也不等于 OxiDNS 本身不能另行配置 IPv6；只是本功能没有替你创建 IPv6 VIP，也不会同步配置路由器的 IPv6 DNS 下发。若客户端还从 IPv6 获得其他 DNS，可能会绕过这里的 VIP。
 
+<a id="combination-steps"></a>
+## 按所选组合完成部署
+
+下面每组都使用**两台独立的 Linux 宿主机**，同处示例网段 `192.168.1.0/24`，主路由为 `192.168.1.1`，预留 VIP `192.168.1.53`。请替换为自己的网段和空闲地址；两个 Agent 最后绑定同一个配置空间，例如“家庭 DNS”。VIP 此时只做预留，不手工加到任一设备上。
+
+步骤按新安装说明。已有服务先看 [迁移方式](#migration)，保留原身份和数据，再回到对应组合继续。每个“安装完成”都只表示这一端已经准备好；还要单独配对并开启，VIP 才会投入使用。
+
+<a id="combination-shell-shell"></a>
+### Shell + Shell
+
+设备 A 的 Linux 固定地址用 `192.168.1.21`，设备 B 用 `192.168.1.22`；这里没有 Docker 容器地址。
+
+1. 为设备 A 选择 **普通模式 → Shell 安装 → 单服务 → OxiDNS → 高可用安装**。填 A 的名字、Agent 端口和 `192.168.1.21` 地址，新机器勾选安装 OxiDNS 核心，按 [Shell 准备步骤](#prepare-shell)生成命令。
+2. 在 A 的 root 终端执行 A 的命令，等待安装完成并在 Agent 页确认上线。
+3. 再为另一台独立设备 B 填名字、端口和 `192.168.1.22` 地址，单独生成并执行 B 的 Shell 命令。两台可以使用不同的 systemd/OpenRC 系统；不要把 A 的身份文件复制给 B。
+4. 两台都上线后，在“验证与配对”选择这两个 OxiDNS Agent，核对同一配置空间。按 [配对步骤](#pair)填写预留的 `192.168.1.53` VIP 并开启。
+5. 等状态显示一台持有 VIP、另一台待命，再按 [客户端验证](#clients)从第三台设备测试，成功后才修改全网 DNS。
+
+<a id="combination-host-host"></a>
+### Docker Host + Docker Host
+
+宿主机 A 用 `192.168.1.21`，宿主机 B 用 `192.168.1.22`。Host 容器使用各自宿主机的地址，不另外分配容器 LAN IP。
+
+1. 选择 **普通模式 → Docker 容器 → OxiDNS → 高可用安装**，在准备环境中选 **Host + 独立 HA 容器**，按 [Host 准备说明](#prepare-host)核对两台的 53 端口。
+2. 分别填写主机 1 的 `192.168.1.21` 和主机 2 的 `192.168.1.22`，使用不同 Agent 名称前缀、各自主机上的持久数据目录；新装可保留默认“精简 Compose”。
+3. 先生成主机 1 的 `compose.yaml`，保存在标明 A 的目录并部署到 A；再生成主机 2 的文件，保存在标明 B 的目录并部署到 B。**两份文件分别保存，不用第二份覆盖第一份，也不在同一台宿主机启动两份。** 每台的 OxiDNS/Agent 容器和 HA 辅助容器都要保留运行。
+4. 确认 `192.168.1.21`、`192.168.1.22` 对应的 Agent 都上线，在“验证与配对”选择它们，核对同一配置空间，按 [配对步骤](#pair)开启 `192.168.1.53` VIP。
+5. 等主备状态正常，从 [第三台客户端验证](#clients) DNS，再让客户端使用 VIP；仅看到两个 Docker 项目启动成功还不算高可用开启。
+
+<a id="combination-macvlan-macvlan"></a>
+### Docker macvlan + Docker macvlan
+
+宿主机 A、B 可分别用 `192.168.1.11`、`192.168.1.12`；它们的 OxiDNS 容器分别用 `192.168.1.21`、`192.168.1.22`，另留 `192.168.1.53` 给 VIP。**配对使用容器的 `192.168.1.21`、`192.168.1.22`，不是宿主机的 `192.168.1.11`、`192.168.1.12`。**
+
+1. 选择 **普通模式 → Docker 容器 → OxiDNS → 高可用安装**，准备环境选 **macvlan 独立地址**，先按 [macvlan 准备说明](#prepare-macvlan)确认网络和管理连接可用。
+2. 主机 1 填容器 `192.168.1.21`，主机 2 填容器 `192.168.1.22`；两边分别填写实际 LAN 网卡、`192.168.1.0/24`、网关 `192.168.1.1` 和各自持久目录。网卡名称不一定相同，按各自主机填写。
+3. 分别生成 A、B 的 `compose.yaml`，保存在两个标明设备的目录，上传到对应的独立宿主机并启动。保留各自生成的权限和挂载；不要把宿主机固定地址填成容器地址。
+4. 确认 ConfigFlow 能连接 `192.168.1.21` 和 `192.168.1.22` 的 Agent，两端也能互通。选择这两个 Agent、核对同一配置空间，再按 [配对步骤](#pair)开启 `192.168.1.53` VIP。
+5. 从 [第三台客户端验证](#clients) DNS，确认只有一端持有 VIP 后再接入客户端；若 macvlan 容器无法与面板互通，先处理网络，安装成功不能替代此检查。
+
+<a id="combination-shell-host"></a>
+### Shell + Docker Host
+
+Shell 设备 A 用 `192.168.1.21`，独立 Docker 宿主机 B 用 `192.168.1.22`，VIP 用 `192.168.1.53`。B 的容器共用 B 的 `192.168.1.22` 地址。
+
+1. 为 A 选择 **Shell 安装 → 单服务 → OxiDNS → 高可用安装**，按 [Shell 准备](#prepare-shell)生成并在 A 执行命令，确认它上线。已有 Shell Agent 时保留原服务，缺依赖再补准备命令。
+2. 为 B 切到 **Docker 容器 → OxiDNS → 高可用安装**，选择 **Host + 独立 HA 容器**，只填写这台 Docker 主机的 `192.168.1.22` 地址、名称和数据目录。
+3. 在“主机 1”页选择“只安装这一台，前往部署”，按 [Host 准备](#prepare-host)生成 B 的 `compose.yaml`，保存到 B 的项目目录并在 B 启动。这里生成的只有 B 的 Docker 文件，不需要为 A 再生成 Docker 项目。
+4. B 上线后到“验证与配对”，选择 A 的 Shell Agent 和 B 的 Docker Agent，核对同一配置空间；按 [配对步骤](#pair)填写 `192.168.1.53` 并开启。
+5. 主备正常后完成 [第三台客户端验证](#clients)。安装类型不决定谁优先，配对时按你的计划选择优先主机。
+
+<a id="combination-shell-macvlan"></a>
+### Shell + Docker macvlan
+
+Shell 设备 A 用 `192.168.1.21`；另一台 Docker 宿主机 B 用 `192.168.1.12`，B 的 OxiDNS 容器用 `192.168.1.22`，VIP 用 `192.168.1.53`。配对选 Shell 的 `192.168.1.21` 与容器的 `192.168.1.22`。
+
+1. 为 A 选择 **Shell 安装 → 单服务 → OxiDNS → 高可用安装**，按 [Shell 准备](#prepare-shell)完成安装或补齐依赖，确认 A 上线。
+2. 为 B 选择 **Docker 容器 → OxiDNS → 高可用安装 → macvlan 独立地址**，填写容器 `192.168.1.22`、B 的实际 LAN 网卡、`192.168.1.0/24`、网关 `192.168.1.1` 和持久目录。不要把 B 的宿主机 `192.168.1.12` 当作容器固定地址。
+3. 在“主机 1”页点“只安装这一台，前往部署”，按 [macvlan 准备](#prepare-macvlan)生成并保存 B 的 `compose.yaml`，只在 B 启动。A 使用原 Shell 服务，不再为它建容器。
+4. 确认面板能连接 `192.168.1.22` 的 Agent，且 Shell A 与容器 B 能互通；在“验证与配对”选择这两个 Agent，核对同一配置空间，按 [配对步骤](#pair)开启 `192.168.1.53` VIP。
+5. 等主备正常，按 [客户端验证](#clients)从第三台设备查询 VIP，再修改客户端 DNS。
+
+<a id="combination-host-macvlan"></a>
+### Docker Host + Docker macvlan
+
+Host 宿主机 A 用 `192.168.1.21`；独立宿主机 B 用 `192.168.1.12`，B 的 macvlan 容器用 `192.168.1.22`，VIP 用 `192.168.1.53`。**这组允许配对，但尚未单独完成实机全流程验证。** 先用测试客户端确认自己的网络能正常运行，再扩大使用。
+
+1. 先为 A 选择 **Docker 容器 → OxiDNS → 高可用安装 → Host + 独立 HA 容器**。只填 A 的 `192.168.1.21`、名称和数据目录，点“只安装这一台，前往部署”，按 [Host 准备](#prepare-host)生成文件。
+2. **先下载并保存 A 的 `compose.yaml`**，在 A 启动，保留 OxiDNS/Agent 和 HA 辅助容器。确认 A 上线后，再准备另一端。
+3. 重新进入准备环境，切换为 **macvlan 独立地址**。填写 B 容器的 `192.168.1.22`、B 的实际 LAN 网卡、网段、网关和数据目录；仍选“只安装这一台”，按 [macvlan 准备](#prepare-macvlan)单独生成 B 的文件。
+4. 把 B 的 `compose.yaml` 保存到另一个目录并在 B 启动。**必须分两次生成并保留两份文件：切换模式会使页面旧生成结果失效，不能用 macvlan 文件覆盖已经保存的 Host 文件。** 两端的容器结构不同，分别使用各自生成的内容。
+5. 两个 Agent 上线后，在“验证与配对”选择实际对应 `192.168.1.21` 的 Host Agent 与 `192.168.1.22` 的 macvlan Agent，核对同一配置空间，按 [配对步骤](#pair)开启 `192.168.1.53` VIP。表单都曾使用“主机 1”，不代表它们是同一台设备。
+6. 先完成 [第三台客户端验证](#clients)，再按后面的 [检查说明](#troubleshooting)确认主备状态和异常处理；不要仅凭“允许配对”或“安装成功”就把全网 DNS 切到 VIP。
+
 <a id="prepare"></a>
 ## Shell、Host、macvlan 各怎么准备
 
@@ -80,6 +154,7 @@
 
 详细安装命令、核心路径和服务管理方式见 [Agent 安装](agent-install.md#ha)。下面说明高可用特有的选择。
 
+<a id="prepare-shell"></a>
 ### Shell 端
 
 1. 进入“1. 安装与准备”，填写这一台的名字、Agent 端口和固定地址。
@@ -92,6 +167,7 @@
 
 已有 Shell Agent 如果缺少依赖，可重新运行准备命令。脚本会沿用本机已有身份、端口、核心路径和现有核心；不要为了补依赖删除 Agent 后重新登记。已有 keepalived 配置会保留，冲突或不完整安装需要先处理，再重试。
 
+<a id="prepare-host"></a>
 ### Docker Host 端：默认推荐
 
 ![Docker 高可用准备环境与网络模式选择](../img/guide/oxidns-docker-ha-prepare.jpg)
@@ -106,6 +182,7 @@
 
 Host 的好处是使用现有主机地址。代价是受宿主机端口占用影响，并且强杀 HA 辅助容器或整个 Docker 可能留下宿主机上的 VIP。正常升级只先重建一台的核心容器，并保持辅助容器运行；后文说明恢复办法。
 
+<a id="prepare-macvlan"></a>
 ### Docker macvlan 端：容器有独立地址
 
 1. 在“准备环境”选择 **macvlan 独立地址**。
@@ -291,15 +368,3 @@ Host 模式若 HA 辅助容器被强杀而留下 VIP，优先恢复原辅助容�
 | VIP 可用，但有些设备没有走规则 | 客户端还用旧 DHCP DNS、手填其他 DNS、IPv6 DNS 或自己的加密 DNS。 | 核对客户端实际 DNS，续租/重连；HA 不会自动接管这些入口。 |
 
 故障接管需要检测和选举时间，期间可能有短暂查询失败。首次上线先验证两台固定地址、VIP 和客户端解析；需要演练时，安排维护窗口、一次只停止一端并保留恢复入口。不要把实验中的秒数作为所有家庭网络的保证。
-
-<a id="evidence"></a>
-## 支持判断与实测范围
-
-本页依据当前配对校验、Agent 环境校验和界面行为编写。配对代码逐端接受原生、Host 或 macvlan，未要求两端安装方式相同；Docker 端仍必须通过专用环境及真实宿主身份检查。
-
-- [原生两台 OxiDNS 的同步与故障验收](https://github.com/thsrite/configflow/blob/6625c51a92312b40cc89c8a96e2a5f691ff9a5e3/docs/testing/oxidns-ha-sync-2026-10-27.md)：实际配置/规则同步、串行更新、失败恢复、真实停止核心后的接管。该记录早于后来的计划 VIP 迁移增强，不能混写为新流程的完整验收。
-- [Shell 与 Docker Host/macvlan 混合实测](https://github.com/thsrite/configflow/blob/6625c51a92312b40cc89c8a96e2a5f691ff9a5e3/docs/testing/oxidns-compose-direct-mixed-2026-10-27.md)：分别覆盖这两种混合组合、计划发布顺序、真实核心/容器故障、身份保留与同宿主拒绝。
-- [精简 Compose 实测记录](https://github.com/thsrite/configflow/blob/6625c51a92312b40cc89c8a96e2a5f691ff9a5e3/docs/testing/results/oxidns-compose-compact-2026-10-27/lab-report.json)：精简 Host/macvlan 安装、混合配对、配置同步、故障与重建保留身份。
-- [Shell 自动准备实测记录](https://github.com/thsrite/configflow/blob/6625c51a92312b40cc89c8a96e2a5f691ff9a5e3/docs/testing/results/oxidns-shell-ha-prepare-2026-10-28/report.json)：Debian、Fedora、Alpine、Arch 的安装准备、重复执行和已有部署保留；这项本身不代表全部两两组合都重新做了故障演练。
-
-上述实验使用隔离的 Linux/PVE 环境，没有证明所有 NAS 型号都兼容，也没有覆盖真实物理断电。组合表中的 Host + macvlan 是当前逐端校验允许的组合，本页没有对应独立实机全流程记录；选择它时应先在自己的网络验证。

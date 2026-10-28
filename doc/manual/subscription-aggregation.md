@@ -55,5 +55,3 @@
 完整数据导出可备份聚合及其共享资源。只导出一个配置空间时，不应假定随附了全部订阅、独立节点和缓存；迁移先保存全部数据并按部署指南备份整个数据目录。聚合预览或复制节点内容是查看结果，不是完整备份。
 
 下一步：[策略组](proxy-groups.md) → [配置生成](generate.md)。
-
-核对入口：[聚合界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/SubscriptionAggregation.vue)、[聚合实现](https://github.com/thsrite/configflow/blob/main/backend/routes/aggregations.py)。

@@ -10,6 +10,7 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 
 - [开始前准备](#prepare)
 - [用 Docker Compose 安装](#compose)
+- [用 docker run 安装](#docker-run)
 - [在 NAS 容器管理器中安装](#nas)
 - [第一次打开后的设置](#initial-settings)
 - [选择网络方式和修改端口](#network)
@@ -24,13 +25,22 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 
 | 需要准备 | 怎么选 |
 | --- | --- |
-| 一台能运行 Docker 的服务器或 NAS | 安装并启动 Docker；使用命令行时还需 Docker Compose。NAS 的“项目／Compose”功能也可以。 |
+| 一台能运行 Docker 的服务器或 NAS | 安装并启动 Docker。选择 Compose 时还需 Docker Compose；也可以选下面的 `docker run` 命令。NAS 的“项目／Compose”功能也可以。 |
 | 这台设备的局域网 IP | 例如 `192.168.1.10`。建议在主路由中为它保留地址，避免重启后变化。 |
 | 一个长期保存数据的目录 | 例如 NAS 的 `/volume1/docker/configflow/data`。这是示例，需换成自己的实际路径。 |
-| 一个未被占用的访问端口 | 本章使用 `5010`；已有服务占用时可以改成 `5011`。 |
+| 未被占用的端口 | Bridge 示例从 `5010` 访问，Host 示例从 `8088` 访问。Host 还需要宿主机的 `5001` 和 `3001` 没被其他服务占用。 |
 | 管理账号、密码和登录密钥 | 自己设置，不要原样使用示例里的占位文字。 |
 
 下面的命令在**准备运行面板的设备**上执行。浏览器可以在另一台电脑或手机上打开。
+
+**Compose、docker run、NAS 管理器三种安装入口选一种；Bridge 和 Host 两种网络方式也选一种。** 示例都会创建名为 `config-flow` 的容器，不要把不同示例连续执行，也不要让两个面板同时使用同一数据目录。已有安装要改方式时，先备份、停止并移除旧容器，再用原数据目录重新创建。
+
+| 网络方式 | 建议怎么选 | 使用后的结果 |
+| --- | --- | --- |
+| **Bridge 模式（推荐）** | 普通安装先用；主要需要打开面板，或宿主机已有较多服务 | 访问 `http://设备IP:5010`；容器内部端口与主机分开，只需安排对外端口 |
+| **Host 模式** | Linux 服务器／Linux NAS 上，希望面板直接使用宿主机网络，包括宿主机已有的 IPv6 网络能力 | 访问 `http://设备IP:8088`；与宿主机共用端口，需要检查 `8088`、`5001`、`3001` 冲突 |
+
+Host 不会给宿主机增加本来没有的 IPv6。宿主机仍需有可用 IPv6 地址、路由及允许访问的防火墙设置；Bridge 的 IPv6 则取决于 Docker 网络配置。这里只选择面板容器的网络，不会替你改变 Agent 容器的网络。
 
 <a id="compose"></a>
 ## 用 Docker Compose 安装
@@ -38,13 +48,17 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 ### 1. 建立部署目录
 
 ```bash
-mkdir -p configflow
-cd configflow
+mkdir -p "$HOME/configflow/data"
+cd "$HOME/configflow"
 ```
 
-在这个目录创建 `compose.yaml`，填入下面内容。先改账号、密码和密钥，再启动。
+本例把部署文件保存在当前用户主目录下的 `configflow`，数据长期保存在其中的 `data`。也可以改成 NAS 或服务器上的其他固定目录；以后更新继续使用同一路径。
 
-```yaml
+在这个目录创建 `compose.yaml`。点击下面的 **Bridge 模式（推荐）** 或 **Host 模式**，复制对应的**完整一份**内容。先把 `your-admin-name`、密码和密钥的占位文字换成自己的值，再启动。
+
+::: code-group
+
+```yaml [Bridge 模式（推荐）]
 services:
   config-flow:
     image: thsrite/config-flow:latest
@@ -62,14 +76,39 @@ services:
     restart: unless-stopped
 ```
 
+```yaml [Host 模式]
+services:
+  config-flow:
+    image: thsrite/config-flow:latest
+    container_name: config-flow
+    network_mode: host
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: /data
+      TZ: Asia/Shanghai
+      CONFIGFLOW_WEB_PORT: "8088"
+      ADMIN_USERNAME: "your-admin-name"
+      ADMIN_PASSWORD: "replace-with-your-own-password"
+      JWT_SECRET_KEY: "replace-with-at-least-32-random-characters"
+    restart: unless-stopped
+```
+
+:::
+
+Bridge 版通过 `5010:80` 把外部访问送进容器。Host 版不需要 `ports`，直接通过 `CONFIGFLOW_WEB_PORT` 指定 `8088`；这个环境变量存在时，网页里的 Web 监听端口会显示只读。希望以后从网页改端口时，先阅读 [环境变量与 Web 设置的关系](#port-priority)。
+
 <a id="deployment-parameters"></a>
 ### 2. 看懂需要修改的地方
 
 | 设置 | 本例值／默认行为 | 什么时候修改 | 修改后的结果与生效时间 |
 | --- | --- | --- | --- |
 | `image` | `thsrite/config-flow:latest` | 普通安装使用这个官方面板镜像；需要固定版本时使用已发布的具体标签或摘要 | 拉取镜像、重新创建容器后生效。它不是 Agent 镜像。 |
-| `ports` | `5010:80` | 访问端口冲突时，只把左边 `5010` 改成其他空闲端口 | 左边是设备对外端口，右边是容器内端口。重新创建后按新端口打开浏览器。 |
+| `ports`（Bridge） | `5010:80` | 访问端口冲突时，只把左边 `5010` 改成其他空闲端口 | 左边是设备对外端口，右边是容器内端口。重新创建后按新端口打开浏览器。Host 版不填写此项。 |
+| `network_mode`（Host） | `host` | 选择 Host 版时保留 | 共用宿主机网络；不是额外创建一个独立 IP。Bridge 版无需填写此项。 |
+| `CONFIGFLOW_WEB_PORT`（Host） | 本例为 `8088` | `8088` 已被占用时改成其他空闲端口 | 明确指定实际 Web 端口，优先于网页保存值；网页端口只读。重建容器后生效。 |
 | `volumes` | `./data:/data` | NAS 或迁移旧实例时，改成自己的实际数据目录 | 左边的文件保存在设备上，右边 `/data` 保持不变。更新时必须继续使用同一个目录。 |
+| `DATA_DIR` | `/data` | 按本例挂载时保持不变 | 告诉程序把数据存到容器的 `/data`；它应与挂载右侧一致。 |
 | `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 仓库示例默认不启用；本例已填写，建议保留登录保护 | 首次安装时设置自己的账号和密码 | 两项都非空才启用登录。只设置一项不会启用。修改后需重新创建容器。 |
 | `JWT_SECRET_KEY` | 本例要求自行填写 | 首次安装设置足够长的随机字符串 | 用于保护登录会话。更新容器时保留原值；更换后原登录会话失效。 |
 | `TZ` | `Asia/Shanghai` | 希望服务使用其他时区时 | 重新创建容器后生效。 |
@@ -94,13 +133,65 @@ docker compose ps
 
 ### 4. 打开管理页面
 
-在浏览器访问 `http://设备IP:5010`，例如：
+按所选模式打开：
 
-```text
-http://192.168.1.10:5010
+| 采用的示例 | 浏览器地址 |
+| --- | --- |
+| Bridge | `http://192.168.1.10:5010` |
+| Host | `http://192.168.1.10:8088` |
+
+将 `192.168.1.10` 换成安装设备的实际 IP；改过端口就使用新端口。用刚设置的账号密码登录。只有浏览器和容器运行在同一台电脑上时，才可以把设备 IP 写成 `localhost`。
+
+<a id="docker-run"></a>
+## 用 docker run 安装
+
+没有使用 Compose、希望直接创建容器时，可以选这组命令。**已经按上一节安装成功的用户跳过本节。**
+
+先替换账号、密码和登录密钥。命令中的 `$HOME/configflow/data` 是当前执行用户主目录下的固定数据目录；已有数据或 NAS 用户应把它改成自己的实际绝对路径，例如 `/volume1/docker/configflow/data`，并保证目录存在。不要在升级时换成另一个用户的主目录。
+
+::: code-group
+
+```bash [Bridge 模式（推荐）]
+mkdir -p "$HOME/configflow/data"
+
+docker run -d \
+  --name config-flow \
+  --restart unless-stopped \
+  --network bridge \
+  -p 5010:80 \
+  -v "$HOME/configflow/data:/data" \
+  -e DATA_DIR=/data \
+  -e TZ=Asia/Shanghai \
+  -e ADMIN_USERNAME='your-admin-name' \
+  -e ADMIN_PASSWORD='replace-with-your-own-password' \
+  -e JWT_SECRET_KEY='replace-with-at-least-32-random-characters' \
+  thsrite/config-flow:latest
 ```
 
-使用刚设置的账号密码登录。只有浏览器和容器运行在同一台电脑上时，才可以用 `http://localhost:5010`；其他设备需要实际 IP。
+```bash [Host 模式]
+mkdir -p "$HOME/configflow/data"
+
+docker run -d \
+  --name config-flow \
+  --restart unless-stopped \
+  --network host \
+  -v "$HOME/configflow/data:/data" \
+  -e DATA_DIR=/data \
+  -e TZ=Asia/Shanghai \
+  -e CONFIGFLOW_WEB_PORT=8088 \
+  -e ADMIN_USERNAME='your-admin-name' \
+  -e ADMIN_PASSWORD='replace-with-your-own-password' \
+  -e JWT_SECRET_KEY='replace-with-at-least-32-random-characters' \
+  thsrite/config-flow:latest
+```
+
+:::
+
+Bridge 使用 `-p 5010:80`，从 `http://设备IP:5010` 访问；Host 使用 `--network host`，不加 `-p`，从 `http://设备IP:8088` 访问。Host 的网页端口只读、其他端口冲突和 IPv6 条件与上面的 Compose Host 版相同。
+
+命令执行后，可以运行 `docker ps --filter name=config-flow` 查看状态，运行 `docker logs --tail=100 config-flow` 查看启动信息。Docker 会在本机没有镜像时尝试下载；若下载或创建报错，先处理报错。
+
+保存你实际使用的完整命令，尤其是数据路径、账号、密码、密钥、网络方式和端口。以后更新或改参数需要用它重建容器；原样再次执行 `docker run` 会因同名容器已存在而失败。更新步骤见 [停止、更新与退回](#maintain)。
 
 <a id="nas"></a>
 ## 在 NAS 容器管理器中安装
@@ -108,22 +199,22 @@ http://192.168.1.10:5010
 NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即可。
 
 1. 打开 NAS 的容器管理器，选择“项目”“Compose”或“从 YAML 创建”。
-2. 建立一个独立的 ConfigFlow 项目，粘贴上面的部署内容。
+2. 建立一个独立的 ConfigFlow 项目，从 Compose 代码框选择 Bridge 或 Host，粘贴对应的完整内容。
 3. 将 `./data:/data` 改成 NAS 上的实际目录，例如 `/volume1/docker/configflow/data:/data`。确认这个目录可写。
-4. 设置账号、密码、密钥；检查左侧访问端口 `5010` 没有被其他项目占用。
+4. 设置账号、密码、密钥。Bridge 检查 `5010` 没被占用；Host 检查 `8088`、`5001`、`3001` 没被占用，保留 `CONFIGFLOW_WEB_PORT=8088`。
 5. 点击管理器中的部署／启动，等容器状态变为运行。
-6. 用 `http://NAS的IP:5010` 打开面板。
+6. Bridge 用 `http://NAS的IP:5010`，Host 用 `http://NAS的IP:8088` 打开面板。
 
 如果管理器只有“创建容器”，没有 Compose，逐项填写：
 
-| 容器管理器字段 | 填写内容 |
-| --- | --- |
-| 镜像 | `thsrite/config-flow:latest` |
-| 网络 | 默认 bridge／桥接 |
-| 端口 | 主机 TCP `5010` → 容器 TCP `80` |
-| 目录挂载 | NAS 的数据目录 → `/data`，可读写 |
-| 环境变量 | 上例 `environment` 中的各项 |
-| 启动命令 | 使用镜像默认值，不另填 |
+| 容器管理器字段 | Bridge 模式 | Host 模式 |
+| --- | --- | --- |
+| 镜像 | `thsrite/config-flow:latest` | `thsrite/config-flow:latest` |
+| 网络 | bridge／桥接 | host／主机网络；NAS 不支持时用 Bridge |
+| 端口映射 | 主机 TCP `5010` → 容器 TCP `80` | 不填写映射 |
+| 目录挂载 | NAS 的实际数据目录 → `/data`，可读写 | 同左 |
+| 环境变量 | Bridge Compose 中 `environment` 的全部项 | Host Compose 中的全部项，包括 `CONFIGFLOW_WEB_PORT=8088` |
+| 启动命令 | 使用镜像默认值，不另填 | 同左 |
 
 NAS 部署和命令行部署二选一，不要为同一数据目录同时启动两个面板容器。
 
@@ -131,46 +222,41 @@ NAS 部署和命令行部署二选一，不要为同一数据目录同时启动�
 ## 第一次打开后的设置
 
 1. 进入「系统 → 系统设置 → 常规」。
-2. 在「服务配置 → 服务域名」填写**其他设备能访问到的完整地址**，例如 `http://192.168.1.10:5010`。移开输入焦点后保存。
+2. 在「服务配置 → 服务域名」填写**其他设备能访问到的完整地址**：Bridge 示例为 `http://192.168.1.10:5010`，Host 示例为 `http://192.168.1.10:8088`。改过端口时填实际值，移开输入焦点后保存。
 3. 如需保护配置下载链接，在「访问令牌」输入自己的令牌，或点击生成按钮。之后从页面复制完整配置链接，不要手工漏掉令牌。
 
 ![服务配置中的服务域名与访问令牌](../img/guide/panel-service-settings.jpg)
 
-图中是当前真实界面的隔离演示：`192.168.1.10:5010` 是示例地址，请换成你的地址。截图使用独立开发服务，所以 Web 监听端口显示“不支持”；官方 Docker 容器里的端口设置按下一节操作。服务域名与监听端口始终是两项不同设置。
+图中是当前真实界面的隔离演示：`192.168.1.10:5010` 是 Bridge 示例地址；使用本页 Host 示例时应填 `8088`。截图使用独立开发服务，所以 Web 监听端口显示“不支持”；官方 Docker 容器里的端口设置按下一节操作。服务域名与监听端口始终是两项不同设置。
 
 | 选项 | 默认／建议 | 设置后的作用 | 不设置时 |
 | --- | --- | --- | --- |
 | 服务域名 | 容器中新实例可能未保存；页面可显示当前浏览器地址。建议填可从其他设备访问的地址 | 生成订阅、规则和安装链接时使用它；不会改监听端口 | 从 `localhost` 打开时，生成的地址可能只有本机能用，其他设备安装或取规则会失败 |
 | 访问令牌 | 默认空；需要限制配置链接访问时生成 | 下载链接需带令牌；此令牌也授权 MCP 管理操作，应像密码一样保管 | 配置令牌保护关闭；不要把它与网页登录账号混为一项 |
-| Web 监听端口 | 容器内默认 `80`；普通 bridge 安装先保持 | 改的是容器实际监听端口，详见下一节 | 继续使用 `5010:80` 这样的端口映射 |
+| Web 监听端口 | Bridge 示例内部为 `80`；Host 示例被环境变量指定为 `8088`，页面只读 | 改的是容器实际监听端口，详见下一节 | 沿用当前启动设置；不是服务域名里的地址文本 |
 
 内置 Sub-Store 是转换订阅用的程序，默认按需启动，空闲约 5 分钟后休眠。首次转换需要等待启动；看到“休眠中”不代表故障。无需另装 Sub-Store，也无需对外开放其内部 `3001` 端口。
 
 <a id="network"></a>
 ## 选择网络方式和修改端口
 
-### 普通安装先选 bridge
+### 想改访问端口时，先看自己用的模式
 
 | 网络方式 | 适合谁 | 端口怎么改 | IPv6 要看什么 |
 | --- | --- | --- | --- |
 | bridge（桥接，Compose 未指定网络时的普通用法） | 只需要面板正常访问，希望与宿主机其他服务分开 | 改 `5010:80` 左边；一般不用动 Web 设置里的端口 | Docker 网络需具备所需 IPv6 能力；改端口不会给容器增加 IPv6 地址 |
 | host（主机网络） | Linux 上希望直接使用宿主机网络，包括已有的 IPv6 网络能力 | `ports` 映射不生效，使用 Web 监听端口或启动环境变量 | 宿主机本身要有可用 IPv6 地址、路由，相关防火墙也需允许访问 |
 
-### Host 首次安装
+两种模式的完整 Compose 和 `docker run` 示例都已在上面提供。Bridge 通常只改对外映射端口，例如将 `5010:80` 改成 `5011:80`；Host 示例则修改 `CONFIGFLOW_WEB_PORT` 的值。Compose 改好后运行 `docker compose up -d`；`docker run` 创建的容器需按下方维护步骤停止、移除并重建。单纯重启不会读取修改后的参数。
 
-将上例的 `ports` 两行删除，改为：
+<a id="port-priority"></a>
+### 环境变量与 Web 设置的关系
 
-```yaml
-    network_mode: host
-```
+优先顺序是 **`CONFIGFLOW_WEB_PORT` → 网页以前保存的端口 → 默认 `80`**。本页 Host 示例设置了 `CONFIGFLOW_WEB_PORT=8088`，因此会使用 `8088`，网页输入框只读；在环境变量存在时不能通过网页覆盖它。
 
-宿主机的 `80` 已有服务时，在 `environment` 中增加一个确认空闲的端口：
+想交回网页管理，需移除这个环境变量并重建容器。移除后会使用以前通过网页保存的端口；从未保存过就回到 `80`。因此先确认恢复后的端口空闲，再重建，不能只删环境变量后继续假定是 `8088`。
 
-```yaml
-      CONFIGFLOW_WEB_PORT: "8088"
-```
-
-重新部署后访问 `http://设备IP:8088`。Host 共享主机端口，还需检查面板内部后端 `5001`、内置 Sub-Store 默认 `3001` 是否冲突。不要把面板的 Host 设置与 Agent 容器的网络设置混在一起：它们是不同容器。
+无论从哪个端口访问，Host 的面板后端 `5001`、内置 Sub-Store 默认 `3001` 仍与宿主机其他服务共用端口。只把 Web 改成 `8088`，不能解决这些内部端口的占用问题。
 
 ### 从 Web 修改监听端口
 
@@ -202,21 +288,46 @@ IPv6 访问地址需加方括号，例如 `http://[2001:db8::10]:8088`，示例�
 3. 确认数据挂载指向准备好的实际目录。
 4. 对照「服务域名」，确认准备安装 Agent 的设备也能打开这个地址。
 
-打不开时，查看 `docker compose logs --tail=100 config-flow`，或 NAS 管理器里的容器日志。按顺序检查容器是否运行、IP、对外端口、挂载权限和防火墙。`5001` 是容器内部后端端口，不是本章让浏览器访问的端口。
+打不开时，Compose 用户查看 `docker compose logs --tail=100 config-flow`，`docker run` 用户查看 `docker logs --tail=100 config-flow`，NAS 用户查看容器管理器里的日志。按顺序检查容器是否运行、IP、对外端口、挂载权限和防火墙。`5001` 是后端服务端口，不是本章让浏览器访问的网页端口。
 
 <a id="maintain"></a>
 ## 停止、更新与退回
 
-| 要做的事 | 操作 | 结果 |
-| --- | --- | --- |
-| 暂停面板 | `docker compose stop` | 停止面板，保留数据；它不会替你停止其他机器上的代理或 DNS 核心 |
-| 再启动 | `docker compose start` | 按原容器设置启动 |
-| 只是重启 | `docker compose restart` | 不读取新环境变量，也不下载新镜像 |
-| 应用 Compose 中改过的端口或环境变量 | `docker compose up -d` | 按新设置重新创建必要的容器，数据挂载必须保持原路径 |
-| 更新镜像 | 先备份，再运行 `docker compose pull`、`docker compose up -d` | 使用新镜像；Agent 与核心的更新另行管理 |
-| 改端口后无法访问 | 在 Compose 设 `CONFIGFLOW_WEB_PORT` 为已确认空闲的端口；bridge 同时改匹配的端口映射，再 `up -d` | 用明确的启动值恢复访问，再核对原设置 |
+| 要做的事 | Compose 安装 | docker run 安装 | 结果 |
+| --- | --- | --- | --- |
+| 暂停面板 | `docker compose stop` | `docker stop config-flow` | 停止面板、保留数据，不会替你停止其他设备的核心 |
+| 再启动 | `docker compose start` | `docker start config-flow` | 按原容器设置启动 |
+| 只是重启 | `docker compose restart` | `docker restart config-flow` | 不读取新环境变量，也不下载新镜像 |
+| 应用改过的端口、网络或环境变量 | 修改原文件，再 `docker compose up -d` | 按下面的重建步骤，用改好的完整命令创建 | 数据目录、账号和密钥等要沿用原值 |
+| 更新镜像 | 先备份，再 `docker compose pull`、`docker compose up -d` | 先备份，再按下面的更新步骤操作 | 更新面板；Agent 与核心仍需分别管理 |
 
-更新前，先从「系统设置」导出全部数据；如需完整保留运行文件，再正常停服并复制**整个实际数据目录**。不要在运行中单独复制数据库文件。JSON 导出不含端口文件和监控历史，数据备份边界见 [部署与备份技术说明](https://github.com/thsrite/configflow/blob/main/doc/module/deployment.md#备份与升级)。
+### docker run 如何更新和重建
+
+1. 先在「系统设置」**导出全部数据**，保留原来实际执行的完整 `docker run` 命令、镜像版本及数据路径。如果需要完整目录备份，先 `docker stop config-flow`，复制整个实际数据目录，确认副本保存好后可用 `docker start config-flow` 恢复服务。不要在服务运行时只复制数据库文件。
+2. 下载新版镜像。此时还不会替换正在使用的容器：
+
+   ```bash
+   docker pull thsrite/config-flow:latest
+   ```
+
+3. 确认下载成功后，停止并移除旧容器：
+
+   ```bash
+   docker stop config-flow
+   docker rm config-flow
+   ```
+
+   这两条命令停止并移除名为 `config-flow` 的容器，**不会删除本页示例挂载到宿主机的数据目录**。不要删除那个目录；也不要改成另一个空目录。
+4. 重新执行自己保存的完整 `docker run` 命令。保留**相同的数据路径、账号、密码、JWT 密钥、网络方式和端口**，使用刚下载的镜像；不要把上面的占位文字当作原账号重建。如果这次就是要改某项参数，只修改那一项。
+5. 查看 `docker logs --tail=100 config-flow`，然后按原模式打开 `http://设备IP:5010` 或 `http://设备IP:8088`，确认原配置仍在。改过端口就使用新端口，并更新服务域名及其他设备保存的地址。
+
+只改端口或环境变量、不更新镜像时，也需要停止并移除旧容器，再用改好的命令重新创建；可以跳过下载镜像这一步。NAS 用户在原项目中修改并重新部署，不要另建一个同时使用原数据的新项目。
+
+### 改错端口或需要退回
+
+无法访问时，在原 Compose 或 `docker run` 命令中设置 `CONFIGFLOW_WEB_PORT` 为已确认空闲的端口。Bridge 同时把端口映射右侧改成这个值，然后按原安装方式重建；Host 直接使用这个端口。恢复访问后，再核对网页保存值及服务域名。
+
+更新前，先从「系统设置」导出全部数据；如需完整保留运行文件，再正常停服并复制**整个实际数据目录**。不要在运行中单独复制数据库文件。JSON 导出不含端口文件和监控历史，具体看 [哪些内容需要另外备份](../manual/system-settings.md#backup-scope)。
 
 更新后配置看似丢失时，先检查是否挂载了另一个空目录，保留原文件，不要立即重置。需要退回镜像时，应使用事先记录的旧版本及对应数据备份；不要盲目让旧版本打开已经迁移的数据。
 
@@ -226,5 +337,3 @@ IPv6 访问地址需加方括号，例如 `http://[2001:db8::10]:8088`，示例�
 - 第一次把一台 Linux 配成分流设备：继续 [首次使用向导](first-run.md)。
 - 已经有 Mihomo／OxiDNS，或要用 Docker、RouterOS 部署核心：继续 [安装与接入设备](agent-install.md)。
 - 面板已经安装，准备做两台 DNS 互为备用：先完成基础服务，再看 [OxiDNS 高可用](oxidns-ha.md)。
-
-实现依据：[面板 Compose](https://github.com/thsrite/configflow/blob/main/docker/docker-compose.yml)、[登录启用条件](https://github.com/thsrite/configflow/blob/main/backend/common/auth.py)、[Web 端口设置](https://github.com/thsrite/configflow/blob/main/frontend/src/components/settings/WebPortSettings.vue)、[端口管理](https://github.com/thsrite/configflow/blob/main/backend/utils/web_listener.py)。

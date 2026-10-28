@@ -78,5 +78,3 @@
 - **删除被阻止：**根据提示进入对应配置空间、聚合或节点库解除引用；不要试图靠切换当前配置绕过共享资源保护。
 
 下一步：[策略组](proxy-groups.md)；要把多个来源合在一起，读 [订阅聚合](subscription-aggregation.md)。
-
-核对入口：[订阅界面](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Subscriptions.vue)、[订阅接口](https://github.com/thsrite/configflow/blob/main/backend/routes/subscriptions.py)、[健康检查默认值](https://github.com/thsrite/configflow/blob/main/backend/utils/health_check.py)。

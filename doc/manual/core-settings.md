@@ -90,6 +90,10 @@ Loon 导出名为**当前配置空间名称 `.lcf`**，名称中的路径等非�
 
 **旧版主路由分流**可能仍依赖此接管：关闭、恢复到关闭快照或撤销转发会中断主路由送来的连接；先移除主路由上指向该 Linux 的静态路由。完整 TUN 模式若发现“旧网关记录”，只有先持久化 IPv4 转发、满足界面条件后才清理。转发过滤提示用于检查宿主机防火墙，显示提醒不等于已经自动修复。
 
+完整 TUN 模式需要清理旧记录时，先按首次向导第 5 步或 Agent 卡片的提示，**开启并持久化 IPv4 转发**。然后回到「配置生成 → Mihomo → Linux 网关」，选择这台设备并点 **刷新检测**；只有出现可用的 **清理旧网关记录** 按钮后再清理。不能仅凭另一处显示“系统已持久化”就自行删除旧文件，仍需通过这里的检查。
+
+撤销时若提示规则已被其他程序修改，先保留现场并核对变化，不要强行删除。存在网关恢复记录时，卸载 Agent 会被阻止，应先按上面的顺序恢复设备网络。若出现“转发过滤”提醒，展开后按当前设备给出的说明处理，再刷新状态并测试一台客户端。
+
 ## MosDNS 设置
 
 入口：配置生成 → MosDNS → **设置**。以下是 MosDNS 表单，不能把 OxiDNS 的 Lazy cache、备用 DNS 含义照搬过来。
@@ -552,5 +556,3 @@ API 是管理入口，DNS 监听是查询入口，它们各有端口。修改 91
 ## 下一步
 
 返回[配置生成](generate.md)完成导出或发布；分流行为看[规则](rules.md)，节点来源看[订阅](subscriptions.md)，设备检查和恢复看[Agent 管理](agents.md)。首次安装见[首次使用](../guide/first-run.md)，OxiDNS 双机切换见[高可用指南](../guide/oxidns-ha.md)。
-
-实现核对入口：[生成页](https://github.com/thsrite/configflow/blob/main/frontend/src/views/Generate.vue)、[Mihomo 设置](https://github.com/thsrite/configflow/blob/main/frontend/src/components/generate/MihomoSettings.vue)、[Linux 网关](https://github.com/thsrite/configflow/blob/main/frontend/src/components/generate/LinuxGatewaySettings.vue)、[OxiDNS 常用字段](https://github.com/thsrite/configflow/blob/main/frontend/src/lib/oxidns.ts)、[原生字段目录](https://github.com/thsrite/configflow/blob/main/frontend/src/lib/oxidnsSchema.ts)、[OxiDNS 编辑与检查](https://github.com/thsrite/configflow/blob/main/frontend/src/components/generate/OxidnsSettings.vue)、[后端默认值与校验](https://github.com/thsrite/configflow/blob/main/backend/common/oxidns_settings.py)。
