@@ -96,7 +96,8 @@ COPY backend/ /rootfs/app/backend/
 # Keep the launcher outside auto-update's replaceable backend source directory.
 # Older cached sources still start even when they do not include startup.py.
 COPY backend/startup.py /rootfs/usr/local/bin/configflow-python-start.py
-COPY docker/nginx.conf /rootfs/etc/nginx/nginx.conf
+COPY backend/utils/web_listener.py /rootfs/usr/local/bin/configflow-web-listener.py
+COPY docker/nginx.conf /rootfs/etc/nginx/configflow-nginx.conf.template
 COPY docker/supervisord.conf /rootfs/etc/supervisor/conf.d/supervisord.conf
 COPY --chmod=755 docker/sub-store-start.sh docker/configflow-start.sh /rootfs/usr/local/bin/
 COPY --chmod=755 docker/auto_update.py /rootfs/usr/local/bin/configflow-auto-update.py

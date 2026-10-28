@@ -46,6 +46,8 @@
             </div>
           </FormField>
 
+          <WebPortSettings />
+
           <FormField
             label="规则下载代理"
             html-for="rule-fetch-proxy"
@@ -431,6 +433,7 @@ import FormField from '@/components/common/FormField.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import SubStoreRuntime from '@/components/settings/SubStoreRuntime.vue'
 import ScheduledTasks from '@/components/settings/ScheduledTasks.vue'
+import WebPortSettings from '@/components/settings/WebPortSettings.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'

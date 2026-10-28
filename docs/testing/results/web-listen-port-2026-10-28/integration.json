@@ -1,0 +1,43 @@
+{
+  "checks": [
+    {
+      "name": "saved startup serves both IPv4 and IPv6",
+      "passed": true,
+      "port": 45349
+    },
+    {
+      "name": "reload switches both listeners and persists the new port",
+      "passed": true,
+      "port": 49027
+    },
+    {
+      "name": "IPv4 conflict preserves existing listeners and saved settings",
+      "passed": true
+    },
+    {
+      "name": "IPv6-only conflict preserves existing listeners and saved settings",
+      "passed": true
+    },
+    {
+      "name": "nginx syntax validation failure preserves existing listeners",
+      "passed": true
+    },
+    {
+      "name": "persistent state-write failure rolls back a real dual-stack reload",
+      "passed": true
+    },
+    {
+      "name": "nginx restart restores the persisted port",
+      "passed": true
+    },
+    {
+      "name": "environment override recovers access and makes Web editing read-only",
+      "passed": true
+    },
+    {
+      "name": "removing environment override restores saved port and Web editing",
+      "passed": true
+    }
+  ],
+  "success": true
+}

@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-28",
+  "test_host": "192.168.0.32",
+  "python": "3.11.17",
+  "upstream_revision": "be6d0d1d2bded09a7fe7cdaed616405b44bc7554",
+  "web_listener_tests": {
+    "command": "rt -- /home/sunbroke/cf-test/.venv/bin/python -m pytest backend/test_web_listener.py -q",
+    "passed": 33,
+    "failed": 0,
+    "skipped": 0,
+    "duration_seconds": 1.53
+  },
+  "full_backend_suite": {
+    "command": "cf-test backend backend/test_web_listener.py -q",
+    "scope_note": "scripts/test-backend.sh always includes the backend directory, so adding a file path still runs the full suite.",
+    "exit_code": 1,
+    "passed": null,
+    "failed": 6,
+    "skipped": null,
+    "duration_seconds": null,
+    "statistics_note": "The wrapper and caller each supplied -q. The captured final output listed failures but did not print pass/skip counts or total duration; unavailable values are not inferred."
+  },
+  "clean_upstream_comparison": {
+    "source": "git archive upstream/main backend docker scripts .github",
+    "execution": "Extracted into an independent temporary directory on the test server; ran only the six failed node IDs with the shared Python 3.11 virtual environment.",
+    "passed": 0,
+    "failed": 6,
+    "skipped": 0,
+    "duration_seconds": 0.66,
+    "result": "All six failures reproduced on unchanged upstream/main with the same generated-script digests or ha_ip dependency-check diffs. They are existing installation-script baseline mismatches, unrelated to Web listener changes."
+  },
+  "existing_failure_node_ids": [
+    "backend/test_router_split_regression.py::test_single_service_scripts_match_the_previous_release",
+    "backend/test_gateway_core_install.py::test_selective_gateway_script_is_byte_identical_to_the_previous_release",
+    "backend/test_gateway_core_install.py::test_ordinary_aio_script_is_the_previous_release_plus_intentional_forwarding_context_delta",
+    "backend/test_standalone_forwarding_install.py::test_opt_out_is_byte_identical_to_the_previous_release",
+    "backend/test_standalone_forwarding_install.py::test_dns_services_never_take_forwarding[oxidns-cores0]",
+    "backend/test_standalone_forwarding_install.py::test_dns_services_never_take_forwarding[mosdns-cores1]"
+  ]
+}

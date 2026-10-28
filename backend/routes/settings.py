@@ -9,6 +9,25 @@ from backend.common.config_export import contains_internal_rule_proxy_token
 from backend.version import get_version_info
 from backend.utils.rule_fetch import normalize_rule_fetch_proxy
 from backend.utils.webdav_backup import RETENTION_LIMITS, describe_webdav_error, retention_settings
+from backend.utils import web_listener
+
+
+@settings_bp.route('/settings/web-port', methods=['GET', 'POST'])
+@require_auth
+def handle_web_port():
+    """This deployment's nginx port is deliberately separate from importable settings."""
+    try:
+        if request.method == 'GET':
+            return jsonify(web_listener.listener_status())
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict) or 'port' not in data:
+            return jsonify({'success': False, 'message': '请提供 Web 监听端口'}), 400
+        return jsonify({'success': True, **web_listener.update_listener(data['port'])})
+    except web_listener.WebListenerError as error:
+        return jsonify({'success': False, 'message': str(error)}), error.status_code
+    except OSError:
+        current_app.logger.exception('Failed to access deployment Web listener configuration')
+        return jsonify({'success': False, 'message': '无法访问 Web 监听配置，请检查容器数据目录权限'}), 503
 
 
 @settings_bp.route('/settings/rule-fetch-proxy', methods=['GET', 'POST'])
