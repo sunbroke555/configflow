@@ -13,8 +13,14 @@ import pytest
 import requests
 from waitress import create_server
 
-from backend.http_server import run_http_server, server_options
+from backend.http_server import backend_address, run_http_server, server_options
 from backend.http_queue import QueueWaitDispatcher
+
+
+@pytest.fixture(autouse=True)
+def isolated_backend_address(monkeypatch):
+    monkeypatch.delenv('CONFIGFLOW_BACKEND_HOST', raising=False)
+    monkeypatch.delenv('CONFIGFLOW_BACKEND_PORT', raising=False)
 
 
 @contextmanager
@@ -63,6 +69,66 @@ def test_production_uses_reusable_workers_and_debug_keeps_reloader(monkeypatch):
     run_http_server(app, debug=True)
     # The debug reloader passes SIGTERM on to the serving child (test_agent_metrics_history).
     app.run.assert_called_once_with(host='0.0.0.0', port=5001, debug=True, reloader_type='configflow')
+
+
+@pytest.mark.parametrize('debug', [False, True])
+def test_backend_endpoint_can_avoid_host_network_port_conflicts(monkeypatch, debug):
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_HOST', '127.0.0.1')
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', '15801')
+    monkeypatch.setattr('backend.http_server.stop_forwarding_reloader', lambda: 'configflow')
+    app, serve = Mock(), Mock()
+    monkeypatch.setattr('waitress.serve', serve)
+    run_http_server(app, debug=debug)
+    called = app.run if debug else serve
+    assert called.call_args.kwargs['host'] == '127.0.0.1'
+    assert called.call_args.kwargs['port'] == 15801
+    (serve if debug else app.run).assert_not_called()
+
+
+@pytest.mark.parametrize('value', [
+    '', '0', '-1', '65536', '1.5', 'true', '+5001', '5_001', '５００１',
+    pytest.param('9' * 5000, id='oversized'),
+])
+@pytest.mark.parametrize('debug', [False, True])
+def test_invalid_backend_port_fails_before_starting_server(monkeypatch, value, debug):
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', value)
+    app, serve = Mock(), Mock()
+    monkeypatch.setattr('waitress.serve', serve)
+    with pytest.raises(ValueError, match='CONFIGFLOW_BACKEND_PORT'):
+        run_http_server(app, debug=debug)
+    serve.assert_not_called()
+    app.run.assert_not_called()
+
+
+@pytest.mark.parametrize('value', ['1', '65535'])
+def test_backend_port_accepts_range_boundaries(monkeypatch, value):
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', value)
+    assert backend_address() == {'host': '0.0.0.0', 'port': int(value)}
+
+
+def test_empty_backend_host_fails_at_startup(monkeypatch):
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_HOST', '  ')
+    with pytest.raises(ValueError, match='CONFIGFLOW_BACKEND_HOST'):
+        server_options()
+
+
+def test_standalone_default_server_domain_uses_configured_backend_port(monkeypatch):
+    from backend.common import config
+
+    repository = Mock()
+    system = {'system_config': {}}
+    repository.get_system.return_value = system
+    repository.update_system_transaction.side_effect = lambda update: update(system)
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', '15801')
+    monkeypatch.setattr(config, 'get_repository', lambda: repository)
+    monkeypatch.setattr(config, 'get_config', lambda: {})
+    monkeypatch.setattr(config, 'get_local_ip', lambda: '192.0.2.10')
+    exists = config.os.path.exists
+    monkeypatch.setattr(config.os.path, 'exists', lambda path:
+                        False if path in ('/.dockerenv', '/run/.containerenv') else exists(path))
+    monkeypatch.setattr('backend.common.agent_manager.init_agent_manager', lambda: None)
+    config.load_config()
+    assert system['system_config']['server_domain'] == 'http://192.0.2.10:15801'
 
 
 @pytest.mark.parametrize('value', ['', 'zero', '0', '-1', '65', '2.5'])

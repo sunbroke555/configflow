@@ -102,8 +102,8 @@ class SubStoreRuntime:
         raise RuntimeUnavailable('Sub-Store 服务操作失败，请检查容器日志')
 
     def _ready(self):
-        from backend.utils.dependencies import SUB_STORE_BUILTIN_URL, fetch_running_version
-        return bool(fetch_running_version(SUB_STORE_BUILTIN_URL, timeout=1))
+        from backend.utils.dependencies import builtin_sub_store_url, fetch_running_version
+        return bool(fetch_running_version(builtin_sub_store_url(), timeout=1))
 
     def _ensure_running(self):
         if self._ready():

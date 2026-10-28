@@ -9,8 +9,11 @@ services:
     #   dockerfile: docker/Dockerfile
     #   target: runtime
     container_name: config-flow
+    # 默认 Bridge：只改左侧宿主机端口，内部服务无需对外映射。
     ports:
       - "5010:80"
+    # 改为 Host：删除上面 ports 两行，取消下面一行和 environment 中四项的注释。
+    # network_mode: host
     volumes:
       # 挂载数据目录以持久化配置（不包含应用代码）
       - ./data:/data
@@ -19,8 +22,13 @@ services:
     restart: unless-stopped
     environment:
       - DATA_DIR=/data
-      # Host 网络下可指定首次访问端口；设置后 Web 端口只读。
+      # Host 需使用支持自定义后端端口的新镜像，并确认以下三个端口空闲且不同。
+      # 不会自动避让冲突；修改后运行 docker compose up -d，restart 不读取新变量。
+      # Web 指定后页面端口只读；只改内部端口时浏览器仍访问 8088。
       # - CONFIGFLOW_WEB_PORT=8088
+      # - CONFIGFLOW_BACKEND_HOST=127.0.0.1
+      # - CONFIGFLOW_BACKEND_PORT=15801
+      # - SUB_STORE_BACKEND_API_PORT=15802
       # 登录认证配置（可选：不设置则不需要登录，设置后才开启认证）
       # 需要登录时取消下面三行注释，并改成自己的用户名/密码/密钥
       # - ADMIN_USERNAME=admin

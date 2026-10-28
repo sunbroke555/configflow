@@ -5,6 +5,18 @@ import os
 DEFAULT_HTTP_THREADS = 8
 
 
+def backend_address():
+    """Resolve the same backend endpoint for production and the debug server."""
+    raw_port = os.environ.get('CONFIGFLOW_BACKEND_PORT', '5001').strip()
+    if (not raw_port.isascii() or not raw_port.isdecimal() or len(raw_port) > 5
+            or not 1 <= int(raw_port) <= 65535):
+        raise ValueError('CONFIGFLOW_BACKEND_PORT must be an integer between 1 and 65535')
+    host = os.environ.get('CONFIGFLOW_BACKEND_HOST', '0.0.0.0').strip()
+    if not host:
+        raise ValueError('CONFIGFLOW_BACKEND_HOST must not be empty')
+    return {'host': host, 'port': int(raw_port)}
+
+
 def server_options():
     """Keep transport behavior compatible with the existing nginx frontend."""
     raw_threads = os.environ.get('CONFIGFLOW_HTTP_THREADS', str(DEFAULT_HTTP_THREADS))
@@ -15,8 +27,7 @@ def server_options():
     if not 1 <= threads <= 64:
         raise ValueError('CONFIGFLOW_HTTP_THREADS must be an integer between 1 and 64')
     return {
-        'host': '0.0.0.0',
-        'port': 5001,
+        **backend_address(),
         'threads': threads,
         'channel_timeout': 300,
         # Routes already interpret these headers (including deployments behind
@@ -90,7 +101,7 @@ def run_http_server(app, *, debug=False):
     if debug:
         # Keep the local debugger/reloader and its existing background-loop
         # guard in app.py. Production never uses Werkzeug's per-request threads.
-        app.run(host='0.0.0.0', port=5001, debug=True, reloader_type=stop_forwarding_reloader())
+        app.run(**backend_address(), debug=True, reloader_type=stop_forwarding_reloader())
         return
 
     from waitress import serve

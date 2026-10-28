@@ -152,6 +152,10 @@ initialize_app()
 
 
 if __name__ == '__main__':
+    from backend.http_server import backend_address, run_http_server
+
+    address = backend_address()
+    display_host = f"[{address['host']}]" if ':' in address['host'] else address['host']
     # 启动信息（仅在直接运行时显示）
     print('\n' + '=' * 60)
     print('🚀 Config Flow API Server')
@@ -161,7 +165,7 @@ if __name__ == '__main__':
     print(f"Build: {version_info.get('build_time', 'unknown')}")
     print(f"Log Level: {LOG_LEVEL}")
     print('=' * 60)
-    print('Server starting on http://0.0.0.0:5001')
+    print(f"Server starting on http://{display_host}:{address['port']}")
     print('Press Ctrl+C to stop')
     print('=' * 60 + '\n')
 
@@ -183,7 +187,6 @@ if __name__ == '__main__':
         metrics_flush.start_loop()
         metrics_flush.install_signal_handlers()
 
-    from backend.http_server import run_http_server
     try:
         run_http_server(app, debug=(LOG_LEVEL == 'DEBUG'))
     finally:
