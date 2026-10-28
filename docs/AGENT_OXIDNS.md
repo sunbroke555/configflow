@@ -278,7 +278,7 @@ Docker 示例中的 `SERVER_URL` 是占位值，请改为实际管理地址，�
 
 ### Docker DNS 高可用安装
 
-新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 高可用引导** 中选择 **精简 Compose**。填写当前主机后，可点 **只安装这一台，前往部署**，下载一份 `compose.yaml`，导入容器管理器的项目启动；命令行只需 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或初始化容器。需要 Compose 2.20+ 和包含精简启动入口的新镜像（Agent 1.8.49-go 起）；部署前请拉取新镜像。
+新装推荐在 **系统 → Agent → 生成安装脚本 → Docker 容器 → OxiDNS → 高可用安装** 中选择 **精简 Compose**。填写当前主机后，可点 **只安装这一台，前往部署**，下载一份 `compose.yaml`，导入容器管理器的项目启动；命令行只需 `docker compose up -d`。无需 `prepare.sh`、外部 `.env` 或初始化容器。需要 Compose 2.20+ 和包含精简启动入口的新镜像（Agent 1.8.49-go 起）；部署前请拉取新镜像。
 
 Host 保留两个容器：OxiDNS/Agent 与独立的 keepalived。macvlan 使用一个容器，在其中运行 OxiDNS、Agent 和 keepalived，保留完整高可用功能。普通数据目录直接映射；Linux 启动身份和 Host 网络校验仍使用只读、禁止自动创建源路径的挂载。
 

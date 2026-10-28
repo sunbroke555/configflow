@@ -369,11 +369,10 @@
         </DialogHeader>
 
         <div class="cf-focus-gutter flex max-h-[65dvh] min-h-0 flex-col gap-5 overflow-y-auto">
-          <FormField label="使用模式" hint="选择单机服务、Linux 网关或双机 DNS 高可用。" :help="optionHelp('只管理服务选普通模式；需要局域网分流选网关；两台 Docker 主机共用 DNS 地址选 Docker DNS 高可用。', '网关向导安装代理与 DNS；Docker DNS 高可用引导逐台准备 OxiDNS，再检查并配对虚拟 IP。')">
+          <FormField label="使用模式" hint="安装服务选普通模式，需要局域网分流选 Linux 网关。" :help="optionHelp('普通模式按服务选择 Shell 或 Docker 安装；需要局域网分流时选 Linux 网关。', 'OxiDNS 的 Docker 高可用安装在对应服务内选择；网关向导会安装代理与 DNS，并检查网络转发。')">
             <RadioGroup v-model="installationMode" class="flex flex-wrap gap-2" aria-label="使用模式">
               <label :class="[chipClass(installationMode === 'ordinary'), 'min-h-11']"><RadioGroupItem value="ordinary" />普通模式</label>
               <label :class="[chipClass(installationMode === 'gateway'), 'min-h-11']"><RadioGroupItem value="gateway" />Linux 网关</label>
-              <label :class="[chipClass(installationMode === 'docker-ha'), 'min-h-11']"><RadioGroupItem value="docker-ha" />Docker DNS 高可用</label>
             </RadioGroup>
           </FormField>
           <div v-if="installationMode === 'gateway'" class="space-y-4 rounded-lg border border-border bg-muted p-4">
@@ -384,7 +383,6 @@
             </div>
             <Button class="min-h-11" @click="openGatewayInstaller">开始或继续网关安装</Button>
           </div>
-          <DockerHAInstallGuide v-else-if="installationMode === 'docker-ha'" :profile-id="profileStore.activeProfileId.value" :profile-name="activeProfileName" :server-url="guideServerUrl" @changed="loadAgents" />
           <template v-else>
           <div class="space-y-4">
             <FormField label="安装类型" v-bind="installTypeCopy">
@@ -422,8 +420,17 @@
                 </label>
               </RadioGroup>
             </FormField>
+
+            <FormField v-if="isDockerOxiDNS" label="OxiDNS 部署方式">
+              <RadioGroup v-model="oxidnsInstallMode" class="flex flex-wrap gap-2" aria-label="OxiDNS 部署方式">
+                <label :class="[chipClass(oxidnsInstallMode === 'standard'), 'min-h-11']"><RadioGroupItem value="standard" />常规安装</label>
+                <label :class="[chipClass(oxidnsInstallMode === 'ha'), 'min-h-11']"><RadioGroupItem value="ha" />高可用安装</label>
+              </RadioGroup>
+            </FormField>
           </div>
 
+          <DockerHAInstallGuide v-if="showDockerHAGuide" :profile-id="profileStore.activeProfileId.value" :profile-name="activeProfileName" :server-url="guideServerUrl" @changed="loadAgents" />
+          <template v-else>
           <div class="grid grid-cols-2 gap-4 border-t border-border/60 pt-4">
             <FormField label="Agent 名称" html-for="agent-name" :class="scriptForm.installType === 'shell' && scriptForm.shellMode === 'single' ? 'min-w-0' : 'col-span-2 sm:col-span-1'">
               <Input id="agent-name" v-model="scriptForm.name" class="min-h-11 bg-background/50" placeholder="例如：home-server" />
@@ -455,7 +462,6 @@
           </div>
 
           <div v-if="scriptForm.installType === 'docker' && scriptForm.dockerMode === 'oxidns'" class="flex flex-col gap-3">
-            <Button variant="outline" class="min-h-11 self-start" @click="openDockerHAGuide">打开双机安装与迁移引导</Button>
             <label for="docker-dns-ha" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
               <Checkbox id="docker-dns-ha" v-model="scriptForm.dockerDNSHA" aria-describedby="docker-dns-ha-note" />
               为 DNS 高可用准备容器
@@ -727,11 +733,12 @@
             </Collapsible>
           </section>
           </template>
+          </template>
         </div>
 
         <DialogFooter class="shrink-0 flex-row items-center justify-end gap-2 border-t border-border/60 pt-4">
           <Button variant="outline" class="min-h-11" @click="scriptDialogVisible = false">关闭</Button>
-          <template v-if="installationMode === 'ordinary'">
+          <template v-if="installationMode === 'ordinary' && !showDockerHAGuide">
           <Button v-if="installCommand || dockerComposeContent || dockerRunCommand" variant="outline" class="min-h-11" @click="resetForm">重新生成</Button>
           <Button v-else class="min-h-11" :disabled="scriptLoading" @click="generateScript">
             <Loader2 v-if="scriptLoading" class="size-4 animate-spin" />
@@ -1084,10 +1091,15 @@ const closeAgentSettings = () => {
   void refreshProfiles().catch(() => undefined)
 }
 const scriptDialogVisible = ref(false)
-const installationMode = ref<'ordinary' | 'gateway' | 'docker-ha'>('ordinary')
+const installationMode = ref<'ordinary' | 'gateway'>('ordinary')
+const oxidnsInstallMode = ref<'standard' | 'ha'>('standard')
 const guideServerUrl = localStorage.getItem('serverDomain') || window.location.origin
 const openDockerHAGuide = () => {
-  installationMode.value = 'docker-ha'
+  installationMode.value = 'ordinary'
+  scriptForm.value.installType = 'docker'
+  scriptForm.value.dockerMode = 'oxidns'
+  onDockerModeChange()
+  oxidnsInstallMode.value = 'ha'
   scriptDialogVisible.value = true
 }
 const gatewayInstallContext = ref<{ profileId: string; profileName: string } | null>(null)
@@ -1187,6 +1199,9 @@ const createScriptForm = () => ({
   oxidnsServiceBinary: 'oxidns'
 })
 const scriptForm = ref(createScriptForm())
+const isDockerOxiDNS = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns')
+const showDockerHAGuide = computed(() => installationMode.value === 'ordinary' && isDockerOxiDNS.value && oxidnsInstallMode.value === 'ha')
+watch(isDockerOxiDNS, selected => { if (!selected) oxidnsInstallMode.value = 'standard' }, { flush: 'sync' })
 const dockerDNSHA = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns' && scriptForm.value.dockerDNSHA)
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
@@ -2111,6 +2126,7 @@ const handleGenerateScript = () => {
 // 显示生成脚本对话框
 const showGenerateScriptDialog = () => {
   installationMode.value = 'ordinary'
+  oxidnsInstallMode.value = 'standard'
   // 清空其他值
   installScript.value = ''
   installScriptUrl.value = ''
@@ -2143,6 +2159,7 @@ const resetForm = () => {
   scriptPanelOpen.value = false
 }
 
+watch([installationMode, oxidnsInstallMode], resetForm, { flush: 'sync' })
 watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
 watch(scriptDialogVisible, resetForm, { flush: 'sync' })
 watch([installScriptUrl, dockerComposeContent, dockerRunCommand], async (commands) => {
