@@ -1,3 +1,7 @@
+---
+outline: 2
+---
+
 # 在 RouterOS 上安装 Mihomo 和 OxiDNS
 
 这套方案把管理面板装在 NAS 或另一台电脑上，把 Mihomo 和 OxiDNS 装进 RouterOS 容器。Mihomo 负责代理；OxiDNS 负责查询网站地址，并把需要代理的查询交给 Mihomo。
@@ -11,7 +15,7 @@
 
 - 已能运行容器的 RouterOS 7：安装了匹配版本的 Container 软件包、启用了容器功能，并有可写磁盘。未准备好时先按 [RouterOS 容器说明](https://help.mikrotik.com/docs/spaces/ROS/pages/84901929/Container) 完成。
 - 一台运行 ConfigFlow 面板的 NAS 或电脑，以及可用的代理订阅。
-- 两个空闲的内网 IP，避开 DHCP 自动分配范围，防止路由器把同一地址发给其他设备。
+- 两个独立容器需要两个空闲的内网 IP；一个 AIO 容器只需一个。都应避开 DHCP 自动分配范围，防止地址冲突。
 
 先在 WinBox 的 **Files → Backup** 保存路由器备份并下载到电脑。在 **IP → DHCP Server → Networks** 打开当前网段，记下原来的 **DNS Servers**；原来为空也要记下来，恢复时会用到。
 
@@ -33,7 +37,7 @@
 | 方式 | 推荐情况 | 选择后的区别 |
 | --- | --- | --- |
 | **两个独立容器** | 首次安装推荐，正文按此方式填写 | 各有一个 IP，可以分别重启、升级和排查 |
-| 一个 AIO 容器 | 希望减少容器数量，接受两项服务一起启停 | 两个核心共用 IP；DNS 和 Agent 的端口必须分开，见第 4 步的 AIO 选项 |
+| 一个 AIO 容器 | 希望减少容器数量，接受两项服务一起启停 | 两个核心共用 IP；DNS 和 Agent 的端口必须分开，见第 4 步的 [AIO 页签](#routeros-aio) |
 
 AIO 就是把多个程序装在同一个容器里。以上两种都只有一份 OxiDNS，不会在设备故障时自动切换到另一台；需要该能力时看 [OxiDNS 高可用](oxidns-ha.md#combinations)。
 
@@ -75,9 +79,19 @@ disk1/configflow/configflow-agent.tar
 <a id="container-install"></a>
 ## 第 4 步：创建并启动容器
 
-下面先写推荐的**两个独立容器**。用 WinBox 或命令行任选一种，避免重复创建。选 AIO 时直接看本节的 AIO 折叠说明，不要先创建这两个容器。
+先选两个独立容器或一个 AIO 容器，只创建所选方案。首次安装推荐两个独立容器，便于分别重启和排查。
 
-### 4.1 给每个容器接一张网卡
+<DocsTabs id="routeros-container-layout" label="容器组合" :tabs="[{ id: 'routeros-two-containers', label: '两个独立容器（推荐）' }, { id: 'routeros-aio', label: '一个 AIO 容器' }]">
+
+<template #routeros-two-containers>
+
+两项服务各有一个 IP。再选一种操作方式：习惯在 WinBox 点选就用第一项，习惯终端命令就用第二项；不要重复执行两种方式。
+
+<DocsTabs id="routeros-create-method" label="操作方式" :tabs="[{ id: 'routeros-winbox', label: 'WinBox 操作' }, { id: 'routeros-command', label: '命令行操作' }]">
+
+<template #routeros-winbox>
+
+#### 4.1 给每个容器接一张网卡
 
 在 **Interfaces → VETH** 点击添加。VETH 是容器的虚拟网卡，可以理解为给容器接了一根网线。
 
@@ -89,7 +103,7 @@ disk1/configflow/configflow-agent.tar
 
 再到 **Bridge → Ports**，分别添加这两张网卡，**Bridge 都选实际的 LAN 网桥**，本例是 `bridge1`。填错网桥或网关时，容器可能无法联系面板或外网。
 
-### 4.2 准备长期保留的目录
+#### 4.2 准备长期保留的目录
 
 在 **Files** 创建下表的 Src 目录，再到 **Container → Mounts** 逐项添加。“挂载”就是把路由器磁盘上的目录交给容器使用。
 
@@ -104,7 +118,7 @@ disk1/configflow/configflow-agent.tar
 
 以后重建容器仍挂载原目录。只保留镜像文件，不能保留这些配置和身份。
 
-### 4.3 填写启动设置
+#### 4.3 填写启动设置
 
 到 **Container → Envs** 添加下表内容。环境变量就是容器启动时读取的设置：List 选对应容器的列表，Key 填名称，Value 填值。
 
@@ -118,7 +132,7 @@ disk1/configflow/configflow-agent.tar
 
 `8080 / 8082` 不是 DNS 端口，不填到手机的 DNS 设置中。单服务容器不需要额外添加 `ENABLE_MIHOMO` 等组合开关。
 
-### 4.4 添加并启动两个容器
+#### 4.4 添加并启动两个容器
 
 在 **Container** 点击添加，分别填写：
 
@@ -136,10 +150,11 @@ disk1/configflow/configflow-agent.tar
 
 安装测试阶段先手动启动；第 7 步验证后再勾选开机启动，RouterOS 重启后才会自动启动它们。**容器运行了，还需要第 5 步发布核心配置。**
 
-<details>
-<summary>命令行替代方式：一次创建两个独立容器</summary>
+</template>
 
-先完成第 3 步的镜像上传。以下只适用于新装，未按上面的 WinBox 步骤创建过对象。在 RouterOS Terminal 或 SSH 会话中先检查，确认没有同名对象，也没有旧服务使用这些目录：
+<template #routeros-command>
+
+先完成第 3 步的镜像上传。以下只适用于新装，尚未用 WinBox 创建过这些对象。在 RouterOS Terminal 或 SSH 会话中先检查，确认没有同名对象，也没有旧服务使用这些目录：
 
 ```text
 /container print detail
@@ -215,14 +230,17 @@ disk1/configflow/configflow-agent.tar
 /container print detail where name~"^cf-"
 ```
 
-</details>
+</template>
 
-<details>
-<summary>选择 AIO：一个容器同时运行 Mihomo 和 OxiDNS</summary>
+</DocsTabs>
 
-首次安装只创建一个 `cf-aio` 容器，不再创建前面的 `cf-main`、`cf-dns`。它们共用一个 IP，本例使用 `192.168.50.28`，但管理端口和 DNS 端口仍分开。
+</template>
 
-在 WinBox 中按前面的相同入口填写以下差异：
+<template #routeros-aio>
+
+首次安装只创建一个 `cf-aio` 容器，不创建 `cf-main`、`cf-dns` 两个独立容器。它们共用一个 IP，本例使用 `192.168.50.28`，但管理端口和 DNS 端口仍分开。
+
+使用 WinBox：先在 **Interfaces → VETH** 新建网卡，并在 **Bridge → Ports** 把它加入实际 LAN 网桥；再到 **Container** 添加容器。各项按下表填写：
 
 | 项目 | AIO 怎么填 |
 | --- | --- |
@@ -233,7 +251,7 @@ disk1/configflow/configflow-agent.tar
 | Envlist / Envlists | `cf-aio` |
 | Start On Boot | 先不勾选，验证后再开启 |
 
-新建以下目录和挂载，Container 的 Mountlists 选择这三项：
+在 **Files** 新建以下 Src 目录，在 **Container → Mounts** 添加对应挂载。编辑 `cf-aio` 容器时，Mountlists 选择这三项：
 
 | List | Src | Dst |
 | --- | --- | --- |
@@ -265,7 +283,9 @@ disk1/configflow/configflow-agent.tar
 - 面板应出现两张 Agent 卡片，IP 相同，端口分别是 `8080` 和 `8082`。
 - 重启或停止这个容器，会同时影响代理和 DNS。三项挂载目录都要保留，不与其他容器共用。
 
-</details>
+</template>
+
+</DocsTabs>
 
 <a id="publish"></a>
 <a id="services"></a>

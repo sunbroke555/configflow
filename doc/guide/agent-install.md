@@ -1,3 +1,8 @@
+---
+outline: 2
+---
+
+
 [文档首页](../README.md)
 
 # 安装与接入设备
@@ -6,40 +11,7 @@
 
 第一次安装整套 Linux 分流方案，建议先用 [首次使用向导](first-run.md)。本章用于单独装服务、接管已有服务、Docker／NAS、RouterOS，以及了解各种安装选项。
 
-本页目录：
-
-- [先选安装路线](#choose)
-- [开始前准备](#prepare)
-- [iKuai 虚拟机：先准备 Linux](#ikuai-vm)
-- [Shell 单服务](#shell-single)
-- [Shell 同机双服务](#shell-aio)
-- [接管已有服务与高级字段](#shell-existing)
-- [替换旧 DNS，继续使用原地址](#replace-dns)
-- [只安装核心](#cores-only)
-- [Docker 单服务与双服务](#docker)
-- [Linux 网关与完整 TUN 的入口](#gateway)
-- [RouterOS 容器](#routeros)
-- [OxiDNS 高可用入口](#ha)
-- [确认成功、发布与退回](#verify)
-
-<a id="choose"></a>
-## 先选安装路线
-
-| 你现在的情况 | 页面怎么选 | 最终安装什么 |
-| --- | --- | --- |
-| 新 Linux，只需要 Mihomo 或 OxiDNS | 「普通模式 → Shell 安装 → 单服务」，选择服务，勾选「同时安装…核心」 | 所选核心和一个 Agent |
-| 已有 Mihomo、OxiDNS 或 MosDNS | 「普通模式 → Shell 安装 → 单服务」，不勾选安装核心，填写实际路径 | 一个 Agent，管理现有核心；MosDNS 没有自动安装核心的勾选 |
-| 新 Linux，要同时运行 Mihomo 与 OxiDNS | 「普通模式 → Shell 安装 → Mihomo + OxiDNS 同机」，勾选安装两项核心 | 两个核心、分别管理它们的两个 Agent |
-| 同机已有 Mihomo 与 OxiDNS | 同机模式，不勾选安装核心，核对两项服务的路径 | 两个独立 Agent，接管两个现有服务 |
-| 只想先安装核心，不接入面板 | 同机模式，不勾选安装核心，展开「仅安装核心」 | 按选择安装 Mihomo、OxiDNS 或两者；不安装／登记 Agent |
-| NAS 或 Linux 上想用 Docker | 「普通模式 → Docker 容器」，选单服务或 All-in-One | 容器内已含 Agent 和选中的核心，没有“仅装 Agent”的勾选 |
-| 想装在 iKuai 的虚拟机里 | 先按 [虚拟机准备](#ikuai-vm)装好 Linux，再选择 Shell 安装 | 程序运行在 Linux 虚拟机中；不是直接装到 iKuai 系统里 |
-| 想让一台 Linux 做客户端网关 | 「使用模式 → Linux 网关」 | 专用向导准备规则、双核心、Agent，并在检查后显式应用转发 |
-| 想通过主路由静态路由分流 | [首次使用向导](first-run.md#choose)选「Mihomo + OxiDNS 分流」 | Linux 双核心与完整 TUN，然后另行接入主路由 |
-| 核心要放在 RouterOS 自己的容器里 | [RouterOS 路线](#routeros) | 使用 RouterOS Container 创建核心与 Agent，不能执行普通 Linux Shell 安装命令 |
-| 两台 OxiDNS 互相备用 | 单独 OxiDNS 服务里的「高可用安装」 | 先准备两端，再配对；见 [高可用文档](oxidns-ha.md) |
-
-“All-in-One（三合一）”中的三项是 **Agent + Mihomo + OxiDNS**，不是同时运行 Mihomo、MosDNS、OxiDNS。当前普通界面的双核心组合是 Mihomo + OxiDNS。
+选择下面与你设备相符的安装方式，页面只显示这一种方式的步骤。已有程序不用先卸载，Linux 安装里有“接管已有程序”选项。
 
 <a id="prepare"></a>
 ## 开始前准备
@@ -55,8 +27,20 @@
 
 普通安装入口：进入「系统 → Agent」，点击「生成安装脚本」。新开窗口默认「普通模式 → Shell 安装 → 单服务 → Mihomo」。填完后生成的是命令文本，**还需在目标设备执行才开始安装**。
 
+<a id="choose"></a>
+## 先选安装路线
+
+<DocsTabs id="agent-install-method" label="设备安装方式" :tabs='[{"id": "linux-install", "label": "Linux 安装"}, {"id": "docker", "label": "Docker / NAS"}, {"id": "gateway", "label": "Linux 网关"}, {"id": "routeros", "label": "RouterOS"}, {"id": "ha", "label": "OxiDNS 双机备用"}]'>
+
+<template #linux-install>
+
+命令要在准备运行核心的 Linux 设备上执行。先按服务数量或现有安装情况选择；复制命令后仍需执行，页面不会自动帮你安装。
+
+<details>
+<summary>装在 iKuai 虚拟机里？先准备 Linux</summary>
+
 <a id="ikuai-vm"></a>
-## iKuai 虚拟机：先准备 Linux
+### iKuai 虚拟机：先准备 Linux
 
 iKuai 负责提供一台虚拟电脑，Alpine 等 Linux 系统运行在里面，Mihomo、OxiDNS 和 Agent 再安装到 Linux。ConfigFlow 的安装命令不负责创建虚拟机或安装操作系统。
 
@@ -69,10 +53,15 @@ iKuai 负责提供一台虚拟电脑，Alpine 等 Linux 系统运行在里面，
 
 **主路由分流时，地址按作用填写：**客户端网关仍指向 iKuai，DNS 指向运行 OxiDNS 的设备；转交给 Mihomo 的连接，下一跳填运行 Mihomo 的设备 IP。两项核心同机时，这两个设备 IP 才可能相同。需要主路由把连接交给 Mihomo 时，接着看 [上游路由](../manual/routers.md)：同网段部署确实需要回复经过主路由时，使用“自动配置回流”，核对差异后发布。它会处理相应受管规则；不要再叠加旧教程中的手工回流命令。若选择的是让客户端直接使用 Linux 作网关，按 [首次向导中的方案说明](first-run.md#choose)接入，不照搬这里的客户端网关地址。
 
-<a id="shell-single"></a>
-## Shell 单服务
+</details>
 
-### 操作步骤
+<DocsTabs id="linux-install-choice" label="Linux 安装内容" :tabs='[{"id": "shell-single", "label": "一个服务"}, {"id": "shell-aio", "label": "Mihomo + OxiDNS"}, {"id": "shell-existing", "label": "接管已有程序"}, {"id": "cores-only", "label": "只安装核心"}]'>
+
+<template #shell-single>
+
+### Shell 单服务
+
+#### 操作步骤
 
 1. 选择「普通模式 → Shell 安装 → 单服务」。
 2. 在「服务类型」选择 Mihomo、OxiDNS 或 MosDNS。
@@ -83,7 +72,7 @@ iKuai 负责提供一台虚拟电脑，Alpine 等 Linux 系统运行在里面，
 7. 点击「生成安装命令」，选 curl 或 wget，复制到目标 Linux 的 root 终端执行。有安装／卸载菜单时选择安装项 `1`。
 8. 等终端完成，再回 Agent 页确认在线状态。命令链接过期时重新生成；修改表单会使旧的页面生成结果失效，执行前重新复制最新命令。
 
-### 勾选和服务选择
+#### 勾选和服务选择
 
 | 选项 | 默认 | 适合谁／建议 | 勾选后的效果 | 不勾选后的效果与网络影响 |
 | --- | --- | --- | --- | --- |
@@ -106,7 +95,7 @@ MosDNS 单服务只安装 Agent：先自行准备可运行的 MosDNS 和系统�
 
 采用自定义启停命令管理 Mihomo 时，「不开启 IPv4 转发」不可操作，安装器不会自动管理此项。若已有 Linux 网关接管记录导致安装器停止，应按提示勾选跳过转发、重新生成，或回到原网关管理流程处理，不能直接删除记录来绕过检查。
 
-### 新核心初始会做什么
+#### 新核心初始会做什么
 
 | 新装核心 | 初始行为 | 尚未完成的事情 |
 | --- | --- | --- |
@@ -115,10 +104,13 @@ MosDNS 单服务只安装 Agent：先自行准备可运行的 MosDNS 和系统�
 
 TUN 是 Mihomo 接收连接用的虚拟网卡。新装 Mihomo 启用自动路由时，**会影响这台 Linux 自己的路由处理**，不要把“没有代理节点”理解为完全不改网络。已有核心及配置会保留；重跑安装器也不会自动把原来关闭的 TUN 改成开启。
 
-<a id="shell-aio"></a>
-## Shell 同机双服务
+</template>
 
-### 操作步骤
+<template #shell-aio>
+
+### Shell 同机双服务
+
+#### 操作步骤
 
 1. 选择「普通模式 → Shell 安装 → Mihomo + OxiDNS 同机」。
 2. 填 Agent 名称前缀和可选 IP。
@@ -141,8 +133,11 @@ TUN 是 Mihomo 接收连接用的虚拟网卡。新装 Mihomo 启用自动路由
 
 普通单服务的旧共享 Agent 安装与同机的两个独立 Agent 目录不同。检测到旧共享部署时，同机安装器会停止；按终端提示先处理旧 Agent 并保留核心配置，不要往同一个目录叠装。卸载小助手不等于卸载代理／DNS 核心，也不等于恢复原来的网络接入。
 
-<a id="shell-existing"></a>
-## 接管已有服务与高级字段
+</template>
+
+<template #shell-existing>
+
+### 接管已有服务与高级字段
 
 已有核心使用自定义目录时，**取消勾选“同时安装核心”**，再展开「服务管理高级配置（可选）」或同机模式的「核心服务高级配置」。安装器不会根据填入的路径搬动你的原文件。
 
@@ -161,25 +156,11 @@ OxiDNS 有额外要求：启动参数 `-d` 指定的工作目录必须和配置�
 
 安装接管期间会检查环境和现有核心；新配置真正投入使用要等后面的发布。先保留备份，读清检查结果，再发布，避免把“Agent 在线”当作旧配置已转换完成。
 
-<a id="replace-dns"></a>
-## 替换旧 DNS，继续使用原地址
+</template>
 
-已有 MosDNS 或其他 DNS 服务时，建议先让新 OxiDNS 使用**另一个未占用的固定 IP**，完整测试后再替换。以下是普通单机迁移；使用双机备用时按 [OxiDNS 高可用](oxidns-ha.md)管理共同地址，不要手工占用其虚拟 IP。
+<template #cores-only>
 
-**不必保留旧 DNS 地址时，推荐直接使用新地址。** 完成下面第 1、2 步后，按 [上游路由的 DHCP DNS 设置](../manual/routers.md#dhcp-dns-和强制-dns)把主路由下发的 DNS 改成新 IP，并让客户端重新连接或续租；手动填写 DNS 的设备也要修改。若启用过强制 DNS，核对它的转发目标一并改好并发布。确认设备都在使用新 DNS 后，再停止旧服务，无需执行第 3–5 步的旧 IP 接管。
-
-1. **保留恢复材料。** 记录旧 DNS 的 IP、主路由 DHCP DNS、固定地址绑定、旧设备的启动方式，并备份原服务配置。新旧设备此时使用不同 IP，旧 DNS 继续服务。
-2. **在新地址完成安装和发布。** 按本文 Shell 安装 OxiDNS，核对配置空间、上游 DNS、内网名称和分流规则。只把一台测试客户端的 DNS 改成新 IP，检查直连网站、需要代理的网站、内网设备名称，并确认重启新设备后仍正常。测试完成前不改全网 DNS。
-3. **先让旧地址空出来。** 切换时停止旧 DNS，并关闭旧设备或移除它的旧 IP；同时取消会让旧设备再次获得该地址的 DHCP 绑定和开机自启设置。**仅停止 DNS 程序不会释放设备的 IP，两台设备不能同时使用同一个地址。**
-4. **让新设备接收原 DNS 地址。** 为保留已经验证的 Agent 管理连接，建议继续保留新机的测试 IP，并在 Linux 网络设置中把旧 DNS IP 添加为第二个固定地址，保存为重启后仍生效的设置。原来由 DHCP 分配旧地址时，先调整对应绑定，保证不会再分给旧设备或其他设备。OxiDNS 若仅监听测试 IP，添加原 DNS IP 后，还要在其设置中调整 DNS 监听地址并发布，使它能够接收原 DNS IP 上的查询。
-5. **从原地址再次验证。** 让测试客户端的 DNS 改回原地址，确认查询和上网正常；再检查 Agent 在线、面板能读取 OxiDNS 状态。客户端原本已经使用这个 DNS IP 时，无需逐台改地址。仍要保留旧设备和配置，等运行稳定后再清理。
-
-这次切换可能短暂影响 DNS，不保证连接完全不中断。出现问题时，先从新设备移除接管的旧 DNS IP，确认地址已经空出，再恢复旧设备及其原地址绑定、DNS 服务和启动设置；不要让新旧设备同时抢占旧地址。
-
-**先保留新机的管理地址。** Agent 已登记的地址不会因为 Linux 改 IP 就自动跟随变化。上述步骤保留测试 IP，是为了继续通过原地址管理新 Agent；不要在切换 DNS 时顺手删除它。需要让新机最终只保留旧 IP，或同时迁移面板、Mihomo、HA 服务时，应另行安排对应管理地址和依赖关系的迁移。
-
-<a id="cores-only"></a>
-## 只安装核心
+### 只安装核心
 
 适合想先把程序装好、暂时不接入面板的人。它与“只安装 Agent”正好是两个不同入口。
 
@@ -197,10 +178,17 @@ OxiDNS 有额外要求：启动参数 `-d` 指定的工作目录必须和配置�
 
 仅装核心使用固定默认路径，不读取上方 Agent 高级路径。它会启动新核心，但**不安装或注册 Agent，不自动开启 IPv4 转发**；需要转发时会给出提示。已有 Mihomo 时要确认其 DNS 能从同机 `127.0.0.1:1053` 访问，才能供新装的 OxiDNS 使用。装好后想在 Web 管理，再按单服务或同机流程安装 Agent。
 
-<a id="docker"></a>
-## Docker 单服务与双服务
+</template>
 
-### 操作步骤
+</DocsTabs>
+
+</template>
+
+<template #docker>
+
+### Docker 单服务与双服务
+
+#### 操作步骤
 
 1. 进入「生成安装脚本 → 普通模式 → Docker 容器」。
 2. 选择 Docker 模式，按下表核对内置服务。
@@ -210,7 +198,7 @@ OxiDNS 有额外要求：启动参数 `-d` 指定的工作目录必须和配置�
 6. 推荐把 Compose 内容保存为目标设备上的 `compose.yaml`，在同一目录运行 `docker compose up -d`；NAS 可用项目／Compose 功能导入。
 7. 等容器运行、Agent 上线，再发布实际配置。只生成、复制命令不会创建容器。
 
-### Docker 模式
+#### Docker 模式
 
 | 页面选项 | 默认状态 | 容器里有什么 | 常见用途／需核对什么 |
 | --- | --- | --- | --- |
@@ -221,13 +209,29 @@ OxiDNS 有额外要求：启动参数 `-d` 指定的工作目录必须和配置�
 
 Docker 镜像已经带核心，界面不提供普通 Shell 的“同时安装核心”勾选。默认 Agent 端口分别为 Mihomo `8080`、MosDNS `8081`、OxiDNS `8082`；有冲突可修改相应输入。
 
+按服务数量查看对应的填写示例。截图只演示表单选择，尚未创建容器。
+
+<DocsTabs id="docker-install-content" label="Docker 安装内容" :tabs="[{ id: 'docker-single', label: '一个服务' }, { id: 'docker-aio', label: 'Mihomo + OxiDNS' }]">
+
+<template #docker-single>
+
+只需要一个服务时，在「Docker 模式」选择 Mihomo、MosDNS 或 OxiDNS，再填写该服务的 Agent 名称、IP 和端口。展开「Docker 高级配置」可查看网络方式，普通安装默认使用 bridge。
+
 ![Docker 单服务的模式、端口与 bridge 网络选项](../img/guide/agent-docker-single.jpg)
 
-展开「Docker 高级配置」后，能看到普通安装默认使用 bridge。下图切换到 All-in-One 后出现两个 Agent 端口；它是一个容器内的 Mihomo + OxiDNS 组合。两图都是当前真实界面的演示填写，未创建容器。
+</template>
+
+<template #docker-aio>
+
+希望同一个容器运行 Mihomo 与 OxiDNS 时，选择「All-in-One（三合一）」。页面会显示两个 Agent 端口，分别管理两项核心；核对它们没有冲突。这里的三项是 Agent、Mihomo 和 OxiDNS，不包含 MosDNS。
 
 ![Docker All-in-One 的两个 Agent 端口](../img/guide/agent-docker-aio.jpg)
 
-### Host 与 bridge 怎么选
+</template>
+
+</DocsTabs>
+
+#### Host 与 bridge 怎么选
 
 | 选择 | 默认／适合谁 | 实际效果 | 不会自动完成的事情 |
 | --- | --- | --- | --- |
@@ -236,7 +240,7 @@ Docker 镜像已经带核心，界面不提供普通 Shell 的“同时安装核
 
 想用 Linux 网关或完整 TUN 时，优先使用对应的原生 Linux 向导。**仅把普通 Docker 的 bridge 改成 host，不等于已经具备 TUN、网络权限和可用的网关转发规则。**
 
-### 端口、目录和镜像字段
+#### 端口、目录和镜像字段
 
 | 内容 | 当前生成行为 | 用户需要做什么 |
 | --- | --- | --- |
@@ -249,12 +253,15 @@ Docker 镜像已经带核心，界面不提供普通 Shell 的“同时安装核
 
 OxiDNS 和 MosDNS 都默认使用 DNS 53；不要在同一容器同时启用二者。分开容器时，也要使用独立地址或不冲突的宿主端口。All-in-One 当前选择的是 OxiDNS。
 
-<a id="gateway"></a>
-## Linux 网关与完整 TUN 的入口
+</template>
+
+<template #gateway>
+
+### Linux 网关与完整 TUN 的入口
 
 普通安装是“装好服务”。网关向导还会检查并应用网络接入；选择时先想清楚是改主路由还是改客户端。
 
-### 已有配置空间，要增加 Linux 网关
+#### 已有配置空间，要增加 Linux 网关
 
 1. 先切到准备使用的配置空间。建议使用专用空间，因为同空间设备会共用 Mihomo 和 OxiDNS 配置。
 2. 打开「Agent → 生成安装脚本 → 使用模式：Linux 网关」。
@@ -274,7 +281,7 @@ OxiDNS 和 MosDNS 都默认使用 DNS 53；不要在同一容器同时启用二�
 
 「直连网站使用的 DNS」建议先保留默认 IP 地址形式的 DoH，避免普通 DNS 53 被再次接管形成循环。高级网络字段只核对真实地址，不替你设置主机 IP 或默认路由。
 
-### 主路由分流使用完整 TUN
+#### 主路由分流使用完整 TUN
 
 第一次使用从 [首次使用向导](first-run.md#choose)选择「Mihomo + OxiDNS 分流」。该方案安装时准备 TUN 并持久化 IPv4 转发，发布后检查“转发与 TUN”，再在主路由添加路由。
 
@@ -282,8 +289,11 @@ OxiDNS 和 MosDNS 都默认使用 DNS 53；不要在同一容器同时启用二�
 
 完整 TUN 空间不适用 Linux 网关的选择性接管开关。已有旧版接管记录时按页面提示清理或保留，不直接套用新方案。具体看 [Linux 网关的调整与停用](../manual/core-settings.md#linux-网关)。
 
-<a id="routeros"></a>
-## RouterOS 容器
+</template>
+
+<template #routeros>
+
+### RouterOS 容器
 
 RouterOS 上运行核心与“把 RouterOS 添加为上游路由器”是两件事。前者是在路由器内创建容器，后者是让 ConfigFlow 管理它的路由和 DHCP DNS；可以分别完成。
 
@@ -296,8 +306,11 @@ RouterOS 上运行核心与“把 RouterOS 添加为上游路由器”是两件�
 
 此路线的两个容器通常各有自己的 IP，不能照抄 Docker bridge 的主机端口映射。架构、虚拟网卡、挂载、环境变量和开机启动的完整步骤见 [RouterOS 安装手册](routeros-install.md)。
 
-<a id="ha"></a>
-## OxiDNS 高可用入口
+</template>
+
+<template #ha>
+
+### OxiDNS 高可用入口
 
 高可用是两台设备共用一个可切换的 DNS 服务地址，让其中一台故障时另一台接替。它需要两台独立主机，不能只在同一宿主机起两个容器充当双机。
 
@@ -312,6 +325,54 @@ RouterOS 上运行核心与“把 RouterOS 添加为上游路由器”是两件�
 图中是选择 Shell → 单服务 → OxiDNS → 高可用安装后的真实界面，展示的是准备阶段，并不表示已经配对成功。Docker 的 Host 和 macvlan 字段演示图及逐项填写步骤，见[高可用准备说明](oxidns-ha.md#prepare)。
 
 Docker 旧容器自动迁移只接受受支持的官方单 OxiDNS 部署，需保留默认入口及原 Agent、OxiDNS 两个挂载。已有高可用或额外挂载等自定义部署，应按原 Compose 手动重建，不套用新装命令覆盖。准备、迁移、配对、虚拟 IP 验证与退回顺序统一见 [OxiDNS 高可用](oxidns-ha.md)。
+
+</template>
+
+</DocsTabs>
+
+
+<details>
+<summary>拿不准怎么选？查看安装方式对照</summary>
+
+| 你现在的情况 | 页面怎么选 | 最终安装什么 |
+| --- | --- | --- |
+| 新 Linux，只需要 Mihomo 或 OxiDNS | 「普通模式 → Shell 安装 → 单服务」，选择服务，勾选「同时安装…核心」 | 所选核心和一个 Agent |
+| 已有 Mihomo、OxiDNS 或 MosDNS | 「普通模式 → Shell 安装 → 单服务」，不勾选安装核心，填写实际路径 | 一个 Agent，管理现有核心；MosDNS 没有自动安装核心的勾选 |
+| 新 Linux，要同时运行 Mihomo 与 OxiDNS | 「普通模式 → Shell 安装 → Mihomo + OxiDNS 同机」，勾选安装两项核心 | 两个核心、分别管理它们的两个 Agent |
+| 同机已有 Mihomo 与 OxiDNS | 同机模式，不勾选安装核心，核对两项服务的路径 | 两个独立 Agent，接管两个现有服务 |
+| 只想先安装核心，不接入面板 | 同机模式，不勾选安装核心，展开「仅安装核心」 | 按选择安装 Mihomo、OxiDNS 或两者；不安装／登记 Agent |
+| NAS 或 Linux 上想用 Docker | 「普通模式 → Docker 容器」，选单服务或 All-in-One | 容器内已含 Agent 和选中的核心，没有“仅装 Agent”的勾选 |
+| 想装在 iKuai 的虚拟机里 | 先按 [虚拟机准备](#ikuai-vm)装好 Linux，再选择 Shell 安装 | 程序运行在 Linux 虚拟机中；不是直接装到 iKuai 系统里 |
+| 想让一台 Linux 做客户端网关 | 「使用模式 → Linux 网关」 | 专用向导准备规则、双核心、Agent，并在检查后显式应用转发 |
+| 想通过主路由静态路由分流 | [首次使用向导](first-run.md#choose)选「Mihomo + OxiDNS 分流」 | Linux 双核心与完整 TUN，然后另行接入主路由 |
+| 核心要放在 RouterOS 自己的容器里 | [RouterOS 路线](#routeros) | 使用 RouterOS Container 创建核心与 Agent，不能执行普通 Linux Shell 安装命令 |
+| 两台 OxiDNS 互相备用 | 单独 OxiDNS 服务里的「高可用安装」 | 先准备两端，再配对；见 [高可用文档](oxidns-ha.md) |
+
+“All-in-One（三合一）”中的三项是 **Agent + Mihomo + OxiDNS**，不是同时运行 Mihomo、MosDNS、OxiDNS。当前普通界面的双核心组合是 Mihomo + OxiDNS。
+
+</details>
+
+<details>
+<summary>已有 DNS 想换成 OxiDNS，并继续使用原地址</summary>
+
+<a id="replace-dns"></a>
+### 替换旧 DNS，继续使用原地址
+
+已有 MosDNS 或其他 DNS 服务时，建议先让新 OxiDNS 使用**另一个未占用的固定 IP**，完整测试后再替换。以下是普通单机迁移；使用双机备用时按 [OxiDNS 高可用](oxidns-ha.md)管理共同地址，不要手工占用其虚拟 IP。
+
+**不必保留旧 DNS 地址时，推荐直接使用新地址。** 完成下面第 1、2 步后，按 [上游路由的 DHCP DNS 设置](../manual/routers.md#dhcp-dns-和强制-dns)把主路由下发的 DNS 改成新 IP，并让客户端重新连接或续租；手动填写 DNS 的设备也要修改。若启用过强制 DNS，核对它的转发目标一并改好并发布。确认设备都在使用新 DNS 后，再停止旧服务，无需执行第 3–5 步的旧 IP 接管。
+
+1. **保留恢复材料。** 记录旧 DNS 的 IP、主路由 DHCP DNS、固定地址绑定、旧设备的启动方式，并备份原服务配置。新旧设备此时使用不同 IP，旧 DNS 继续服务。
+2. **在新地址完成安装和发布。** 按本文 Shell 安装 OxiDNS，核对配置空间、上游 DNS、内网名称和分流规则。只把一台测试客户端的 DNS 改成新 IP，检查直连网站、需要代理的网站、内网设备名称，并确认重启新设备后仍正常。测试完成前不改全网 DNS。
+3. **先让旧地址空出来。** 切换时停止旧 DNS，并关闭旧设备或移除它的旧 IP；同时取消会让旧设备再次获得该地址的 DHCP 绑定和开机自启设置。**仅停止 DNS 程序不会释放设备的 IP，两台设备不能同时使用同一个地址。**
+4. **让新设备接收原 DNS 地址。** 为保留已经验证的 Agent 管理连接，建议继续保留新机的测试 IP，并在 Linux 网络设置中把旧 DNS IP 添加为第二个固定地址，保存为重启后仍生效的设置。原来由 DHCP 分配旧地址时，先调整对应绑定，保证不会再分给旧设备或其他设备。OxiDNS 若仅监听测试 IP，添加原 DNS IP 后，还要在其设置中调整 DNS 监听地址并发布，使它能够接收原 DNS IP 上的查询。
+5. **从原地址再次验证。** 让测试客户端的 DNS 改回原地址，确认查询和上网正常；再检查 Agent 在线、面板能读取 OxiDNS 状态。客户端原本已经使用这个 DNS IP 时，无需逐台改地址。仍要保留旧设备和配置，等运行稳定后再清理。
+
+这次切换可能短暂影响 DNS，不保证连接完全不中断。出现问题时，先从新设备移除接管的旧 DNS IP，确认地址已经空出，再恢复旧设备及其原地址绑定、DNS 服务和启动设置；不要让新旧设备同时抢占旧地址。
+
+**先保留新机的管理地址。** Agent 已登记的地址不会因为 Linux 改 IP 就自动跟随变化。上述步骤保留测试 IP，是为了继续通过原地址管理新 Agent；不要在切换 DNS 时顺手删除它。需要让新机最终只保留旧 IP，或同时迁移面板、Mihomo、HA 服务时，应另行安排对应管理地址和依赖关系的迁移。
+
+</details>
 
 <a id="verify"></a>
 ## 确认成功、发布与退回

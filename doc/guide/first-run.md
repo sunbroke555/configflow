@@ -1,3 +1,7 @@
+---
+outline: 2
+---
+
 [文档首页](../README.md)
 
 # 首次使用：让一台 Linux 帮家里分流
@@ -6,18 +10,7 @@
 
 这里的 **Agent 是设备上的小助手**，负责接受面板的设置；**Mihomo 核心实际处理网络连接，OxiDNS 核心实际处理 DNS 查询**。DNS 查询可以理解为“先问网站叫什么地址”，之后的连接才是访问网站的数据。DNS 去哪里查、连接走直连还是代理，是两个不同设置。
 
-本页目录：
-
-- [开始前准备](#prepare)
-- [第 1 步：选择使用方式](#choose)
-- [第 2 步：添加节点来源](#sources)
-- [第 3 步：选择规则与 DNS](#rules)
-- [第 4 步：安装与检查](#installation)
-- [第 5 步 A：接入主路由](#router)
-- [手动静态路由填写表：Fake-IP 与 Telegram](#manual-routes)
-- [第 5 步 B：设置测试客户端](#client)
-- [第 6 步：确认结果](#verify)
-- [中途退出、退回与后续修改](#return)
+前四步两种方案共用。到第 5 步，在选项卡中选择与你实际方案相同的接入方式，只看这一组操作。
 
 <a id="prepare"></a>
 ## 开始前准备
@@ -46,15 +39,31 @@
 | **Mihomo + OxiDNS 分流** | 新向导默认选中 | 能在主路由添加静态路由和修改 DNS。希望客户端继续使用原来的主路由作为网关时选它 | 网关仍是主路由；DNS 指向 OxiDNS。主路由把指定目标网段交给 Linux |
 | **Linux 网关** | 默认未选 | 不能或不想添加主路由静态路由，但能修改客户端网关和 DNS 时选它 | 测试设备的网关、DNS 都改为 Linux 的 IP |
 
+选择要查看的方案说明。截图只演示界面选择，还没有创建方案、安装或修改设备网络。
+
+<DocsTabs id="first-run-mode" label="查看使用方式" :tabs="[{ id: 'mode-router', label: '主路由分流' }, { id: 'mode-gateway', label: 'Linux 网关' }]">
+
+<template #mode-router>
+
+在向导中选择「Mihomo + OxiDNS 分流」，这是新向导的默认项；第 5 步显示「接入主路由」。
+
 ![首次向导默认选择 Mihomo 与 OxiDNS 分流](../img/guide/first-run-router.jpg)
 
-上图是默认选择：第 5 步显示「接入主路由」。下面选择「Linux 网关」后，第 5 步变成「客户端设置」。这是当前真实界面的隔离演示，两张图都还没有创建方案、安装或修改任何设备网络。
+这一方式使用「完整 TUN」：Mihomo 的虚拟网卡接收**已经被主路由转给 Linux**的连接，并按规则决定直连或代理。它不表示全家所有流量都会自动进入 Linux，也不表示全部走代理。
+
+</template>
+
+<template #mode-gateway>
+
+在向导中选择「Linux 网关」后，第 5 步变成「客户端设置」。
 
 ![首次向导选择 Linux 网关](../img/guide/first-run-gateway.jpg)
 
-第一种方式使用「完整 TUN」：Mihomo 的虚拟网卡接收**已经被主路由转给 Linux**的连接，并按规则决定直连或代理。它不表示全家所有流量都会自动进入 Linux，也不表示全部走代理。
+这一方式使用「选择性 TUN」：客户端先把连接交给 Linux，fake-IP 和选中的 IP 范围再交给 Mihomo，其余连接由 Linux 转发。fake-IP 是 Mihomo 用来识别域名的临时地址，不是网站真正的公网 IP。
 
-第二种方式使用「选择性 TUN」：客户端先把连接交给 Linux，fake-IP 和选中的 IP 范围再交给 Mihomo，其余连接由 Linux 转发。fake-IP 是 Mihomo 用来识别域名的临时地址，不是网站真正的公网 IP。
+</template>
+
+</DocsTabs>
 
 1. 按上表选择方式。
 2. 填「配置名称」，默认是「我的分流配置」，可改成容易认出的名字。
@@ -146,8 +155,15 @@ Linux 网关方案中，所选规则含 Telegram、Google 推送（FCM）时，�
 
 检查通过后，点击「继续接入主路由」或「继续设置测试客户端」。
 
-<a id="router"></a>
-## 第 5 步 A：接入主路由
+## 第 5 步：选择接入方式
+
+选择第 1 步实际采用的方案。手册中的切换不会改变向导已创建的配置，也不会修改设备网络。
+
+<DocsTabs id="first-run-connection" label="选择第 1 步使用的方案" :tabs="[{ id: 'router', label: '主路由分流' }, { id: 'client', label: 'Linux 网关' }]">
+
+<template #router>
+
+### 第 5 步 A：接入主路由
 
 仅适用于第 1 步选择「Mihomo + OxiDNS 分流」。客户端的默认网关仍然是原来的主路由。
 
@@ -156,21 +172,24 @@ Linux 网关方案中，所选规则含 Telegram、Google 推送（FCM）时，�
 | 手动配置主路由 | 默认选中 | 能自行管理静态路由和 DHCP DNS；不限品牌 | ConfigFlow 列出要填的值，你登录主路由修改；页面不能自动核验结果 |
 | 自动配置主路由 | 默认未选 | 使用 iKuai 4.x 或 RouterOS 7.1+，愿意提供管理连接信息 | 保存连接信息只是记录；检查连接、预览差异并确认发布后，才修改主路由 |
 
-<a id="manual-routes"></a>
-### 手动配置：路由表在哪里、具体填什么
+<DocsTabs id="first-run-router-method" label="主路由的配置方式" :tabs="[{ id: 'manual-routes', label: '手动配置主路由' }, { id: 'auto-routes', label: '自动配置主路由' }]">
+
+<template #manual-routes>
+
+#### 手动配置：路由表在哪里、具体填什么
 
 **网页里的表格位置：**打开 ConfigFlow 的「首次使用向导」→ 第 5 步「接入主路由」→ 选「手动配置主路由」→ 看「1. 在主路由添加静态路由」下面。
 
 要先在第 4 步完成 Mihomo、OxiDNS 的发布和安装检查，以及 IPv4 转发、TUN 检查，这里才会显示实际路由表。提前打开第 5 步只能看到“安装检查完成后，这里会列出……”的提示。下面把填写内容直接列在手册里，便于提前准备。
 
-#### 下一跳填写 Mihomo 所在设备的 IP
+##### 下一跳填写 Mihomo 所在设备的 IP
 
 **下一跳 = 运行 Mihomo、负责接收主路由转发连接的设备的局域网 IPv4。** 本向导把 Mihomo 装在 Linux 上，所以界面目前写“下一跳（Linux IP）”；它指的是这台 Mihomo 设备，不是任意一台 Linux。只有面板与 Mihomo 同机时，下一跳才与面板所在主机的 IP 相同。
 
 以下示例假设主路由是 `192.168.1.1`，Mihomo 设备是 `192.168.1.20`。把所有“下一跳”中的 `192.168.1.20` 换成你自己的 Mihomo 设备 IP。不要填主路由 IP、`127.0.0.1`，也不要加 `7890`、Agent 端口等端口号。
 
 <a id="fake-ip-route"></a>
-#### 先添加这一条：Mihomo Fake-IP
+##### 先添加这一条：Mihomo Fake-IP
 
 Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这段地址的连接交给 Mihomo。**保留默认范围时，填写下面这一行即可：**
 
@@ -184,7 +203,7 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 - 这里只添加指定网段，不修改主路由的默认路由；手机和电脑的默认网关仍然是主路由。
 
 <a id="telegram-routes"></a>
-#### 需要 Telegram 直接连 IP 的流量也交给 Mihomo 时
+##### 需要 Telegram 直接连 IP 的流量也交给 Mihomo 时
 
 **当前新建的“主路由分流”向导默认只列 Fake-IP。** 第 3 步在“代理规则”里选了 Telegram，并不等于已经把 Telegram 的 IP 网段加入主路由路由表。
 
@@ -209,7 +228,7 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 
 使用 iKuai 或 RouterOS、希望由 ConfigFlow 维护路由时，可到「上游路由 → 编辑路由器」，在「使用静态路由的 IP 规则集」（RouterOS）或「按 IP 路由给 Mihomo 的规则集」（iKuai）中选择 Telegram，再保存、查看差异报告、预览并确认发布。按设备范围分流时使用 RouterOS 的策略路由功能，见 [上游路由](../manual/routers.md)。这些是路由器页面的设置，不会让首次向导表自动同步显示 Telegram；也不要同时维护两份重复的手工和自动路由。
 
-#### 填完后如何确认
+##### 填完后如何确认
 
 1. 保存并启用主路由上的 Fake-IP 路由；需要 Telegram 真实 IP 分流时，再按上述条件添加其条目。
 2. 先在一台测试设备上将 DNS 改为 **OxiDNS 所在设备的 IP**，不填 Agent 端口。本向导同机安装时，它与 Mihomo IP 相同；分开部署时分别使用各自地址。全网验证后再考虑改主路由 DHCP DNS。
@@ -218,7 +237,11 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 
 不要另填一个绕过 OxiDNS 的备用 DNS。依赖 DNS 分流的设备若使用自己的安全 DNS／私有 DNS，也可能不经过这套规则，应在测试时核对。
 
-### 自动配置
+</template>
+
+<template #auto-routes>
+
+#### 自动配置
 
 1. 选择「自动配置主路由」，添加主路由管理地址和账号。
 2. 按页面先「检查连接」，确认识别的是目标主路由。
@@ -227,8 +250,15 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 
 安装还没结束时可以先填写主路由信息，但实际发布要等安装、核心发布与检查完成。更多字段和撤销方法见 [上游路由设置](../manual/routers.md)；其他品牌按手动流程处理。
 
-<a id="client"></a>
-## 第 5 步 B：设置测试客户端
+</template>
+
+</DocsTabs>
+
+</template>
+
+<template #client>
+
+### 第 5 步 B：设置测试客户端
 
 仅适用于第 1 步选择「Linux 网关」。这一方案不用在主路由添加静态路由。
 
@@ -239,6 +269,10 @@ Fake-IP 是 Mihomo 为分流使用的临时地址。主路由需要把发往这�
 5. 测试通过后，才在支持相应功能的主路由中用 DHCP 分发新的网关和 DNS；其他设备通常要重新联网或续租后生效。
 
 修改客户端网络设置的动作由你在设备上完成，页面不会远程替手机或电脑修改。
+
+</template>
+
+</DocsTabs>
 
 ### 是否设为默认配置空间
 

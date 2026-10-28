@@ -1,3 +1,7 @@
+---
+outline: 2
+---
+
 [文档首页](../README.md)
 
 # 安装 ConfigFlow 管理面板
@@ -6,17 +10,7 @@
 
 ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核心”才是实际处理连接或 DNS 查询的程序**。核心所在设备还需要一个 **Agent（设备上的小助手）**，负责接收配置、检查运行状态。面板与核心可以放在同一台机器，也可以分开放。
 
-本页目录：
-
-- [开始前准备](#prepare)
-- [用 Docker Compose 安装](#compose)
-- [用 docker run 安装](#docker-run)
-- [在 NAS 容器管理器中安装](#nas)
-- [第一次打开后的设置](#initial-settings)
-- [选择网络方式和修改端口](#network)
-- [确认安装成功](#verify)
-- [停止、更新与退回](#maintain)
-- [下一步](#next)
+先准备设备和地址，再选择一种安装方式。安装完成后，继续阅读共用的首次设置和检查步骤。
 
 <a id="prepare"></a>
 ## 开始前准备
@@ -42,10 +36,18 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 
 Host 不会给宿主机增加本来没有的 IPv6。宿主机仍需有可用 IPv6 地址、路由及允许访问的防火墙设置；Bridge 的 IPv6 则取决于 Docker 网络配置。这里只选择面板容器的网络，不会替你改变 Agent 容器的网络。
 
-<a id="compose"></a>
-## 用 Docker Compose 安装
+<a id="install-methods"></a>
+## 选择一种安装方式
 
-### 1. 建立部署目录
+点击适合自己的方式，只需完成该页签中的步骤。首次安装推荐 Docker Compose，后续改端口或更新时比较方便。
+
+<DocsTabs id="panel-install-method" label="选择安装方式" :tabs="[{ id: 'compose', label: 'Docker Compose（推荐）' }, { id: 'docker-run', label: 'docker run' }, { id: 'nas', label: 'NAS 容器管理器' }]">
+
+<template #compose>
+
+### 用 Docker Compose 安装
+
+#### 1. 建立部署目录
 
 ```bash
 mkdir -p "$HOME/configflow/data"
@@ -98,27 +100,11 @@ services:
 
 Bridge 版通过 `5010:80` 把外部访问送进容器。Host 版不需要 `ports`，直接通过 `CONFIGFLOW_WEB_PORT` 指定 `8088`；这个环境变量存在时，网页里的 Web 监听端口会显示只读。希望以后从网页改端口时，先阅读 [环境变量与 Web 设置的关系](#port-priority)。
 
-<a id="deployment-parameters"></a>
-### 2. 看懂需要修改的地方
+#### 2. 看懂需要修改的地方
 
-| 设置 | 本例值／默认行为 | 什么时候修改 | 修改后的结果与生效时间 |
-| --- | --- | --- | --- |
-| `image` | `thsrite/config-flow:latest` | 普通安装使用这个官方面板镜像；需要固定版本时使用已发布的具体标签或摘要 | 拉取镜像、重新创建容器后生效。它不是 Agent 镜像。 |
-| `ports`（Bridge） | `5010:80` | 访问端口冲突时，只把左边 `5010` 改成其他空闲端口 | 左边是设备对外端口，右边是容器内端口。重新创建后按新端口打开浏览器。Host 版不填写此项。 |
-| `network_mode`（Host） | `host` | 选择 Host 版时保留 | 共用宿主机网络；不是额外创建一个独立 IP。Bridge 版无需填写此项。 |
-| `CONFIGFLOW_WEB_PORT`（Host） | 本例为 `8088` | `8088` 已被占用时改成其他空闲端口 | 明确指定实际 Web 端口，优先于网页保存值；网页端口只读。重建容器后生效。 |
-| `volumes` | `./data:/data` | NAS 或迁移旧实例时，改成自己的实际数据目录 | 左边的文件保存在设备上，右边 `/data` 保持不变。更新时必须继续使用同一个目录。 |
-| `DATA_DIR` | `/data` | 按本例挂载时保持不变 | 告诉程序把数据存到容器的 `/data`；它应与挂载右侧一致。 |
-| `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 仓库示例默认不启用；本例已填写，建议保留登录保护 | 首次安装时设置自己的账号和密码 | 两项都非空才启用登录。只设置一项不会启用。修改后需重新创建容器。 |
-| `JWT_SECRET_KEY` | 本例要求自行填写 | 首次安装设置足够长的随机字符串 | 用于保护登录会话。更新容器时保留原值；更换后原登录会话失效。 |
-| `TZ` | `Asia/Shanghai` | 希望服务使用其他时区时 | 重新创建容器后生效。 |
-| `restart` | `unless-stopped` | 普通安装保留 | Docker 启动后会按此策略恢复容器；你主动停止的容器需自行启动。 |
+启动前，按本页的 [账号、目录与其他参数](#deployment-parameters) 核对自己的值。该说明也适用于 docker run 和 NAS 安装。
 
-`./data` 是部署文件所在目录下面的 `data`，不是浏览器所在电脑的目录。已有实例不要随意换目录，否则会像新安装一样显示空配置。
-
-一般不需要另外设置 `CONFIGFLOW_HTTP_THREADS`（默认 `8`，允许 `1–64`，控制服务同时处理请求的数量）或 `LOG_LEVEL`（默认 `INFO`，控制日志详细程度）。`LOG_LEVEL=DEBUG` 会启用开发调试模式，不建议普通部署长期开启。修改环境变量后需重新创建容器。
-
-### 3. 启动
+#### 3. 启动
 
 在 `compose.yaml` 所在目录执行：
 
@@ -131,7 +117,7 @@ docker compose ps
 
 这几条命令依次检查部署文件、下载镜像、创建并启动容器、查看状态。若报错，先处理报错，不要继续改家里的网关或 DNS。
 
-### 4. 打开管理页面
+#### 4. 打开管理页面
 
 按所选模式打开：
 
@@ -142,12 +128,15 @@ docker compose ps
 
 将 `192.168.1.10` 换成安装设备的实际 IP；改过端口就使用新端口。用刚设置的账号密码登录。只有浏览器和容器运行在同一台电脑上时，才可以把设备 IP 写成 `localhost`。
 
-<a id="docker-run"></a>
-## 用 docker run 安装
+</template>
 
-没有使用 Compose、希望直接创建容器时，可以选这组命令。**已经按上一节安装成功的用户跳过本节。**
+<template #docker-run>
 
-先替换账号、密码和登录密钥。命令中的 `$HOME/configflow/data` 是当前执行用户主目录下的固定数据目录；已有数据或 NAS 用户应把它改成自己的实际绝对路径，例如 `/volume1/docker/configflow/data`，并保证目录存在。不要在升级时换成另一个用户的主目录。
+### 用 docker run 安装
+
+希望直接用命令创建容器时，完成这一页签即可。已经使用其他方式安装成功的用户，不要再次创建。
+
+先按 [账号、目录与其他参数](#deployment-parameters) 替换账号、密码和登录密钥。命令中的 `$HOME/configflow/data` 是当前执行用户主目录下的固定数据目录；已有数据或 NAS 用户应把它改成自己的实际绝对路径，例如 `/volume1/docker/configflow/data`，并保证目录存在。不要在升级时换成另一个用户的主目录。
 
 ::: code-group
 
@@ -187,21 +176,24 @@ docker run -d \
 
 :::
 
-Bridge 使用 `-p 5010:80`，从 `http://设备IP:5010` 访问；Host 使用 `--network host`，不加 `-p`，从 `http://设备IP:8088` 访问。Host 的网页端口只读、其他端口冲突和 IPv6 条件与上面的 Compose Host 版相同。
+Bridge 使用 `-p 5010:80`，从 `http://设备IP:5010` 访问；Host 使用 `--network host`，不加 `-p`，从 `http://设备IP:8088` 访问。Host 的网页端口只读；还需检查 `5001`、`3001` 是否占用。IPv6 使用宿主机已有的网络能力，详见 [网络方式和端口](#network)。
 
 命令执行后，可以运行 `docker ps --filter name=config-flow` 查看状态，运行 `docker logs --tail=100 config-flow` 查看启动信息。Docker 会在本机没有镜像时尝试下载；若下载或创建报错，先处理报错。
 
 保存你实际使用的完整命令，尤其是数据路径、账号、密码、密钥、网络方式和端口。以后更新或改参数需要用它重建容器；原样再次执行 `docker run` 会因同名容器已存在而失败。更新步骤见 [停止、更新与退回](#maintain)。
 
-<a id="nas"></a>
-## 在 NAS 容器管理器中安装
+</template>
+
+<template #nas>
+
+### 在 NAS 容器管理器中安装
 
 NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即可。
 
 1. 打开 NAS 的容器管理器，选择“项目”“Compose”或“从 YAML 创建”。
-2. 建立一个独立的 ConfigFlow 项目，从 Compose 代码框选择 Bridge 或 Host，粘贴对应的完整内容。
+2. 建立一个独立的 ConfigFlow 项目。切到 [Docker Compose 页签](#compose)，选择 Bridge 或 Host 并复制完整内容，再回到 NAS 的项目编辑器粘贴。
 3. 将 `./data:/data` 改成 NAS 上的实际目录，例如 `/volume1/docker/configflow/data:/data`。确认这个目录可写。
-4. 设置账号、密码、密钥。Bridge 检查 `5010` 没被占用；Host 检查 `8088`、`5001`、`3001` 没被占用，保留 `CONFIGFLOW_WEB_PORT=8088`。
+4. 按 [共用参数说明](#deployment-parameters) 设置账号、密码、密钥。Bridge 检查 `5010` 没被占用；Host 检查 `8088`、`5001`、`3001` 没被占用，保留 `CONFIGFLOW_WEB_PORT=8088`。
 5. 点击管理器中的部署／启动，等容器状态变为运行。
 6. Bridge 用 `http://NAS的IP:5010`，Host 用 `http://NAS的IP:8088` 打开面板。
 
@@ -217,6 +209,32 @@ NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即�
 | 启动命令 | 使用镜像默认值，不另填 | 同左 |
 
 NAS 部署和命令行部署二选一，不要为同一数据目录同时启动两个面板容器。
+
+</template>
+
+</DocsTabs>
+
+<a id="deployment-parameters"></a>
+## 账号、目录与其他参数
+
+三种安装方式都要核对这些设置。Compose 用文件里的字段，docker run 使用对应的命令参数，NAS 则在容器管理器中填写。
+
+| 设置 | 本例值／默认行为 | 什么时候修改 | 修改后的结果与生效时间 |
+| --- | --- | --- | --- |
+| `image` | `thsrite/config-flow:latest` | 普通安装使用这个官方面板镜像；需要固定版本时使用已发布的具体标签或摘要 | 拉取镜像、重新创建容器后生效。它不是 Agent 镜像。 |
+| `ports`（Bridge） | `5010:80` | 访问端口冲突时，只把左边 `5010` 改成其他空闲端口 | 左边是设备对外端口，右边是容器内端口。重新创建后按新端口打开浏览器。Host 版不填写此项。 |
+| `network_mode`（Host） | `host` | 选择 Host 版时保留 | 共用宿主机网络；不是额外创建一个独立 IP。Bridge 版无需填写此项。 |
+| `CONFIGFLOW_WEB_PORT`（Host） | 本例为 `8088` | `8088` 已被占用时改成其他空闲端口 | 明确指定实际 Web 端口，优先于网页保存值；网页端口只读。重建容器后生效。 |
+| `volumes` | `./data:/data` | NAS 或迁移旧实例时，改成自己的实际数据目录 | 左边的文件保存在设备上，右边 `/data` 保持不变。更新时必须继续使用同一个目录。 |
+| `DATA_DIR` | `/data` | 按本例挂载时保持不变 | 告诉程序把数据存到容器的 `/data`；它应与挂载右侧一致。 |
+| `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 仓库示例默认不启用；本例已填写，建议保留登录保护 | 首次安装时设置自己的账号和密码 | 两项都非空才启用登录。只设置一项不会启用。修改后需重新创建容器。 |
+| `JWT_SECRET_KEY` | 本例要求自行填写 | 首次安装设置足够长的随机字符串 | 用于保护登录会话。更新容器时保留原值；更换后原登录会话失效。 |
+| `TZ` | `Asia/Shanghai` | 希望服务使用其他时区时 | 重新创建容器后生效。 |
+| `restart` | `unless-stopped` | 普通安装保留 | Docker 启动后会按此策略恢复容器；你主动停止的容器需自行启动。 |
+
+`./data` 是部署文件所在目录下面的 `data`，不是浏览器所在电脑的目录。已有实例不要随意换目录，否则会像新安装一样显示空配置。
+
+一般不需要另外设置 `CONFIGFLOW_HTTP_THREADS`（默认 `8`，允许 `1–64`，控制服务同时处理请求的数量）或 `LOG_LEVEL`（默认 `INFO`，控制日志详细程度）。`LOG_LEVEL=DEBUG` 会启用开发调试模式，不建议普通部署长期开启。修改环境变量后需重新创建容器。
 
 <a id="initial-settings"></a>
 ## 第一次打开后的设置
