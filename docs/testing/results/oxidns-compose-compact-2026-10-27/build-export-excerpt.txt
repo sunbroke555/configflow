@@ -1,0 +1,24 @@
+Source: tool output captured while reading the actual BuildKit build.log immediately after the final build on 192.168.0.32.
+Product source: 9d2d77cd2b8e4992389bf3e1c31569268b1e0c5a
+Image tag: cf-compose-compact:20261027
+This is a preserved excerpt, not a post-cleanup OCI manifest read. The original private build directory, raw log and image archive were removed during cleanup.
+
+#36 exporting layers
+#36 exporting layers 1.8s done
+#36 exporting manifest sha256:7a80c24cebcb97a841e0573c5689946ad7dbe11b8b70955a7ea55b136e20c1b8 0.0s done
+#36 exporting config sha256:3cbdb068e3e877aa2948eb10eaf353a0c5ac589e827d6ba7634cd3aa8ae9b130 0.0s done
+#36 exporting attestation manifest sha256:390fdfa6b9591b77cd730974c44a3f034518ef6569371c33856b4819f71afeb9
+#36 exporting attestation manifest sha256:390fdfa6b9591b77cd730974c44a3f034518ef6569371c33856b4819f71afeb9 0.1s done
+#36 exporting manifest list sha256:d2feeaf5ed855df6ec3332fd32f8b9dd7ecfe0bb6fd8ce2c8efd546d2284e99e 0.0s done
+#36 naming to docker.io/library/cf-compose-compact:20261027
+#36 naming to docker.io/library/cf-compose-compact:20261027 0.0s done
+#36 unpacking to docker.io/library/cf-compose-compact:20261027
+#36 unpacking to docker.io/library/cf-compose-compact:20261027 1.3s done
+#36 DONE 3.4s
+
+The same completed build command reported docker image inspect .Id:
+{"image_ready": true, "image_id": "sha256:d2feeaf5ed855df6ec3332fd32f8b9dd7ecfe0bb6fd8ce2c8efd546d2284e99e"}
+
+Both actual test containers reported docker container inspect .Image:
+sha256:3cbdb068e3e877aa2948eb10eaf353a0c5ac589e827d6ba7634cd3aa8ae9b130
+See lab-report.json runtime_image_ids for the separately collected Host and macvlan results.

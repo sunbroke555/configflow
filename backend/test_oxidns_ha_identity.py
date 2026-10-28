@@ -85,17 +85,18 @@ def test_explicit_unknown_identity_source_fails_closed(pair, monkeypatch, source
     assert all(call[0] == 'capabilities' for call in devices.calls)
 
 
-def test_live_environment_exposes_only_valid_identity_evidence(authenticated_app, monkeypatch):
+@pytest.mark.parametrize('source', ['docker-volume', 'installation'])
+def test_live_environment_exposes_only_valid_identity_evidence(authenticated_app, monkeypatch, source):
     client, manager, _, admin, _ = authenticated_app
     agent = manager.register_agent({'name': 'volume-oxidns', 'host': '192.168.10.20', 'port': 8082,
                                     'service_type': 'oxidns', 'deployment_method': 'docker'})
     environment = {'kind': 'container', 'ready': True, 'host_id': 'a' * 64,
-                   'host_id_source': 'docker-volume', 'host_boot_id': 'b' * 64,
+                   'host_id_source': source, 'host_boot_id': 'b' * 64,
                    'raw_identity': 'must-not-return', 'blockers': []}
     monkeypatch.setattr(manager, '_deployment_request', lambda *args, **kwargs: {'oxidns_ha_environment': environment})
     endpoint = '/api/agents/' + agent['id'] + '/oxidns-ha-environment'
     result = client.get(endpoint, headers=admin).get_json()['oxidns_ha_environment']
-    assert result['host_id_source'] == 'docker-volume' and result['host_boot_id'] == 'b' * 64
+    assert result['host_id_source'] == source and result['host_boot_id'] == 'b' * 64
     assert 'raw_identity' not in result
     environment.update(host_id_source='unexpected', host_boot_id='not-a-hash')
     result = client.get(endpoint, headers=admin).get_json()['oxidns_ha_environment']

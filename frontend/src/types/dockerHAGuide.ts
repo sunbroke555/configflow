@@ -20,7 +20,7 @@ export interface DockerHAHostForm {
 }
 export interface DockerHAGuideRequest extends Partial<DockerHAHostForm> {
   action?: 'inspect' | 'generate' | 'verify' | 'check'
-  install_method?: 'compose_direct' | 'compose' | 'script'
+  install_method?: 'compose_compact' | 'compose_direct' | 'compose' | 'script'
   output?: string
   vip?: string
   server_url?: string
@@ -41,7 +41,8 @@ export interface DockerHAComposeDeployment {
   filename: string
   project_name: string
   command: string
-  identity_mode: 'file' | 'docker-volume'
+  identity_mode: 'file' | 'docker-volume' | 'installation'
+  service_count?: number
 }
 export interface DockerHAGuideResult {
   success: boolean
@@ -71,7 +72,7 @@ export interface DockerHAEnvironment {
     ready: boolean
     network?: string
     host_id?: string
-    host_id_source?: 'file' | 'docker-volume' | 'unknown'
+    host_id_source?: 'file' | 'docker-volume' | 'installation' | 'unknown'
     host_boot_id?: string
     blockers?: string[]
   }

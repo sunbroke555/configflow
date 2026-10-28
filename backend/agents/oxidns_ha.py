@@ -189,13 +189,13 @@ def validate_pair_environments(members, capabilities):
             detail = '；'.join(blockers) or '请按 Docker 高可用部署说明升级并重新创建容器'
             raise HAError(f'{_name(member)} 的 Docker 高可用环境未就绪：{detail}', blockers=blockers)
     sources = [env.get('host_id_source', 'file') for env in environments]
-    if any(source not in ('file', 'docker-volume') for source in sources):
+    if any(source not in ('file', 'docker-volume', 'installation') for source in sources):
         raise HAError('宿主机身份来源无效，请升级两端 Agent 后重试')
     boot_ids = [env.get('host_boot_id') for env in environments]
     valid_boot_ids = [isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
                       for value in boot_ids]
-    if 'docker-volume' in sources and not all(valid_boot_ids):
-        raise HAError('Docker 身份卷需要确认两台独立宿主机的实时启动身份；请升级两端 Agent，'
+    if any(source in ('docker-volume', 'installation') for source in sources) and not all(valid_boot_ids):
+        raise HAError('Docker 安装身份需要确认两台独立宿主机的实时启动身份；请升级两端 Agent，'
                       '并为容器只读挂载宿主 boot_id 后重试')
     if all(valid_boot_ids) and boot_ids[0] == boot_ids[1]:
         raise HAError('两台 OxiDNS 实际位于同一台宿主机，无法提供主机故障接管；请部署到两台独立设备')

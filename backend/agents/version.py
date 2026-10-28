@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.48-go"
+LATEST_AGENT_VERSION = "1.8.49-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.49-go": {
+        "date": "2026-10-27",
+        "features": [
+            "OxiDNS 高可用精简 Compose：镜像自动完成初始化与登记，Host 两个服务、macvlan 一个服务，无独立初始化容器或共享身份卷",
+            "安装身份随 Agent 数据持久保存，结合只读宿主启动证据核对独立主机，保留旧版文件与身份卷兼容"
+        ]
+    },
     "1.8.48-go": {
         "date": "2026-10-27",
         "features": [
