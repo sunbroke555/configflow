@@ -261,6 +261,17 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 修复提示依据：[Linux TUN/TAP 驱动](https://kernel.org/doc/html/v5.19/networking/tuntap.html)、[PVE 设备直通参数](https://github.com/proxmox/pve-docs/blob/master/generated/pct.1-synopsis.adoc)、[systemd 模块加载格式](https://www.freedesktop.org/software/systemd/man/latest/modules-load.d.html)、[OpenRC modules 服务](https://github.com/OpenRC/openrc/blob/master/init.d/modules.in)、[systemd 容器检测实现](https://github.com/systemd/systemd/blob/main/src/basic/virt.c)、[systemd sysctl 配置优先级](https://www.freedesktop.org/software/systemd/man/257/sysctl.d.html)。持久化配置只能证明发现了设置，不能保证之后没有其他服务覆盖，需在维护时重启验证。
 
+## Shell DNS 高可用安装
+
+进入 **系统 → Agent → 生成安装脚本 → Shell 安装 → 单服务 → OxiDNS → 高可用安装**。
+
+1. **安装与准备**：未安装时填写当前主机的信息；没有 OxiDNS 核心则勾选同时安装核心。两台 Shell 分别生成各自的命令，已有 OxiDNS Agent 无需重装。
+2. Shell 端以 root 运行 Agent，使用 systemd / OpenRC，并安装 `keepalived` 和 `ip` 工具；界面提供按系统选择的依赖安装命令。
+3. **验证与配对**：刷新列表，选择两台 OxiDNS Agent，再刷新读取真实环境。支持 Shell + Shell、Shell + Docker；两端需位于不同主机、同一网段并绑定同一配置空间。
+4. 检查通过后进入高可用设置，填写未占用的 VIP 并开启。开启会进一步检查依赖、权限和 DNS 配置，再同步主备配置；完成后按界面命令验证 VIP，最后将客户端 DNS 改为 VIP。
+
+Shell Agent 卡片的 **DNS 高可用 → 设置 → 打开高可用安装引导** 会直接进入配对并预选本机。Docker 端使用下述 Docker 引导；Shell 端不需要安装 Docker。生成命令或基础环境返回成功不代表高可用已开启。
+
 ## Docker
 
 统一镜像新增 `SERVICE_TYPE=oxidns` 和 `ENABLE_OXIDNS=true`，Agent 默认端口 `8082`。示例见 [docker-compose-oxidns.yaml](../docker/docker-compose-oxidns.yaml)。使用新增功能前必须构建或拉取包含本次适配的新 Agent 镜像。

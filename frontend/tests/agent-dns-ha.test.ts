@@ -400,3 +400,15 @@ describe('disabling DNS high availability', () => {
     expect(agentApi.removeDNSHA).toHaveBeenLastCalledWith('oxi-1', true)
   })
 })
+
+
+describe('service-specific high availability installation entry', () => {
+  it.each(['shell', 'docker'])('offers the installation guide for a %s member without enabling HA', async deployment => {
+    const wrapper = render({ deployment_method: deployment })
+    await click('设置 DNS 高可用')
+    await click('打开高可用安装引导')
+    expect(wrapper.emitted('install-guide')).toHaveLength(1)
+    expect(agentApi.setDNSHA).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+})
