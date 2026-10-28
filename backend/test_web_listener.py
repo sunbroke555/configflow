@@ -2,7 +2,6 @@
 
 import fcntl
 import json
-import socket
 
 import pytest
 from flask import Flask
