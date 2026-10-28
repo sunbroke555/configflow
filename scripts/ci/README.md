@@ -1,6 +1,6 @@
 # 回归检查与测试分片
 
-这里面向项目维护者。普通安装无需运行测试，部署步骤见 [README](../../README.md#快速开始)。命令与当前 [checks.yml](../../.github/workflows/checks.yml) 和 [分片工具](shard_tests.py) 对齐。
+这里面向项目维护者。普通安装无需运行测试，部署步骤见 [README](../../doc/guide/install.md)。命令与当前 [checks.yml](../../.github/workflows/checks.yml) 和 [分片工具](shard_tests.py) 对齐。
 
 ## 工作流何时运行
 

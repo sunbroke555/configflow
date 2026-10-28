@@ -1,0 +1,151 @@
+{
+  "capturedAt": "2026-10-28T10:17:55.865Z",
+  "source": "当前仓库真实 Vue 前端 + Flask API",
+  "mock": false,
+  "captures": [
+    {
+      "file": "first-run-router.jpg",
+      "scene": "首次向导：默认 Mihomo + OxiDNS 分流",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "first-run-gateway.jpg",
+      "scene": "首次向导：选择 Linux 网关",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "panel-service-settings.jpg",
+      "scene": "系统设置：演示服务域名；独立开发服务不支持容器监听端口设置",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "agent-shell-single-default.jpg",
+      "scene": "普通 Shell 单独 Mihomo：两个勾选的默认状态",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "agent-shell-single-choices.jpg",
+      "scene": "普通 Shell 单独 Mihomo：安装核心并跳过管理 IPv4 转发",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "agent-shell-aio.jpg",
+      "scene": "Shell 同机双服务：核心安装默认为未勾选",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "agent-docker-single.jpg",
+      "scene": "Docker 单独 Mihomo：默认 bridge 与 Agent 端口",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "agent-docker-aio.jpg",
+      "scene": "Docker 同机 Mihomo + OxiDNS：两个 Agent 端口",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "oxidns-docker-ha-prepare.jpg",
+      "scene": "Docker HA：准备环境与默认 Host 模式",
+      "viewport": {
+        "width": 1280,
+        "height": 2400
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "oxidns-docker-ha-host.jpg",
+      "scene": "Docker HA：Host 主机字段，示例地址与目录",
+      "viewport": {
+        "width": 1280,
+        "height": 2400
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "oxidns-docker-ha-macvlan.jpg",
+      "scene": "Docker HA：macvlan 网络字段，示例地址与网卡",
+      "viewport": {
+        "width": 1280,
+        "height": 2400
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "oxidns-ha-pair-empty.jpg",
+      "scene": "Docker HA：尚无设备时的验证与配对页",
+      "viewport": {
+        "width": 1280,
+        "height": 2400
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
+    {
+      "file": "oxidns-shell-ha-prepare.jpg",
+      "scene": "Shell OxiDNS HA：准备安装，安装核心默认勾选",
+      "viewport": {
+        "width": 1280,
+        "height": 2400
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    }
+  ],
+  "browserErrors": []
+}

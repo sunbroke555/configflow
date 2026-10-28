@@ -1,5 +1,7 @@
 # Docker / NAS 部署指南
 
+> 新手请先阅读[新版操作手册](../guide/install.md)，包含选项建议、操作结果和当前页面说明。本页保留作为补充资料。
+
 本文适用于普通 Docker 主机。RouterOS Container 请使用 [专门安装指南](../../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
 
 镜像包含前端、Python 后端、Sub-Store 和节点测速组件。准备好 Docker 与 Compose 后，按下面四步操作。
@@ -59,7 +61,7 @@ docker compose ps
 
 1. 「服务域名」填写完整地址，例如 `http://192.168.1.10:5010`。其他设备不能使用浏览器自己的 `localhost`。
 2. 生成并保存「访问令牌」，之后通过页面复制配置 URL。
-3. 按 [第一次使用](../../README.md#第一次使用) 添加资源并生成配置。
+3. 按 [第一次使用](../guide/first-run.md) 添加资源并生成配置。
 
 访问令牌同时授权 MCP 管理工具，含令牌的订阅链接需要像密码一样保管。
 
@@ -186,7 +188,7 @@ docker run --pull=always -d \
 | 更新后配置变空 | 先检查 `docker inspect config-flow` 中的 Mounts 是否仍指向原数据目录，保留现有文件并查看迁移日志 |
 | Sub-Store 显示休眠 | 按需模式下属正常状态；转换任务会唤醒，失败时在第三方依赖查看原因 |
 | 旧版还有 sub-store 服务 | 当前镜像内置组件，旧独立服务及 `SUB_STORE_URL` 环境变量不再使用 |
-| 需要详细日志或调整线程 | 参阅 [README 部署参数](../../README.md#部署参数)；`DEBUG` 会启用开发调试模式 |
+| 需要详细日志或调整线程 | 参阅 [README 部署参数](../maintenance.md#部署参数)；`DEBUG` 会启用开发调试模式 |
 
 ## 实现参考
 

@@ -1,5 +1,7 @@
 # 安装与入门指南
 
+> 安装步骤已整理到[新版安装指南](guide/install.md)和[首次使用向导](guide/first-run.md)，建议从新版开始。
+
 普通 Docker / NAS 主机按下文操作。RouterOS Container 请阅读 [ConfigFlow + RouterOS](../docs/CONFIGFLOW_AGENT_ROUTEROS_INSTALL.md)。
 
 ## 启动面板
@@ -42,7 +44,7 @@ docker compose up -d
 
 按顺序操作：新建并选择配置空间 → 添加订阅并手动更新 → 创建引用订阅的策略组 → 添加规则并把 `MATCH` 排在最后 → 生成、下载并导入客户端。
 
-每一步的填写示例见 [README 第一次使用](../README.md#第一次使用)。手动节点在策略组的「节点」来源中选择；共享资源不会自动加入每个新配置。
+每一步的填写示例见 [README 第一次使用](guide/first-run.md)。手动节点在策略组的「节点」来源中选择；共享资源不会自动加入每个新配置。
 
 ## 后续维护
 
