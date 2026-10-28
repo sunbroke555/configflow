@@ -6,7 +6,7 @@ defineProps<{ existingAgent?: boolean }>()
   <section class="flex min-w-0 flex-col gap-3 text-[13px] leading-relaxed" aria-label="Shell 高可用安装准备">
     <p class="m-0">填写这一台的信息，复制一条命令执行；脚本会自动检查系统并补齐 keepalived、ip 等高可用工具。</p>
     <p v-if="existingAgent" class="m-0">已有 Agent 可直接验证与配对。缺少依赖时重新运行自动准备命令；脚本沿用本机已有身份、端口和核心路径，保留现有核心。</p>
-    <p v-else class="m-0">默认同时安装 OxiDNS 与 Agent，保留已有程序和配置。首次接管自定义核心时可取消勾选，填写实际路径和服务设置。</p>
+    <p v-else class="m-0">已有 Agent 会沿用本机配置。首次接管自定义核心时，取消勾选并填写实际路径和服务设置。</p>
     <p class="m-0">两台独立、同网段的 Linux 主机分别执行各自命令；Docker 端从上方切换至 Docker 高可用安装。</p>
     <details class="min-w-0">
       <summary class="min-h-11 cursor-pointer py-3 font-medium">支持的系统与安装范围</summary>

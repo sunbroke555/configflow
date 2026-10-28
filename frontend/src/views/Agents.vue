@@ -514,7 +514,13 @@
               同时安装 {{ shellAio ? 'Mihomo 与 OxiDNS' : scriptForm.type === 'mihomo' ? 'Mihomo' : 'OxiDNS' }} 核心
             </label>
             <p :id="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" class="m-0 pl-6 text-[12px] leading-relaxed text-muted-foreground">
-              {{ combinedCoreInstall ? '保留已有核心，仅补装缺少部分；使用默认路径。' : showShellHAGuide ? '保留已有核心，仍自动准备高可用依赖；首次接管自定义核心时填写实际路径和服务设置。' : '未勾选时仅安装 Agent，接管已有核心。' }}
+              {{ showShellHAGuide
+                ? combinedCoreInstall
+                  ? '新主机自动安装 OxiDNS；已有核心和配置保留。'
+                  : '使用本机已有的 OxiDNS，仅安装 Agent 和高可用依赖。'
+                : combinedCoreInstall
+                  ? '保留已有核心，仅补装缺少部分；使用默认路径。'
+                  : '未勾选时仅安装 Agent，接管已有核心。' }}
             </p>
           </div>
 
@@ -572,7 +578,9 @@
                 <ChevronDown class="size-3.5 shrink-0 transition-transform" :class="lifecyclePanelOpen && 'rotate-180'" />
               </CollapsibleTrigger>
               <CollapsibleContent class="space-y-4 pb-4">
-                <p v-if="singleCoreInstall" class="m-0 text-[12px] text-muted-foreground">同时安装核心时使用默认路径；接管自定义部署请取消勾选。</p>
+                <p v-if="singleCoreInstall" class="m-0 text-[12px] text-muted-foreground">
+                  {{ showShellHAGuide ? '新装核心使用默认路径；已有 Agent 沿用本机配置。' : '同时安装核心时使用默认路径；接管自定义部署请取消勾选。' }}
+                </p>
                 <FormField label="配置文件路径" html-for="agent-config-path" hint="填写目标设备上实际使用的配置文件完整路径。" :help="optionHelp('接管已有核心，且配置不在默认位置时填写。', '使用目标设备上的完整路径，必须含文件名，如 /etc/mihomo/config.yaml。Agent 按此位置管理配置，应与现有服务实际读取的位置一致。')">
                   <Input id="agent-config-path" :model-value="singleServiceSettings.config_path" :disabled="singleCoreInstall" @update:model-value="scriptForm.config_path = String($event ?? '')" class="min-h-11 bg-background/50 font-mono" placeholder="/etc/mihomo/config.yaml" />
                 </FormField>
