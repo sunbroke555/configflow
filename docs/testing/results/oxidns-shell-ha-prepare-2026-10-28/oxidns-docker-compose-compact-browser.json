@@ -1,0 +1,49 @@
+{
+  "started_at": "2026-10-27T16:02:18.905Z",
+  "preview": "http://192.168.0.32:15810",
+  "cases": [
+    {
+      "width": 1440,
+      "theme": "light",
+      "network": "host",
+      "identity_mode": "installation",
+      "service_count": 2,
+      "download_bytes_equal": true,
+      "clipboard_equal": true,
+      "no_sidecar_files": true,
+      "no_identity_form": true,
+      "single_host_shortcut": true,
+      "script_and_migration": true,
+      "mixed_pair_help": true,
+      "entry_under_oxidns": true,
+      "no_top_level_ha": true,
+      "ordinary_form_preserved": true,
+      "overflow": false
+    },
+    {
+      "width": 375,
+      "theme": "dark",
+      "network": "macvlan",
+      "identity_mode": "installation",
+      "service_count": 1,
+      "download_bytes_equal": true,
+      "clipboard_equal": true,
+      "no_sidecar_files": true,
+      "no_identity_form": true,
+      "single_host_shortcut": true,
+      "script_and_migration": true,
+      "mixed_pair_help": true,
+      "entry_under_oxidns": true,
+      "no_top_level_ha": true,
+      "ordinary_form_preserved": true,
+      "overflow": false
+    }
+  ],
+  "downloads": 4,
+  "clipboard_check": "UI copy action recorded at browser clipboard API; exact response equality asserted",
+  "installed_or_registered": false,
+  "errors": 0,
+  "entry_asset": "/assets/index-DxnFnnox.js",
+  "status": "passed",
+  "finished_at": "2026-10-27T16:02:25.479Z"
+}

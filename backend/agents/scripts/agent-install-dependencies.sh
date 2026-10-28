@@ -29,10 +29,37 @@ agent_collect_dependencies() {
             fi
             continue
         fi
+        if [ "$agent_tool" = ha_ip ]; then
+            # BusyBox ip lacks JSON output required by the HA Agent.
+            if ! command -v ip >/dev/null 2>&1 || ! ip -j -4 addr show >/dev/null 2>&1; then
+                AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }iproute2(JSON)"
+                case "$AGENT_PACKAGE_MANAGER" in
+                    dnf|yum) agent_add_package iproute ;;
+                    *) agent_add_package iproute2 ;;
+                esac
+            fi
+            continue
+        fi
+        if [ "$agent_tool" = ha_service ]; then
+            if [ "$INIT_SYSTEM" = openrc ]; then
+                if [ ! -x /etc/init.d/keepalived ]; then
+                    AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }keepalived(OpenRC服务)"
+                    if [ "$AGENT_PACKAGE_MANAGER" = apk ]; then agent_add_package keepalived-openrc; else agent_add_package keepalived; fi
+                fi
+            else
+                agent_keepalived_unit=$(systemctl show keepalived.service --property=LoadState --value 2>/dev/null) || agent_keepalived_unit=""
+                case "$agent_keepalived_unit" in
+                    loaded|masked) ;;
+                    *) AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }keepalived(systemd服务)"; agent_add_package keepalived ;;
+                esac
+            fi
+            continue
+        fi
         if ! command -v "$agent_tool" >/dev/null 2>&1; then
             AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }$agent_tool"
             case "$agent_tool" in
                 awk) agent_add_package gawk ;;
+                keepalived|jq) agent_add_package "$agent_tool" ;;
                 grep|sed) agent_add_package "$agent_tool" ;;
                 cmp) agent_add_package diffutils ;;
                 sysctl)

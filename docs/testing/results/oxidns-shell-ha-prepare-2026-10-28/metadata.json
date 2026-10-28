@@ -1,0 +1,168 @@
+{
+  "started_at": 1793115333.4943905,
+  "finished_test_at": 1793117211.2077255,
+  "systems": [
+    {
+      "id": 190,
+      "name": "debian",
+      "template": "debian-12-standard_12.12-1_amd64.tar.zst",
+      "os_release": "PRETTY_NAME=\"Debian GNU/Linux 12 (bookworm)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"12\"\nVERSION=\"12 (bookworm)\"\nVERSION_CODENAME=bookworm\nID=debian\nHOME_URL=\"https://www.debian.org/\"\nSUPPORT_URL=\"https://www.debian.org/support\"\nBUG_REPORT_URL=\"https://bugs.debian.org/\"\n",
+      "actual_versions": [
+        "Keepalived v2.2.7 (01/16,2022)",
+        "oxidns 1.6.1 (full)",
+        "1.8.49-go"
+      ],
+      "packages": "iproute2\t6.1.0-3\nkeepalived\t1:2.2.7-1+b2\nsystemd\t252.39-1~deb12u1\n",
+      "architecture": "amd64",
+      "runtime": "PVE unprivileged LXC",
+      "final_live": {
+        "agent_online": true,
+        "agent_id": "agent_1793116724835_e86fcf",
+        "dns": [
+          {
+            "transport": "udp",
+            "rcode": 0,
+            "answers": 1
+          },
+          {
+            "transport": "tcp",
+            "rcode": 0,
+            "answers": 1
+          }
+        ],
+        "ipv4_addresses": [
+          "10.97.0.90",
+          "127.0.0.1"
+        ],
+        "ha_enabled": false,
+        "keepalived_inactive_disabled": true,
+        "owned_runtime_mask_removed": true,
+        "system": "debian"
+      }
+    },
+    {
+      "id": 191,
+      "name": "alpine",
+      "template": "alpine-3.22-default_20250617_amd64.tar.xz",
+      "os_release": "NAME=\"Alpine Linux\"\nID=alpine\nVERSION_ID=3.22.0\nPRETTY_NAME=\"Alpine Linux v3.22\"\nHOME_URL=\"https://alpinelinux.org/\"\nBUG_REPORT_URL=\"https://gitlab.alpinelinux.org/alpine/aports/-/issues\"\n",
+      "actual_versions": [
+        "Keepalived v2.3.1 (05/24,2024)",
+        "oxidns 1.6.1 (full)",
+        "1.8.49-go"
+      ],
+      "packages": "iproute2: IP Routing Utilities\niproute2: https://wiki.linuxfoundation.org/networking/iproute2\niproute2: 408 KiB\nkeepalived: Health Checking for Linux Virtual Server & High-Availability\nkeepalived: https://www.keepalived.org/\nkeepalived: 512 KiB\nkeepalived-openrc: Health Checking for Linux Virtual Server & High-Availability (OpenRC init scripts)\nkeepalived-openrc: https://www.keepalived.org/\nkeepalived-openrc: 1538 B\n",
+      "architecture": "amd64",
+      "runtime": "PVE unprivileged LXC",
+      "final_live": {
+        "agent_online": true,
+        "agent_id": "agent_1793116960184_4d98f2",
+        "dns": [
+          {
+            "transport": "udp",
+            "rcode": 0,
+            "answers": 1
+          },
+          {
+            "transport": "tcp",
+            "rcode": 0,
+            "answers": 1
+          }
+        ],
+        "ipv4_addresses": [
+          "10.97.0.91",
+          "127.0.0.1"
+        ],
+        "ha_enabled": false,
+        "keepalived_inactive_disabled": true,
+        "owned_runtime_mask_removed": true,
+        "system": "alpine"
+      }
+    },
+    {
+      "id": 192,
+      "name": "arch",
+      "template": "archlinux-base_20260420-1_amd64.tar.zst",
+      "os_release": "NAME=\"Arch Linux\"\nPRETTY_NAME=\"Arch Linux\"\nID=arch\nBUILD_ID=rolling\nANSI_COLOR=\"38;2;23;147;209\"\nHOME_URL=\"https://archlinux.org/\"\nDOCUMENTATION_URL=\"https://wiki.archlinux.org/\"\nSUPPORT_URL=\"https://bbs.archlinux.org/\"\nBUG_REPORT_URL=\"https://gitlab.archlinux.org/groups/archlinux/-/issues\"\nPRIVACY_POLICY_URL=\"https://terms.archlinux.org/docs/privacy-policy/\"\nLOGO=archlinux-logo\n",
+      "actual_versions": [
+        "Keepalived v2.4.3 (07/20,2026)",
+        "oxidns 1.6.1 (full)",
+        "1.8.49-go"
+      ],
+      "packages": "keepalived 2.4.3-1\niproute2 7.3.0-1\nsystemd 262.1-1\n",
+      "architecture": "amd64",
+      "runtime": "PVE unprivileged LXC",
+      "final_live": {
+        "agent_online": true,
+        "agent_id": "agent_1793117063615_ba8d30",
+        "dns": [
+          {
+            "transport": "udp",
+            "rcode": 0,
+            "answers": 1
+          },
+          {
+            "transport": "tcp",
+            "rcode": 0,
+            "answers": 1
+          }
+        ],
+        "ipv4_addresses": [
+          "10.97.0.92",
+          "127.0.0.1"
+        ],
+        "ha_enabled": false,
+        "keepalived_inactive_disabled": true,
+        "owned_runtime_mask_removed": true,
+        "system": "arch"
+      }
+    },
+    {
+      "id": 193,
+      "name": "fedora",
+      "template": "fedora-43-default_20260115_amd64.tar.xz",
+      "os_release": "NAME=\"Fedora Linux\"\nVERSION=\"43 (Container Image)\"\nRELEASE_TYPE=stable\nID=fedora\nVERSION_ID=43\nVERSION_CODENAME=\"\"\nPRETTY_NAME=\"Fedora Linux 43 (Container Image)\"\nANSI_COLOR=\"0;38;2;60;110;180\"\nLOGO=fedora-logo-icon\nCPE_NAME=\"cpe:/o:fedoraproject:fedora:43\"\nDEFAULT_HOSTNAME=\"fedora\"\nHOME_URL=\"https://fedoraproject.org/\"\nDOCUMENTATION_URL=\"https://docs.fedoraproject.org/en-US/fedora/f43/\"\nSUPPORT_URL=\"https://ask.fedoraproject.org/\"\nBUG_REPORT_URL=\"https://bugzilla.redhat.com/\"\nREDHAT_BUGZILLA_PRODUCT=\"Fedora\"\nREDHAT_BUGZILLA_PRODUCT_VERSION=43\nREDHAT_SUPPORT_PRODUCT=\"Fedora\"\nREDHAT_SUPPORT_PRODUCT_VERSION=43\nSUPPORT_END=2026-12-02\nVARIANT=\"Container Image\"\nVARIANT_ID=container\n",
+      "actual_versions": [
+        "Keepalived v2.2.8 (04/04,2023), git commit v2.2.7-154-g292b299e+",
+        "oxidns 1.6.1 (full)",
+        "1.8.49-go"
+      ],
+      "packages": "keepalived-2.2.8-8.fc43.x86_64\niproute-6.14.0-2.fc43.x86_64\nsystemd-258.3-2.fc43.x86_64\n",
+      "architecture": "amd64",
+      "runtime": "PVE unprivileged LXC",
+      "final_live": {
+        "agent_online": true,
+        "agent_id": "agent_1793116774394_87fa3c",
+        "dns": [
+          {
+            "transport": "udp",
+            "rcode": 0,
+            "answers": 1
+          },
+          {
+            "transport": "tcp",
+            "rcode": 0,
+            "answers": 1
+          }
+        ],
+        "ipv4_addresses": [
+          "10.97.0.93",
+          "127.0.0.1"
+        ],
+        "ha_enabled": false,
+        "keepalived_inactive_disabled": true,
+        "owned_runtime_mask_removed": true,
+        "system": "fedora"
+      }
+    }
+  ],
+  "pve_kernel": "7.0.14-24-pve",
+  "driver_sha256": "263c19443fc8e3ef8476b390f17c05581eefc6ffb25bfd7555d26468b663abd9",
+  "not_tested": [
+    "physical NAS hardware",
+    "ARM",
+    "Ubuntu",
+    "RHEL",
+    "SUSE",
+    "new VIP pairing/failover"
+  ]
+}

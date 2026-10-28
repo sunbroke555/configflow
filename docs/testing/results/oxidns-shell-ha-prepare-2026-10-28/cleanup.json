@@ -1,0 +1,21 @@
+{
+  "temporary_guests_removed": [
+    190,
+    191,
+    192,
+    193
+  ],
+  "backend_restored_stopped": true,
+  "backend_config_equal": true,
+  "original_firewall_restored": true,
+  "snapshot_removed": "cf-shell-ha-prepare-20261027",
+  "templates_removed": [
+    "alpine-3.22-default_20250617_amd64.tar.xz",
+    "archlinux-base_20260420-1_amd64.tar.zst",
+    "fedora-43-default_20260115_amd64.tar.xz"
+  ],
+  "shared_templates_retained": [],
+  "finished_at": 1793117261.225202,
+  "independent_staging_removed": true,
+  "private_credentials_logs_and_lab_binary_removed": true
+}

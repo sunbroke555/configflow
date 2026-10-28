@@ -169,12 +169,12 @@ onUnmounted(() => { disposed = true; refreshId++; verifyId++ })
   <section class="flex min-w-0 flex-col gap-4" aria-label="OxiDNS 高可用验证与配对">
       <div class="flex flex-wrap items-center justify-between gap-2"><h4 class="m-0 text-sm font-semibold">检查两台 Agent 的能力与宿主身份</h4><Button variant="outline" class="min-h-11" :disabled="!active || refreshing" @click="refresh"><RefreshCw class="size-4" :class="refreshing && 'animate-spin'" />刷新并检查两台 Agent</Button></div>
       <p class="m-0 text-[13px] leading-relaxed text-muted-foreground">支持两台 Shell、两台 Docker，或 Shell 与 Docker 混合。先刷新设备列表，再选择两台重新检查；在线心跳不能代替安装检查。</p>
-      <p v-if="includesNative" class="m-0 text-[13px] leading-relaxed text-muted-foreground">Shell 端需预装 keepalived 和 ip；正式开启时还会检查权限、服务管理和 DNS 配置。</p>
+      <p v-if="includesNative" class="m-0 text-[13px] leading-relaxed text-muted-foreground">Shell 高可用安装命令会自动准备 keepalived 和 ip；正式开启时还会检查权限、服务管理和 DNS 配置。</p>
       <details class="text-[13px] leading-relaxed">
         <summary class="min-h-11 cursor-pointer py-3">没有出现 Agent，或检查失败？</summary>
         <ul class="mb-0 list-disc space-y-2 pl-5">
           <li>确认 OxiDNS 与 Agent 服务已启动，ConfigFlow 地址从这台主机可达，服务器能访问 Agent 地址和端口；按返回原因修正后重新刷新。</li>
-          <li v-if="includesNative">Shell 端查看服务日志，检查 keepalived、ip 和服务管理器；已有 OxiDNS 无需重装。两端应监听局域网可访问的 DNS 地址，跨主机上游使用局域网地址，不能使用 127.0.0.1。</li>
+          <li v-if="includesNative">Shell 端缺少依赖时，返回「安装与准备」重新运行自动准备命令；脚本沿用本机已有身份、端口和核心路径，补齐环境并保留现有核心。两端应监听局域网可访问的 DNS 地址，跨主机上游使用局域网地址，不能使用 127.0.0.1。</li>
           <li v-if="includesDocker">Docker 端查看容器日志；Host 检查 53 端口冲突、companion、共享目录和只读宿主挂载。macvlan 检查容器 DNS 监听、固定地址、网卡和宿主隔离限制，不要求宿主机 53 端口空闲。</li>
           <li>新装凭据过期时，保留全部设置重新生成；不要删除已有身份和安装记录。</li>
         </ul>

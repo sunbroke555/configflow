@@ -437,7 +437,7 @@
             <nav class="grid grid-cols-2 gap-2" aria-label="Shell 高可用安装步骤">
               <Button v-for="item in shellHASteps" :key="item.value" variant="outline" class="min-h-11 h-auto whitespace-normal px-2 py-2 text-xs" :class="shellHAStep === item.value ? 'border-primary-accent bg-primary-soft text-primary-accent' : ''" :aria-current="shellHAStep === item.value ? 'step' : undefined" @click="shellHAStep = item.value">{{ item.label }}</Button>
             </nav>
-            <ShellHAPreparation v-if="shellHAStep === 'install'" />
+            <ShellHAPreparation v-if="shellHAStep === 'install'" :existing-agent="!!shellHAAgentId" />
           </section>
           <DockerHAInstallGuide v-if="showDockerHAGuide" :profile-id="haGuideProfile.id" :profile-name="haGuideProfile.name" :server-url="guideServerUrl" @changed="loadAgents" />
           <OxiDNSHAPairing v-if="showShellHAGuide && shellHAPairingVisited" v-show="shellHAStep === 'pair'" :active="shellHAStep === 'pair'" :profile-id="haGuideProfile.id" :profile-name="haGuideProfile.name" :initial-agent-id="shellHAAgentId" @changed="loadAgents" />
@@ -510,11 +510,11 @@
 
           <div v-if="shellAio || singleCoreSupported" class="min-w-0">
             <label :for="shellAio ? 'aio-install-cores' : 'agent-install-core'" class="flex min-h-11 cursor-pointer items-center gap-2 text-[13px] font-medium">
-              <Checkbox :id="shellAio ? 'aio-install-cores' : 'agent-install-core'" v-model="scriptForm.installCore" :aria-describedby="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" />
+              <Checkbox :id="shellAio ? 'aio-install-cores' : 'agent-install-core'" v-model="installCoreChoice" :aria-describedby="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" />
               同时安装 {{ shellAio ? 'Mihomo 与 OxiDNS' : scriptForm.type === 'mihomo' ? 'Mihomo' : 'OxiDNS' }} 核心
             </label>
             <p :id="shellAio ? 'aio-install-cores-note' : 'agent-install-core-note'" class="m-0 pl-6 text-[12px] leading-relaxed text-muted-foreground">
-              {{ combinedCoreInstall ? '保留已有核心，仅补装缺少部分；使用默认路径。' : '未勾选时仅安装 Agent，接管已有核心。' }}
+              {{ combinedCoreInstall ? '保留已有核心，仅补装缺少部分；使用默认路径。' : showShellHAGuide ? '保留已有核心，仍自动准备高可用依赖；首次接管自定义核心时填写实际路径和服务设置。' : '未勾选时仅安装 Agent，接管已有核心。' }}
             </p>
           </div>
 
@@ -907,7 +907,7 @@ import { consumeAction } from '@/lib/actions'
 import { cn } from '@/lib/utils'
 import { optionCopy, optionHelp } from '@/lib/optionCopy'
 import { getAgentConfigSync } from '@/lib/agentConfigSync'
-import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
+import { buildInstallCommand, AGENT_CORE_INSTALL_INTERFACE, CORE_INSTALL_INTERFACE, DNS_HA_PREPARE_INTERFACE, type CoreInstallTarget, type InstallerDownloader } from '@/lib/coreInstallCommand'
 import { supportsAgentSettings, type AgentSettingsContext } from '@/lib/agentSettings'
 import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog.vue'
 import AgentTraffic from '@/components/agents/AgentTraffic.vue'
@@ -1128,6 +1128,12 @@ const openOxiDNSHAGuide = (agent: Agent) => {
   const profileId = agent.profile_id || defaultProfileId.value
   haGuideProfile.value = { id: profileId, name: profileStore.profileName(profileId) }
   shellHAAgentId.value = agent.id
+  if (agent.deployment_method !== 'docker') {
+    scriptForm.value.name = agent.name
+    scriptForm.value.agent_ip = agent.host
+    scriptForm.value.port = agent.port
+    shellHAInstallCore.value = false
+  }
   shellHAStep.value = 'pair'
   scriptDialogVisible.value = true
 }
@@ -1249,7 +1255,14 @@ watch(oxidnsInstallMode, () => {
 const dockerDNSHA = computed(() => scriptForm.value.installType === 'docker' && scriptForm.value.dockerMode === 'oxidns' && scriptForm.value.dockerDNSHA)
 const shellAio = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'aio')
 const singleCoreSupported = computed(() => scriptForm.value.installType === 'shell' && scriptForm.value.shellMode === 'single' && ['mihomo', 'oxidns'].includes(scriptForm.value.type))
-const singleCoreInstall = computed(() => singleCoreSupported.value && scriptForm.value.installCore)
+// HA has its own opt-in so returning to ordinary installation restores the user's choice.
+const shellHAInstallCore = ref(true)
+watch(showShellHAGuide, shown => { if (shown) shellHAInstallCore.value = true }, { flush: 'sync' })
+const installCoreChoice = computed({
+  get: () => showShellHAGuide.value ? shellHAInstallCore.value : scriptForm.value.installCore,
+  set: (value: boolean) => { if (showShellHAGuide.value) shellHAInstallCore.value = value; else scriptForm.value.installCore = value },
+})
+const singleCoreInstall = computed(() => singleCoreSupported.value && installCoreChoice.value)
 const aioCoreInstall = computed(() => shellAio.value && scriptForm.value.installCore)
 const combinedCoreInstall = computed(() => singleCoreInstall.value || aioCoreInstall.value)
 // The displayed defaults do not overwrite the user's existing-service settings.
@@ -2207,7 +2220,7 @@ const resetForm = () => {
 
 // Moving to pairing invalidates unfinished generation but retains any completed command for returning.
 watch(shellHAStep, () => { scriptRequest++; scriptLoading.value = false }, { flush: 'sync' })
-watch([installationMode, oxidnsInstallMode], resetForm, { flush: 'sync' })
+watch([installationMode, oxidnsInstallMode, shellHAInstallCore], resetForm, { flush: 'sync' })
 watch(scriptForm, resetForm, { deep: true, flush: 'sync' })
 watch(scriptDialogVisible, resetForm, { flush: 'sync' })
 watch([installScriptUrl, dockerComposeContent, dockerRunCommand], async (commands) => {
@@ -2277,6 +2290,7 @@ const generateScript = async () => {
 
   const request = ++scriptRequest
   const includeCore = combinedCoreInstall.value
+  const prepareDNSHA = showShellHAGuide.value
   scriptLoading.value = true
   const loadingToast = notify.loading(scriptForm.value.installType === 'docker' ? '正在生成 Docker 部署命令...' : '正在生成安装命令...')
 
@@ -2359,6 +2373,7 @@ const generateScript = async () => {
         server_url: serverUrl,
         ...lifecycleParams,
         ...(includeCore ? { install_core: true } : {}),
+        ...(prepareDNSHA ? { prepare_dns_ha: true } : {}),
         ...(singleMihomoForwarding.value && scriptForm.value.skipIpv4Forwarding && !forwardingCustomLifecycle.value ? { ipv4_forwarding: false } : {})
       }
       const response = await agentApi.generateInstallCommand(shellParams)
@@ -2366,6 +2381,10 @@ const generateScript = async () => {
       const result = readInstallCommand(response.data, parsed)
       if (includeCore && result.script.split('\n', 2)[1] !== AGENT_CORE_INSTALL_INTERFACE) {
         throw new Error('安装脚本版本不支持同时安装核心，请更新 ConfigFlow 后重试')
+      }
+
+      if (prepareDNSHA && !result.script.split('\n').slice(1, 4).includes(DNS_HA_PREPARE_INTERFACE)) {
+        throw new Error('安装脚本版本不支持自动准备高可用环境，请更新 ConfigFlow 后重试')
       }
 
       // The preview and download are the same immutable server-generated snapshot.

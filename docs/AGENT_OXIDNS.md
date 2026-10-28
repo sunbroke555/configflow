@@ -265,12 +265,20 @@ dig @127.0.0.1 -p 1053 example.com +tcp
 
 进入 **系统 → Agent → 生成安装脚本 → Shell 安装 → 单服务 → OxiDNS → 高可用安装**。
 
-1. **安装与准备**：未安装时填写当前主机的信息；没有 OxiDNS 核心则勾选同时安装核心。两台 Shell 分别生成各自的命令，已有 OxiDNS Agent 无需重装。
-2. Shell 端以 root 运行 Agent，使用 systemd / OpenRC，并安装 `keepalived` 和 `ip` 工具；界面提供按系统选择的依赖安装命令。
+1. **安装与准备**：填写当前主机，生成并执行一条短命令。高可用默认同时安装 OxiDNS 核心；下载的 `configflow-install.sh` 会自动补齐 keepalived、ip 等依赖，再安装核心和 Agent，无需另跑准备脚本或手动装包。
+2. 两台 Shell 分别生成各自的命令。在目标 Linux 主机执行；普通用户会通过 sudo 申请 root 权限。已有单服务 Agent 会沿用本机身份、端口及核心路径；首次接管自定义核心须核对实际路径。脚本只准备环境，VIP 在配对时配置。
 3. **验证与配对**：刷新列表，选择两台 OxiDNS Agent，再刷新读取真实环境。支持 Shell + Shell、Shell + Docker；两端需位于不同主机、同一网段并绑定同一配置空间。
-4. 检查通过后进入高可用设置，填写未占用的 VIP 并开启。开启会进一步检查依赖、权限和 DNS 配置，再同步主备配置；完成后按界面命令验证 VIP，最后将客户端 DNS 改为 VIP。
+4. 进入高可用设置，填写未占用的 VIP 并开启。服务端进一步检查权限和 DNS 配置，再同步主备配置；完成后按界面命令验证 VIP，最后将客户端 DNS 改为 VIP。
 
-Shell Agent 卡片的 **DNS 高可用 → 设置 → 打开高可用安装引导** 会直接进入配对并预选本机。Docker 端使用下述 Docker 引导；Shell 端不需要安装 Docker。生成命令或基础环境返回成功不代表高可用已开启。
+页面仍只显示与普通安装相同格式的命令：
+
+```sh
+curl -fsSL 'http://你的面板/api/agents/i/安装链接' -o configflow-install.sh && sh configflow-install.sh
+```
+
+支持 systemd / OpenRC。脚本自动识别 Debian/Ubuntu 的 apt-get、Alpine 的 apk、Arch 的 pacman、Fedora/RHEL 的 dnf/yum，以及 openSUSE 的 zypper。依赖齐全时直接复用；下载、软件源或包管理器失败时明确报错并停止，不把未完成安装显示成成功。
+
+Shell Agent 卡片的 **DNS 高可用 → 设置 → 打开高可用安装引导** 会直接进入配对并预选本机。已有单服务设备缺少依赖时，可返回安装步骤重新生成自动准备命令；脚本读取本机已有配置，无需重新手填核心路径。原生同机双 Agent 必须继续使用对应同机安装器，单服务脚本不会覆盖。Docker 端使用下述 Docker 引导；Shell 端不需要安装 Docker。生成命令或基础环境返回成功不代表高可用已开启。
 
 ## Docker
 

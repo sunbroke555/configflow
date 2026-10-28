@@ -2,9 +2,7 @@
 # ConfigFlow Go Agent: native Shell installation, systemd / OpenRC.
 # Service: {service_type}; Agent: {agent_name}
 set -eu
-for cf_argument do
-    case "$cf_argument" in --verbose|-v) ;; *) cf_error "未知参数：$cf_argument"; exit 2 ;; esac
-done
+{install_arguments}
 
 AGENT_DIR="/opt/configflow-agent"
 CONFIG_FILE="$AGENT_DIR/config-{service_type}.json"
@@ -18,11 +16,7 @@ fi
 {init_detection}
 
 {agent_install_dependencies}
-{ipv4_forwarding_notice}cf_ui "1) {installation_action}"
-cf_ui "2) 卸载 Agent"
-cf_ui "3) 取消"
-cf_prompt '请输入选项 [1-3]: '
-read -r choice < /dev/tty
+{dns_ha_functions}{ipv4_forwarding_notice}{installation_choice}
 case "$choice" in
     1)
         cf_step "检查安装环境与依赖"
@@ -244,7 +238,7 @@ case "$choice" in
     *) cf_complete "已取消"; exit 0 ;;
 esac
 
-{core_install_phase}BINARY_BASE={binary_download_url_shell}
+{dns_ha_prepare}{core_install_phase}BINARY_BASE={binary_download_url_shell}
 BINARY_URL="$BINARY_BASE/configflow-agent-$AGENT_ARCH"
 # /tmp is often mounted noexec. Stage beside the final executable so validation
 # works and replacement is an atomic rename on the same filesystem.
@@ -294,7 +288,7 @@ else
     RESTART="rc-service $SERVICE_UNIT restart"
 fi
 sed -i "s/__CONFIGFLOW_INIT__/$INIT_SYSTEM/g; s/__CONFIGFLOW_RESTART__/$RESTART/g; s/__CONFIGFLOW_AGENT_ID__/$EXISTING_ID/g; s/__CONFIGFLOW_TOKEN__/$EXISTING_TOKEN/g" "$CONFIG_FILE.new"
-# Validate OxiDNS's working directory before stopping an existing Agent.
+{dns_ha_existing_config}# Validate OxiDNS's working directory before stopping an existing Agent.
 cf_step "检查核心接管与运行环境"
 "$BINARY_TMP" -config "$CONFIG_FILE.new" -validate-service
 # Report TUN, permissions, forwarding and listener conflicts with repair steps.
@@ -398,5 +392,5 @@ SERVICEEOF
     rc-service configflow-agent status
 fi
 {ipv4_forwarding_apply}cf_step_done "Agent 服务已启动"
-{ipv4_forwarding_summary}cf_fact agent_{service_type} "{service_label} Agent：端口 {agent_port}，服务已启动"
+{ipv4_forwarding_summary}cf_fact agent_{service_type} "{service_label} Agent：端口 {agent_summary_port}，服务已启动"
 cf_complete "安装完成"

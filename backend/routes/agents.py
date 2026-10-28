@@ -276,9 +276,9 @@ _INSTALL_COMMAND_FIELDS = frozenset({
     'health_dns_address', 'health_dns_name', 'deployment_health_timeout',
     'mihomo_agent_port', 'oxidns_agent_port', 'mihomo_config_path', 'oxidns_config_path',
     'mihomo_service_unit', 'oxidns_service_unit', 'mihomo_service_binary', 'oxidns_service_binary',
-    'ipv4_forwarding',
+    'ipv4_forwarding', 'prepare_dns_ha',
 })
-_INSTALL_COMMAND_BOOLEANS = frozenset({'install_core', 'ipv4_forwarding'})
+_INSTALL_COMMAND_BOOLEANS = frozenset({'install_core', 'ipv4_forwarding', 'prepare_dns_ha'})
 _INSTALL_COMMAND_NUMBERS = frozenset({
     'port', 'mihomo_agent_port', 'oxidns_agent_port', 'deployment_health_timeout',
 })
@@ -402,6 +402,12 @@ def _install_script_response(params):
         if install_core_value not in ('true', 'false'):
             raise ValueError('install_core 必须为 true 或 false')
         install_core = install_core_value == 'true'
+        prepare_ha_value = params.get('prepare_dns_ha')
+        if prepare_ha_value not in (None, 'true', 'false'):
+            raise ValueError('prepare_dns_ha 必须为 true 或 false')
+        if prepare_ha_value is not None and (service_type != 'oxidns' or agent_type != 'go'):
+            raise ValueError('仅 OxiDNS 单服务 Go Agent 支持准备 DNS 高可用环境')
+        prepare_dns_ha = prepare_ha_value == 'true'
         if install_core:
             if service_type not in ('mihomo', 'oxidns', 'aio') or agent_type != 'go':
                 raise ValueError('仅 Mihomo、OxiDNS 或同机双服务 Go Agent 支持同时安装核心')
@@ -495,6 +501,7 @@ def _install_script_response(params):
                 deployment_health_timeout=params.get('deployment_health_timeout', 30, type=int),
                 install_core=install_core,
                 manage_ipv4_forwarding=manage_forwarding if service_type == 'mihomo' else False,
+                prepare_dns_ha=prepare_dns_ha,
             )
 
         logger.info(f"安装脚本生成成功，长度: {len(script)} 字符")

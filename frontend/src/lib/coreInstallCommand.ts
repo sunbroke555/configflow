@@ -3,6 +3,7 @@ export type CoreInstallTarget = 'both' | 'mihomo' | 'oxidns'
 export type InstallerDownloader = 'curl' | 'wget'
 export const CORE_INSTALL_INTERFACE = '# ConfigFlow core installer interface: 1'
 export const AGENT_CORE_INSTALL_INTERFACE = '# ConfigFlow Agent + core installer interface: 1'
+export const DNS_HA_PREPARE_INTERFACE = '# ConfigFlow DNS HA preparation interface: 1'
 
 /** The short URL identifies the exact server-generated script, including its install options. */
 export function buildInstallCommand(url: string, downloader: InstallerDownloader = 'curl'): string {

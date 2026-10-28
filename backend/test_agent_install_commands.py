@@ -66,6 +66,7 @@ def test_creation_requires_panel_auth(client, path, payload):
 @pytest.mark.parametrize('params', [
     {'type': 'mihomo', 'port': 18080},
     {'type': 'oxidns', 'port': 18082, 'install_core': True},
+    {'type': 'oxidns', 'port': 18082, 'install_core': True, 'prepare_dns_ha': True},
     {'type': 'mihomo', 'port': 18080, 'install_core': True},
     {'type': 'aio', 'mihomo_agent_port': 18080, 'oxidns_agent_port': 18082},
     {'type': 'aio', 'mihomo_agent_port': 18080, 'oxidns_agent_port': 18082, 'install_core': True},
@@ -217,3 +218,12 @@ def test_storage_failures_have_actionable_errors(client, admin, monkeypatch):
     assert response.status_code == 503
     assert '请稍后重试' in response.get_data(as_text=True)
     assert response.headers['Cache-Control'] == 'no-store'
+
+
+@pytest.mark.parametrize('value', ['true', 1, None, [], {}])
+def test_ha_preparation_requires_a_json_boolean(client, admin, value):
+    response = client.post('/api/agents/install-command', headers=admin, json={
+        'name': 'ha-node', 'type': 'oxidns', 'prepare_dns_ha': value,
+    })
+    assert response.status_code == 400
+    assert snapshot_count() == 0
