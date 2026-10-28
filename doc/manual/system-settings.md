@@ -35,9 +35,9 @@
 
 支持 IPv6 的系统会同时监听 IPv4/IPv6；这不会自动给 Docker Bridge 网络开启 IPv6 出站能力。源码运行和不含该组件的旧镜像可能显示不支持。
 
-<a id="下载令牌与入口开关"></a>
 Host 模式的后端或 Sub-Store 被其他应用占用时，只修改本页 Web 端口无效。按 [各安装方式的端口说明](../guide/install.md#install-methods) 修改 `CONFIGFLOW_BACKEND_PORT` / `SUB_STORE_BACKEND_API_PORT`，选择互不相同的空闲端口并重建容器；程序不会自动避让。只改内部端口时 Web 地址不变，新变量需要支持此功能的新镜像。
 
+<a id="下载令牌与入口开关"></a>
 ## 下载、令牌与入口开关
 
 | 选项 / 按钮 | 推荐怎么选或怎么填 | 打开、填写或点击后 | 关闭或留空后 / 生效方式 |

@@ -249,7 +249,7 @@ NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即�
 | Python 后端 | `127.0.0.1:15801` | 启动 Python 前设置 `CONFIGFLOW_BACKEND_HOST` / `CONFIGFLOW_BACKEND_PORT` |
 | 独立 Sub-Store | `127.0.0.1:15802` | Sub-Store 自己的启动参数；Python 另用 `SUB_STORE_URL` 指向这个地址 |
 
-**1. 独立 Sub-Store：**在运行它的终端设置端口，并使用自己的实际 bundle 路径启动，例如：
+**1. 独立 Sub-Store：**沿用它原来的数据目录、工作目录及其他环境变量，在运行它的终端设置端口，并使用自己的实际 bundle 路径启动，例如：
 
 ```bash
 SUB_STORE_BACKEND_API_HOST=127.0.0.1 \
@@ -288,7 +288,7 @@ npm run dev -- --host 127.0.0.1 --port 15800 --strictPort
 <a id="deployment-parameters"></a>
 ## 账号、目录与其他参数
 
-三种安装方式都要核对这些设置。Compose 用文件里的字段，docker run 使用对应的命令参数，NAS 则在容器管理器中填写。
+三种 Docker 安装方式都要核对这些设置。Compose 用文件里的字段，docker run 使用对应的命令参数，NAS 则在容器管理器中填写。
 
 | 设置 | 本例值／默认行为 | 什么时候修改 | 修改后的结果与生效时间 |
 | --- | --- | --- | --- |
