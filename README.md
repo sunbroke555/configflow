@@ -47,8 +47,6 @@ ConfigFlow 可以帮你把订阅和节点整理成 Mihomo、Surge、Loon、MosDN
 - [安装组合与选项说明](doc/guide/agent-install.md)
 - [OxiDNS 高可用支持组合与逐步配置](doc/guide/oxidns-ha.md)
 
-维护者需要把手册发布成网页时，按 [GitHub Pages 开启与自动发布步骤](doc/guide/github-pages.md) 完成首次设置；之后相关文档更新合并到 `main` 会自动发布。
-
 截图使用隔离演示数据，不含真实订阅或生产设备信息。本文档按 **2026-10-28 的项目代码**核对；旧镜像缺少某项按钮时，先按 [备份与升级](doc/manual/system-settings.md#备份与升级) 更新，不能只靠刷新浏览器增加功能。
 
 <a id="部署参数"></a>
