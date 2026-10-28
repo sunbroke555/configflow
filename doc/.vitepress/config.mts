@@ -51,7 +51,7 @@ export default defineConfig({
       { text: '遇到问题', collapsed: true, items: [
         { text: '常见问题与排查', link: '/guide/troubleshooting' },
         { text: '常见名词', link: '/guide/terms' },
-        { text: '技术资料与文档维护', link: '/maintenance' },
+        { text: 'GitHub Pages 发布设置', link: '/guide/github-pages' },
       ] },
     ],
     outline: { level: [2, 3], label: '本页目录' },

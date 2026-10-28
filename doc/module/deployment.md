@@ -188,7 +188,7 @@ docker run --pull=always -d \
 | 更新后配置变空 | 先检查 `docker inspect config-flow` 中的 Mounts 是否仍指向原数据目录，保留现有文件并查看迁移日志 |
 | Sub-Store 显示休眠 | 按需模式下属正常状态；转换任务会唤醒，失败时在第三方依赖查看原因 |
 | 旧版还有 sub-store 服务 | 当前镜像内置组件，旧独立服务及 `SUB_STORE_URL` 环境变量不再使用 |
-| 需要详细日志或调整线程 | 参阅 [README 部署参数](../maintenance.md#部署参数)；`DEBUG` 会启用开发调试模式 |
+| 需要详细日志或调整线程 | 参阅 [安装指南中的部署参数](../guide/install.md#deployment-parameters)；`DEBUG` 会启用开发调试模式 |
 
 ## 实现参考
 

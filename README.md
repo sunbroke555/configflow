@@ -47,6 +47,8 @@ ConfigFlow 可以帮你把订阅和节点整理成 Mihomo、Surge、Loon、MosDN
 - [安装组合与选项说明](doc/guide/agent-install.md)
 - [OxiDNS 高可用支持组合与逐步配置](doc/guide/oxidns-ha.md)
 
+维护者需要把手册发布成网页时，按 [GitHub Pages 开启与自动发布步骤](doc/guide/github-pages.md) 完成首次设置；之后相关文档更新合并到 `main` 会自动发布。
+
 截图使用隔离演示数据，不含真实订阅或生产设备信息。本文档按 **2026-10-28 的项目代码**核对；旧镜像缺少某项按钮时，先按 [备份与升级](doc/manual/system-settings.md#备份与升级) 更新，不能只靠刷新浏览器增加功能。
 
 <a id="部署参数"></a>
@@ -54,13 +56,11 @@ ConfigFlow 可以帮你把订阅和节点整理成 Mihomo、Surge、Loon、MosDN
 <a id="常见问题"></a>
 ## 部署与维护
 
-环境变量说明见 [部署参数](doc/maintenance.md#部署参数)；升级和迁移前先读 [备份与升级](doc/manual/system-settings.md#备份与升级)。遇到访问、安装或发布问题，按 [排查顺序](doc/guide/troubleshooting.md) 处理。
+环境变量说明见 [部署参数](doc/guide/install.md#deployment-parameters)；升级和迁移前先读 [备份与升级](doc/manual/system-settings.md#备份与升级)。遇到访问、安装或发布问题，按 [排查顺序](doc/guide/troubleshooting.md) 处理。
 
 ## 项目链接
 
 [Docker 镜像](https://hub.docker.com/r/thsrite/config-flow) · [使用手册](doc/README.md) · [反馈问题](https://github.com/thsrite/configflow/issues) · [Telegram 交流群](https://t.me/+fLt02_w38205OTNh)
-
-开发者需要查实现细节时，可阅读 [技术文档入口](doc/maintenance.md)。普通用户先按上面的安装和操作手册即可。
 
 ## 许可证
 

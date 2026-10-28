@@ -1,0 +1,89 @@
+name: Documentation (GitHub Pages)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'doc/**'
+      - 'scripts/docs/**'
+      - '.github/workflows/docs.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'doc/**'
+      - 'scripts/docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.event.pull_request.number || github.ref }}
+  # PR validation can be replaced; never interrupt a Pages deployment.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build and check documentation
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: doc/package-lock.json
+      # PRs must build before Pages is enabled, including contributions from forks.
+      # Repository owners enable Pages manually; no PAT or automatic enablement.
+      - name: Read GitHub Pages settings
+        id: pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - name: Resolve documentation base path
+        env:
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: |
+          python3 - <<'PY'
+          import os
+          base = os.environ['PAGES_BASE_PATH']
+          if os.environ['GITHUB_EVENT_NAME'] == 'pull_request':
+              repo = os.environ['GITHUB_REPOSITORY'].split('/', 1)[1]
+              base = '' if repo.lower().endswith('.github.io') else repo
+          base = '/' + base.strip('/') + '/' if base.strip('/') else '/'
+          with open(os.environ['GITHUB_ENV'], 'a') as env:
+              env.write(f'DOCS_BASE={base}\n')
+          PY
+      - name: Install documentation dependencies
+        run: npm --prefix doc ci --ignore-scripts --no-audit --no-fund
+      - name: Build documentation
+        run: npm --prefix doc run build
+      - name: Check page, image and fragment links
+        run: python3 scripts/docs/check-site.py --base "$DOCS_BASE"
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: doc/.vitepress/dist
+
+  deploy:
+    name: Publish documentation
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -62,6 +62,7 @@ services:
     restart: unless-stopped
 ```
 
+<a id="deployment-parameters"></a>
 ### 2. 看懂需要修改的地方
 
 | 设置 | 本例值／默认行为 | 什么时候修改 | 修改后的结果与生效时间 |
@@ -75,6 +76,8 @@ services:
 | `restart` | `unless-stopped` | 普通安装保留 | Docker 启动后会按此策略恢复容器；你主动停止的容器需自行启动。 |
 
 `./data` 是部署文件所在目录下面的 `data`，不是浏览器所在电脑的目录。已有实例不要随意换目录，否则会像新安装一样显示空配置。
+
+一般不需要另外设置 `CONFIGFLOW_HTTP_THREADS`（默认 `8`，允许 `1–64`，控制服务同时处理请求的数量）或 `LOG_LEVEL`（默认 `INFO`，控制日志详细程度）。`LOG_LEVEL=DEBUG` 会启用开发调试模式，不建议普通部署长期开启。修改环境变量后需重新创建容器。
 
 ### 3. 启动
 
