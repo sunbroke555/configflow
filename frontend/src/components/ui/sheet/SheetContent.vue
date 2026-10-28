@@ -10,6 +10,7 @@ import {
   useForwardPropsEmits,
 } from "reka-ui"
 import { cn } from "@/lib/utils"
+import { focusOverlayControl } from "@/lib/overlayFocus"
 import SheetOverlay from "./SheetOverlay.vue"
 
 interface SheetContentProps extends DialogContentProps {
@@ -31,6 +32,11 @@ const emits = defineEmits<DialogContentEmits>()
 const delegatedProps = reactiveOmit(props, "class", "side", "showCloseButton")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
+
+function onOpenAutoFocus(event: Event) {
+  emits("openAutoFocus", event)
+  focusOverlayControl(event)
+}
 </script>
 
 <template>
@@ -49,7 +55,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
         side === 'bottom'
           && 'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t',
         props.class)"
-      v-bind="{ ...$attrs, ...forwarded }"
+      v-bind="{ ...$attrs, ...forwarded, onOpenAutoFocus }"
     >
       <slot />
 

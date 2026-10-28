@@ -11,6 +11,7 @@ import {
   useForwardPropsEmits,
 } from "reka-ui"
 import { cn } from "@/lib/utils"
+import { focusOverlayControl } from "@/lib/overlayFocus"
 
 defineOptions({
   inheritAttrs: false,
@@ -22,6 +23,11 @@ const emits = defineEmits<DialogContentEmits>()
 const delegatedProps = reactiveOmit(props, "class")
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
+
+function onOpenAutoFocus(event: Event) {
+  emits("openAutoFocus", event)
+  focusOverlayControl(event)
+}
 </script>
 
 <template>
@@ -36,7 +42,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
             props.class,
           )
         "
-        v-bind="{ ...$attrs, ...forwarded }"
+        v-bind="{ ...$attrs, ...forwarded, onOpenAutoFocus }"
         @pointer-down-outside="(event) => {
           const originalEvent = event.detail.originalEvent;
           const target = originalEvent.target as HTMLElement;
