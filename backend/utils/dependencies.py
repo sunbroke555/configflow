@@ -1,7 +1,7 @@
 """第三方依赖管理（目前只有内置 Sub-Store）
 
 镜像内置 Sub-Store 后端：构建时把指定版本的 sub-store.bundle.js 放进
-/opt/sub-store，由 supervisord 以 127.0.0.1:3001 拉起。在线更新时把新版本
+/opt/sub-store，由 supervisord 在回环地址拉起（默认端口 3001）。在线更新时把新版本
 下载到数据目录（DATA_DIR/sub-store/runtime），启动脚本 sub-store-start.sh
 会在镜像内置版本和数据目录版本中取较新的一个，因此：
   - 在线更新跨容器重建保留；
@@ -24,7 +24,6 @@ logger = get_logger(__name__)
 
 SUB_STORE_REPO = 'sub-store-org/Sub-Store'
 SUB_STORE_ASSET = 'sub-store.bundle.js'
-SUB_STORE_BUILTIN_URL = 'http://127.0.0.1:3001'
 SUB_STORE_BUILTIN_DIR = os.environ.get('SUB_STORE_BUILTIN_DIR', '/opt/sub-store')
 SUB_STORE_PROGRAM = 'sub-store'
 
@@ -38,6 +37,15 @@ class DependencyUpdateError(Exception):
 _latest_cache = {'checked_at': 0.0, 'data': None, 'error': ''}
 _update_lock = threading.Lock()
 _update_state = {'state': 'idle', 'message': '', 'target_version': '', 'finished_at': 0.0}
+
+
+def builtin_sub_store_url():
+    """Use the same port as the bundled Node process, always over loopback."""
+    raw = os.environ.get('SUB_STORE_BACKEND_API_PORT', '3001').strip()
+    if (not raw.isascii() or not raw.isdecimal() or len(raw) > 5
+            or not 1 <= int(raw) <= 65535):
+        raise ValueError('SUB_STORE_BACKEND_API_PORT must be an integer between 1 and 65535')
+    return f'http://127.0.0.1:{int(raw)}'
 
 
 def _data_dir():
@@ -218,7 +226,7 @@ def _wait_for_version(expected, timeout=40):
     deadline = time.time() + timeout
     version = ''
     while time.time() < deadline:
-        version = fetch_running_version(SUB_STORE_BUILTIN_URL, timeout=3)
+        version = fetch_running_version(builtin_sub_store_url(), timeout=3)
         if version and (not expected or parse_version(version) == parse_version(expected)):
             return version
         time.sleep(1)
@@ -333,7 +341,7 @@ def start_sub_store_update():
         release, error = fetch_latest_release(force=True)
         if not release:
             raise RuntimeError(error or '无法获取最新版本')
-        current = fetch_running_version(SUB_STORE_BUILTIN_URL) or active_bundle()[1]
+        current = fetch_running_version(builtin_sub_store_url()) or active_bundle()[1]
         if current and not is_newer(release['version'], current):
             raise RuntimeError(f'当前已是最新版本 {current}')
         _set_state('running', f'准备更新到 {release["version"]}…',

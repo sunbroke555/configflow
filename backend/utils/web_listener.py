@@ -55,12 +55,19 @@ def _lock():
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def _environment_port(name, default):
+    raw = os.environ.get(name, str(default)).strip()
+    if len(raw) > 5 or not raw.isascii() or not raw.isdecimal():
+        raise WebListenerError(f'{name} 须为 1–65535 的整数', 400)
+    value = int(raw)
+    if not 1 <= value <= 65535:
+        raise WebListenerError(f'{name} 须为 1–65535 的整数', 400)
+    return value
+
+
 def _selection():
     if 'CONFIGFLOW_WEB_PORT' in os.environ:
-        raw = os.environ['CONFIGFLOW_WEB_PORT'].strip()
-        if len(raw) > 5 or not raw.isascii() or not raw.isdecimal():
-            raise WebListenerError('CONFIGFLOW_WEB_PORT 须为 1–65535 的整数', 400)
-        return _port(int(raw)), 'environment'
+        return _environment_port('CONFIGFLOW_WEB_PORT', 80), 'environment'
     try:
         saved = json.loads(Path(STATE_PATH).read_text())
         return _port(saved['port']), 'saved'
@@ -147,14 +154,27 @@ def _snapshot(path):
 
 def _render(port, ipv6):
     template = Path(TEMPLATE_PATH).read_text()
-    if template.count('__CONFIGFLOW_LISTEN__') != 1 or '__CONFIGFLOW_LISTENER_TOKEN__' not in template:
+    backend_port = _environment_port('CONFIGFLOW_BACKEND_PORT', 5001)
+    backend_host = os.environ.get('CONFIGFLOW_BACKEND_HOST', '0.0.0.0').strip()
+    if backend_host not in ('0.0.0.0', '127.0.0.1'):
+        raise WebListenerError('Docker 的 CONFIGFLOW_BACKEND_HOST 须为 127.0.0.1 或 0.0.0.0', 400)
+    # Source auto-updates retain the nginx template shipped in the old image.
+    if '__CONFIGFLOW_BACKEND_PORT__' not in template:
+        if backend_port != 5001:
+            raise WebListenerError('自定义后端端口需要更新容器镜像')
+        template = template.replace('server 127.0.0.1:5001;', 'server 127.0.0.1:__CONFIGFLOW_BACKEND_PORT__;')
+    if (template.count('__CONFIGFLOW_LISTEN__') != 1
+            or template.count('__CONFIGFLOW_BACKEND_PORT__') != 1
+            or '__CONFIGFLOW_LISTENER_TOKEN__' not in template):
         raise WebListenerError('Web 监听模板不完整，请更新容器镜像')
     token = secrets.token_hex(16)
     listeners = f'listen 0.0.0.0:{port};'
     if ipv6:
         listeners += f'\n        listen [::]:{port} ipv6only=on;'
     metadata = {'port': port, 'ipv6': ipv6, 'token': token}
-    rendered = template.replace('__CONFIGFLOW_LISTEN__', listeners).replace('__CONFIGFLOW_LISTENER_TOKEN__', token)
+    rendered = (template.replace('__CONFIGFLOW_LISTEN__', listeners)
+                .replace('__CONFIGFLOW_LISTENER_TOKEN__', token)
+                .replace('__CONFIGFLOW_BACKEND_PORT__', str(backend_port)))
     return (MARKER + json.dumps(metadata) + '\n' + rendered).encode(), metadata
 
 
@@ -171,12 +191,12 @@ def _nginx(*arguments):
 
 
 def _check_reserved(port):
-    try:
-        sub_store_port = int(os.environ.get('SUB_STORE_BACKEND_API_PORT', '3001'))
-    except ValueError:
-        sub_store_port = 3001
-    if port in (5001, sub_store_port):
-        service = 'ConfigFlow 后端' if port == 5001 else 'Sub-Store'
+    backend_port = _environment_port('CONFIGFLOW_BACKEND_PORT', 5001)
+    sub_store_port = _environment_port('SUB_STORE_BACKEND_API_PORT', 3001)
+    if backend_port == sub_store_port:
+        raise WebListenerError('ConfigFlow 后端与 Sub-Store 须使用不同的端口', 409)
+    if port in (backend_port, sub_store_port):
+        service = 'ConfigFlow 后端' if port == backend_port else 'Sub-Store'
         raise WebListenerError(f'端口 {port} 已保留给 {service}，请选择其他端口', 409)
 
 

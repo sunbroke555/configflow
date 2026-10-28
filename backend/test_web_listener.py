@@ -11,7 +11,7 @@ from backend.utils import web_listener as listener
 
 
 ENDPOINT = '/api/settings/web-port'
-TEMPLATE = 'events {}\nhttp { server { __CONFIGFLOW_LISTEN__ location /_configflow/listener-health { return 200 "__CONFIGFLOW_LISTENER_TOKEN__"; } } }'
+TEMPLATE = 'events {}\nhttp { upstream configflow_backend { server 127.0.0.1:__CONFIGFLOW_BACKEND_PORT__; } server { __CONFIGFLOW_LISTEN__ location /_configflow/listener-health { return 200 "__CONFIGFLOW_LISTENER_TOKEN__"; } } }'
 
 
 @pytest.fixture
@@ -21,6 +21,8 @@ def deployment(tmp_path, monkeypatch):
         monkeypatch.setattr(listener, constant, tmp_path / filename)
     monkeypatch.setattr(listener, 'NGINX_BINARY', '/bin/true')
     monkeypatch.delenv('CONFIGFLOW_WEB_PORT', raising=False)
+    monkeypatch.delenv('CONFIGFLOW_BACKEND_PORT', raising=False)
+    monkeypatch.delenv('CONFIGFLOW_BACKEND_HOST', raising=False)
     monkeypatch.delenv('SUB_STORE_BACKEND_API_PORT', raising=False)
     monkeypatch.setattr(listener, '_ipv6_available', lambda: True)
     monkeypatch.setattr(listener, '_nginx', lambda *args: None)
@@ -208,3 +210,55 @@ def test_success_api_returns_active_settings(client, deployment):
     assert response.get_json() == {'success': True, 'supported': True, 'port': 18088,
                                    'ipv6': True, 'editable': True, 'source': 'saved'}
     assert client.get(ENDPOINT).get_json()['port'] == 18088
+
+
+def test_custom_backend_port_updates_proxy_and_reserved_ports(client, deployment, monkeypatch):
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', '15801')
+    deployment.prepare_listener()
+    assert 'server 127.0.0.1:15801;' in deployment.CONFIG_PATH.read_text()
+    assert client.post(ENDPOINT, json={'port': 15801}).status_code == 409
+    assert client.post(ENDPOINT, json={'port': 5001}).status_code == 200
+    assert 'server 127.0.0.1:15801;' in deployment.CONFIG_PATH.read_text()
+
+
+@pytest.mark.parametrize('name', ['CONFIGFLOW_BACKEND_PORT', 'SUB_STORE_BACKEND_API_PORT'])
+@pytest.mark.parametrize('raw', ['', 'invalid', '0', '65536', '-1', '１', '9' * 5000])
+def test_invalid_internal_port_preserves_active_config(deployment, monkeypatch, name, raw):
+    deployment.prepare_listener()
+    before = deployment.CONFIG_PATH.read_bytes()
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(deployment.WebListenerError, match=name):
+        deployment.prepare_listener()
+    assert deployment.CONFIG_PATH.read_bytes() == before
+
+
+def test_internal_services_cannot_share_a_port(deployment, monkeypatch):
+    deployment.prepare_listener()
+    before = deployment.CONFIG_PATH.read_bytes()
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', '15801')
+    monkeypatch.setenv('SUB_STORE_BACKEND_API_PORT', '15801')
+    with pytest.raises(deployment.WebListenerError, match='不同的端口'):
+        deployment.prepare_listener()
+    assert deployment.CONFIG_PATH.read_bytes() == before
+
+
+@pytest.mark.parametrize('host', ['::1', '192.0.2.1', ''])
+def test_docker_rejects_backend_address_unreachable_by_nginx(deployment, monkeypatch, host):
+    deployment.prepare_listener()
+    before = deployment.CONFIG_PATH.read_bytes()
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_HOST', host)
+    with pytest.raises(deployment.WebListenerError, match='CONFIGFLOW_BACKEND_HOST'):
+        deployment.prepare_listener()
+    assert deployment.CONFIG_PATH.read_bytes() == before
+
+
+def test_source_update_preserves_web_port_changes_with_old_image_template(deployment, monkeypatch):
+    deployment.TEMPLATE_PATH.write_text(TEMPLATE.replace('__CONFIGFLOW_BACKEND_PORT__', '5001'))
+    deployment.prepare_listener()
+    assert deployment.update_listener(15800)['port'] == 15800
+    assert 'server 127.0.0.1:5001;' in deployment.CONFIG_PATH.read_text()
+    before = deployment.CONFIG_PATH.read_bytes()
+    monkeypatch.setenv('CONFIGFLOW_BACKEND_PORT', '15801')
+    with pytest.raises(deployment.WebListenerError, match='更新容器镜像'):
+        deployment.prepare_listener()
+    assert deployment.CONFIG_PATH.read_bytes() == before

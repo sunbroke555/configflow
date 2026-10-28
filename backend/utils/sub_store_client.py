@@ -64,10 +64,10 @@ def _get_base_url():
     官方镜像固定使用内置 Sub-Store；仅本地开发（无内置 bundle）时
     才读取环境变量 SUB_STORE_URL 指向自己启动的 Sub-Store。
     """
-    from backend.utils.dependencies import SUB_STORE_BUILTIN_URL, is_builtin_available
+    from backend.utils.dependencies import builtin_sub_store_url, is_builtin_available
     if is_builtin_available():
-        return SUB_STORE_BUILTIN_URL
-    return os.environ.get('SUB_STORE_URL', SUB_STORE_BUILTIN_URL).rstrip('/')
+        return builtin_sub_store_url()
+    return (os.environ.get('SUB_STORE_URL') or builtin_sub_store_url()).rstrip('/')
 
 
 def _is_yaml_response(text):

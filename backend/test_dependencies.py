@@ -18,6 +18,7 @@ def dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(deps, 'SUB_STORE_BUILTIN_DIR', str(builtin))
     monkeypatch.setattr(deps, 'sub_store_runtime_dir', lambda: str(runtime))
     monkeypatch.delenv('SUB_STORE_URL', raising=False)
+    monkeypatch.delenv('SUB_STORE_BACKEND_API_PORT', raising=False)
     monkeypatch.setattr('backend.common.config.get_system_config', lambda: {'system_config': {}})
     from backend.utils.sub_store_runtime import SubStoreRuntime
     manager = SubStoreRuntime(tmp_path / 'locks')
@@ -59,7 +60,40 @@ def test_base_url_always_builtin_when_bundled(dirs, monkeypatch):
     monkeypatch.setenv('SUB_STORE_URL', 'http://sub-store:3001')
     monkeypatch.setattr('backend.common.config.get_system_config',
                         lambda: {'system_config': {'sub_store_url': 'http://10.0.0.2:3001'}})
-    assert sub_store_client._get_base_url() == deps.SUB_STORE_BUILTIN_URL
+    assert sub_store_client._get_base_url() == 'http://127.0.0.1:3001'
+
+
+def test_custom_builtin_port_is_shared_by_client_readiness_and_update(dirs, monkeypatch):
+    from backend.utils import sub_store_client
+    from backend.utils.sub_store_runtime import SubStoreRuntime
+    monkeypatch.setenv('SUB_STORE_BACKEND_API_PORT', '15802')
+    # An external URL must not divert the bundled process or its conversions.
+    monkeypatch.setenv('SUB_STORE_URL', 'http://unrelated-service:3001')
+    expected = 'http://127.0.0.1:15802'
+    assert sub_store_client._get_base_url() == expected
+    requested = []
+    def version(base_url, timeout=5):
+        requested.append(base_url)
+        return '2.40.0'
+    monkeypatch.setattr(deps, 'fetch_running_version', version)
+    assert SubStoreRuntime()._ready()
+    assert deps._wait_for_version('2.40.0') == '2.40.0'
+    monkeypatch.setattr(deps, 'fetch_latest_release', lambda **_: ({'version': '2.40.0'}, ''))
+    assert deps.start_sub_store_update()[0] is False
+    assert requested == [expected, expected, expected]
+
+
+@pytest.mark.parametrize('value', ['', '0', '65536', '-1', '+3001', '30.01', '3001/path', '３００１'])
+def test_invalid_builtin_port_never_falls_back_to_an_unrelated_service(dirs, monkeypatch, value):
+    from backend.utils import sub_store_client
+    from backend.utils.sub_store_runtime import SubStoreRuntime
+    monkeypatch.setenv('SUB_STORE_BACKEND_API_PORT', value)
+    calls = []
+    monkeypatch.setattr(deps.requests, 'get', lambda *args, **kwargs: calls.append(args))
+    for action in (sub_store_client._get_base_url, SubStoreRuntime()._ready):
+        with pytest.raises(ValueError, match='SUB_STORE_BACKEND_API_PORT'):
+            action()
+    assert calls == []
 
 
 def test_base_url_falls_back_to_env_without_bundle(dirs, monkeypatch):

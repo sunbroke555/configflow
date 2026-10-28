@@ -163,8 +163,10 @@ def load_config() -> Dict[str, Any]:
     # backend port, never reachable from the LAN; requests supply the origin.
     in_container = os.path.exists('/.dockerenv') or os.path.exists('/run/.containerenv')
     if not in_container and not repository.get_system()['system_config'].get('server_domain', '').strip():
+        from backend.http_server import backend_address
+        port = backend_address()['port']
         repository.update_system_transaction(
-            lambda system: system['system_config'].update(server_domain=f'http://{get_local_ip()}:5001'))
+            lambda system: system['system_config'].update(server_domain=f'http://{get_local_ip()}:{port}'))
     from backend.common.agent_manager import init_agent_manager
     init_agent_manager()
     return get_config()
