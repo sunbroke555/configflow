@@ -14,7 +14,7 @@ const basePath = `/${(process.env.DOCS_BASE || '/').replace(/^\/+|\/+$/g, '')}`.
 const base = `http://127.0.0.1:${port}${basePath}`
 const errors = []
 const tabPages = [
-  { route: 'guide/install', groups: { 'panel-install-method': ['compose', 'docker-run', 'nas'] } },
+  { route: 'guide/install', groups: { 'panel-install-method': ['compose', 'docker-run', 'nas', 'source'] } },
   { route: 'guide/agent-install', groups: {
     'agent-install-method': ['linux-install', 'docker', 'gateway', 'routeros', 'ha'],
     'linux-install-choice': ['shell-single', 'shell-aio', 'shell-existing', 'cores-only'],
@@ -225,6 +225,12 @@ try {
       assert.equal(await codeGroup.locator('.blocks > div:visible').count(), 1, `${parent}: multiple network commands visible`)
       const command = await active.innerText()
       assert(command.includes(mode.startsWith('Host') ? (parent === 'compose' ? 'network_mode: host' : '--network host') : (parent === 'compose' ? '5010:80' : '--network bridge')), `${parent}/${mode}: wrong command shown`)
+      if (mode.startsWith('Host')) {
+        for (const setting of ['CONFIGFLOW_BACKEND_HOST', 'CONFIGFLOW_BACKEND_PORT', 'SUB_STORE_BACKEND_API_PORT']) {
+          assert(command.includes(setting), `${parent}: missing internal service setting ${setting}`)
+        }
+        assert(command.includes('15801') && command.includes('15802'), `${parent}: missing distinct internal ports`)
+      }
       codeModes.push(`${parent}/${mode}`)
     }
   }

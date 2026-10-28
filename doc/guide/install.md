@@ -22,7 +22,7 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 | 一台能运行 Docker 的服务器或 NAS | 安装并启动 Docker。选择 Compose 时还需 Docker Compose；也可以选下面的 `docker run` 命令。NAS 的“项目／Compose”功能也可以。 |
 | 这台设备的局域网 IP | 例如 `192.168.1.10`。建议在主路由中为它保留地址，避免重启后变化。 |
 | 一个长期保存数据的目录 | 例如 NAS 的 `/volume1/docker/configflow/data`。这是示例，需换成自己的实际路径。 |
-| 未被占用的端口 | Bridge 示例从 `5010` 访问，Host 示例从 `8088` 访问。Host 还需要宿主机的 `5001` 和 `3001` 没被其他服务占用。 |
+| 未被占用的端口 | Bridge 示例从 `5010` 访问，Host 示例从 `8088` 访问。Host 示例另用 `15801` 作为后端端口、`15802` 作为内置 Sub-Store 端口；三个端口都要空闲。 |
 | 管理账号、密码和登录密钥 | 自己设置，不要原样使用示例里的占位文字。 |
 
 下面的命令在**准备运行面板的设备**上执行。浏览器可以在另一台电脑或手机上打开。
@@ -32,7 +32,7 @@ ConfigFlow 管理面板负责保存和分发设置；**Mihomo、OxiDNS 等“核
 | 网络方式 | 建议怎么选 | 使用后的结果 |
 | --- | --- | --- |
 | **Bridge 模式（推荐）** | 普通安装先用；主要需要打开面板，或宿主机已有较多服务 | 访问 `http://设备IP:5010`；容器内部端口与主机分开，只需安排对外端口 |
-| **Host 模式** | Linux 服务器／Linux NAS 上，希望面板直接使用宿主机网络，包括宿主机已有的 IPv6 网络能力 | 访问 `http://设备IP:8088`；与宿主机共用端口，需要检查 `8088`、`5001`、`3001` 冲突 |
+| **Host 模式** | Linux 服务器／Linux NAS 上，希望面板直接使用宿主机网络，包括宿主机已有的 IPv6 网络能力 | 访问 `http://设备IP:8088`；与宿主机共用端口，需要检查 `8088`、`15801`、`15802` 是否空闲 |
 
 Host 不会给宿主机增加本来没有的 IPv6。宿主机仍需有可用 IPv6 地址、路由及允许访问的防火墙设置；Bridge 的 IPv6 则取决于 Docker 网络配置。这里只选择面板容器的网络，不会替你改变 Agent 容器的网络。
 
@@ -41,7 +41,7 @@ Host 不会给宿主机增加本来没有的 IPv6。宿主机仍需有可用 IPv
 
 点击适合自己的方式，只需完成该页签中的步骤。首次安装推荐 Docker Compose，后续改端口或更新时比较方便。
 
-<DocsTabs id="panel-install-method" label="选择安装方式" :tabs="[{ id: 'compose', label: 'Docker Compose（推荐）' }, { id: 'docker-run', label: 'docker run' }, { id: 'nas', label: 'NAS 容器管理器' }]">
+<DocsTabs id="panel-install-method" label="选择安装方式" :tabs="[{ id: 'compose', label: 'Docker Compose（推荐）' }, { id: 'docker-run', label: 'docker run' }, { id: 'nas', label: 'NAS 容器管理器' }, { id: 'source', label: '源码开发补充' }]">
 
 <template #compose>
 
@@ -90,6 +90,9 @@ services:
       DATA_DIR: /data
       TZ: Asia/Shanghai
       CONFIGFLOW_WEB_PORT: "8088"
+      CONFIGFLOW_BACKEND_HOST: "127.0.0.1"
+      CONFIGFLOW_BACKEND_PORT: "15801"
+      SUB_STORE_BACKEND_API_PORT: "15802"
       ADMIN_USERNAME: "your-admin-name"
       ADMIN_PASSWORD: "replace-with-your-own-password"
       JWT_SECRET_KEY: "replace-with-at-least-32-random-characters"
@@ -100,9 +103,13 @@ services:
 
 Bridge 版通过 `5010:80` 把外部访问送进容器。Host 版不需要 `ports`，直接通过 `CONFIGFLOW_WEB_PORT` 指定 `8088`；这个环境变量存在时，网页里的 Web 监听端口会显示只读。希望以后从网页改端口时，先阅读 [环境变量与 Web 设置的关系](#port-priority)。
 
-#### 2. 看懂需要修改的地方
+#### 2. 核对端口和自己的参数
 
-启动前，按本页的 [账号、目录与其他参数](#deployment-parameters) 核对自己的值。该说明也适用于 docker run 和 NAS 安装。
+- **Bridge：**只需确认主机的 `5010` 空闲；被占用就改映射左侧，例如 `5011:80`。容器里的后端和 Sub-Store 与宿主机端口隔离。
+- **Host：**本例 Web 为 `8088`、后端为 `15801`、Sub-Store 为 `15802`。三个值必须互不相同且未被占用，程序不会自动换空闲端口。哪一项被占用，就修改对应环境变量；只改后端或 Sub-Store 时，浏览器仍访问 `8088`。
+- **已有安装改参数：**在原文件修改，保留数据目录、账号和密钥，运行 `docker compose up -d` 重新创建容器；`docker compose restart` 不会读取新环境变量。
+
+Host 的自定义内部端口需要包含此功能的新镜像。旧镜像仅添加变量不会生效；升级前先备份，再拉取支持的镜像并重建。账号、目录等其余字段见 [共用参数说明](#deployment-parameters)。
 
 #### 3. 启动
 
@@ -168,6 +175,9 @@ docker run -d \
   -e DATA_DIR=/data \
   -e TZ=Asia/Shanghai \
   -e CONFIGFLOW_WEB_PORT=8088 \
+  -e CONFIGFLOW_BACKEND_HOST=127.0.0.1 \
+  -e CONFIGFLOW_BACKEND_PORT=15801 \
+  -e SUB_STORE_BACKEND_API_PORT=15802 \
   -e ADMIN_USERNAME='your-admin-name' \
   -e ADMIN_PASSWORD='replace-with-your-own-password' \
   -e JWT_SECRET_KEY='replace-with-at-least-32-random-characters' \
@@ -176,7 +186,13 @@ docker run -d \
 
 :::
 
-Bridge 使用 `-p 5010:80`，从 `http://设备IP:5010` 访问；Host 使用 `--network host`，不加 `-p`，从 `http://设备IP:8088` 访问。Host 的网页端口只读；还需检查 `5001`、`3001` 是否占用。IPv6 使用宿主机已有的网络能力，详见 [网络方式和端口](#network)。
+Bridge 使用 `-p 5010:80`，从 `http://设备IP:5010` 访问；Host 使用 `--network host`，不加 `-p`，从 `http://设备IP:8088` 访问。Host 的网页端口由环境变量指定，页面只读。
+
+**这份命令的端口怎么改：**Bridge 只需让 `-p 5010:80` 左侧空闲；Host 需要 `8088`、后端 `15801`、Sub-Store `15802` 三个端口互不相同且空闲。若某项被占用，修改对应的 `-e` 参数；程序不会自动避让。只改内部两个端口时，Web 仍访问 `8088`。后端与 Sub-Store 使用回环地址，不需要额外的 `-p`。
+
+自定义内部端口需要支持这些参数的新镜像，旧镜像仅增加 `-e` 不会生效。已有容器改参数前先备份，保存原完整命令，再依次 `docker stop config-flow`、`docker rm config-flow`，用修改后的完整命令重新创建；沿用原数据路径、账号和密钥。单纯 `docker restart` 不生效，也不要直接重复执行命令造成同名冲突。
+
+IPv6 使用宿主机已有的网络能力，详见 [网络方式和端口](#network)。
 
 命令执行后，可以运行 `docker ps --filter name=config-flow` 查看状态，运行 `docker logs --tail=100 config-flow` 查看启动信息。Docker 会在本机没有镜像时尝试下载；若下载或创建报错，先处理报错。
 
@@ -193,7 +209,7 @@ NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即�
 1. 打开 NAS 的容器管理器，选择“项目”“Compose”或“从 YAML 创建”。
 2. 建立一个独立的 ConfigFlow 项目。切到 [Docker Compose 页签](#compose)，选择 Bridge 或 Host 并复制完整内容，再回到 NAS 的项目编辑器粘贴。
 3. 将 `./data:/data` 改成 NAS 上的实际目录，例如 `/volume1/docker/configflow/data:/data`。确认这个目录可写。
-4. 按 [共用参数说明](#deployment-parameters) 设置账号、密码、密钥。Bridge 检查 `5010` 没被占用；Host 检查 `8088`、`5001`、`3001` 没被占用，保留 `CONFIGFLOW_WEB_PORT=8088`。
+4. 按 [共用参数说明](#deployment-parameters) 设置账号、密码、密钥。Bridge 检查 `5010` 没被占用；Host 检查 `8088`、`15801`、`15802` 互不相同且空闲，按下表分别设置 Web、后端和 Sub-Store。
 5. 点击管理器中的部署／启动，等容器状态变为运行。
 6. Bridge 用 `http://NAS的IP:5010`，Host 用 `http://NAS的IP:8088` 打开面板。
 
@@ -205,10 +221,65 @@ NAS 不同系统的按钮名称不完全相同，按功能找到对应入口即�
 | 网络 | bridge／桥接 | host／主机网络；NAS 不支持时用 Bridge |
 | 端口映射 | 主机 TCP `5010` → 容器 TCP `80` | 不填写映射 |
 | 目录挂载 | NAS 的实际数据目录 → `/data`，可读写 | 同左 |
-| 环境变量 | Bridge Compose 中 `environment` 的全部项 | Host Compose 中的全部项，包括 `CONFIGFLOW_WEB_PORT=8088` |
+| `DATA_DIR` / `TZ` | `/data` / `Asia/Shanghai` | `/data` / `Asia/Shanghai` |
+| 登录变量 | 自己的 `ADMIN_USERNAME`、`ADMIN_PASSWORD`、`JWT_SECRET_KEY` | 同左；已有安装沿用原值 |
+| `CONFIGFLOW_WEB_PORT` | 通常不填，内部保持 `80` | `8088`，浏览器访问的端口 |
+| `CONFIGFLOW_BACKEND_HOST` | 通常不填 | `127.0.0.1`，后端只在主机内部接收连接 |
+| `CONFIGFLOW_BACKEND_PORT` | 通常不填，内部保持 `5001` | `15801`，避开 DSM 等已有服务 |
+| `SUB_STORE_BACKEND_API_PORT` | 通常不填，内部保持 `3001` | `15802`，内置订阅转换服务的端口 |
 | 启动命令 | 使用镜像默认值，不另填 | 同左 |
 
-NAS 部署和命令行部署二选一，不要为同一数据目录同时启动两个面板容器。
+群晖 DSM 常用 `5001`，其他应用也可能占用 `3001`；只设置 Web 端口不会避开这两处冲突。表中的 `15801`、`15802` 也只是示例，若已占用要换其他空闲值，程序不会自动分配。只改内部端口时，访问地址仍是 `http://NAS的IP:8088`。
+
+修改后在原项目或原容器设置中选择重新部署／重新创建，保留原数据挂载、账号和密钥；仅点击“重启”不会加载新环境变量。内部端口变量需要包含此功能的新镜像，旧镜像应先升级。NAS 部署和命令行部署二选一，不要为同一数据目录同时启动两个面板容器。
+
+</template>
+
+<template #source>
+
+### 单独运行源码：各服务分别设置端口
+
+这一项用于**已经准备好源码、Python / Node 依赖和独立 Sub-Store 的开发环境**，不是只启动 Python 就完成网页安装的步骤。普通安装选择前面的 Docker 方式；开发环境继续沿用自己的账号、密钥和数据目录。
+
+源码方式没有镜像里的 Nginx，`CONFIGFLOW_WEB_PORT` 和网页中的监听端口管理不会替你修改 Python、前端开发服务或独立 Sub-Store。三个服务要分别启动，端口仍须互不相同且空闲，不会自动避让。
+
+| 服务 | 本例地址／端口 | 哪里修改 |
+| --- | --- | --- |
+| 前端开发页面 | `http://127.0.0.1:15800` | Vite 的 `--port` 或 `server.port` |
+| Python 后端 | `127.0.0.1:15801` | 启动 Python 前设置 `CONFIGFLOW_BACKEND_HOST` / `CONFIGFLOW_BACKEND_PORT` |
+| 独立 Sub-Store | `127.0.0.1:15802` | Sub-Store 自己的启动参数；Python 另用 `SUB_STORE_URL` 指向这个地址 |
+
+**1. 独立 Sub-Store：**在运行它的终端设置端口，并使用自己的实际 bundle 路径启动，例如：
+
+```bash
+SUB_STORE_BACKEND_API_HOST=127.0.0.1 \
+SUB_STORE_BACKEND_API_PORT=15802 \
+node /absolute/path/to/sub-store.bundle.js
+```
+
+若 Sub-Store 由其他容器或服务管理器运行，在那个服务中修改端口并重建／重启；不能只改 ConfigFlow 的变量。它运行在另一台设备时，`SUB_STORE_URL` 使用该服务实际可达的地址。
+
+**2. Python 后端：**在仓库根目录、已经激活的 Python 环境中运行：
+
+```bash
+CONFIGFLOW_BACKEND_HOST=127.0.0.1 \
+CONFIGFLOW_BACKEND_PORT=15801 \
+SUB_STORE_URL=http://127.0.0.1:15802 \
+python -m backend.app
+```
+
+这需要支持后端端口参数的源码版本；旧源码要先更新。`SUB_STORE_URL` 用于没有内置 bundle 的源码环境；官方镜像始终使用内置 Sub-Store，请按 Docker 示例修改内部端口。
+
+**3. 前端开发服务：**先在 `frontend/vite.config.mts` 中把 `server.proxy['/api'].target` 改为 `http://127.0.0.1:15801`，其余配置保留。它原来指向 `http://localhost:5001`，不会自动读取后端端口变量。然后在另一个终端运行：
+
+```bash
+cd frontend
+npm run dev -- --host 127.0.0.1 --port 15800 --strictPort
+```
+
+在这台开发机的浏览器打开 `http://127.0.0.1:15800`。Vite 原默认 `3001` 与独立 Sub-Store 的默认端口相同，本例将三者分开；`--strictPort` 会让占用直接报错，避免访问地址悄悄变化。
+
+改端口后，要停止并重新启动对应进程，且同步调整调用方：后端变更要改 Vite 的 `/api` 代理，Sub-Store 变更要改 Python 的 `SUB_STORE_URL`。如果使用自己配置的 Nginx 等反向代理，也要同步改它的上游，不能套用 Docker 自动同步的说明。
 
 </template>
 
@@ -225,6 +296,9 @@ NAS 部署和命令行部署二选一，不要为同一数据目录同时启动�
 | `ports`（Bridge） | `5010:80` | 访问端口冲突时，只把左边 `5010` 改成其他空闲端口 | 左边是设备对外端口，右边是容器内端口。重新创建后按新端口打开浏览器。Host 版不填写此项。 |
 | `network_mode`（Host） | `host` | 选择 Host 版时保留 | 共用宿主机网络；不是额外创建一个独立 IP。Bridge 版无需填写此项。 |
 | `CONFIGFLOW_WEB_PORT`（Host） | 本例为 `8088` | `8088` 已被占用时改成其他空闲端口 | 明确指定实际 Web 端口，优先于网页保存值；网页端口只读。重建容器后生效。 |
+| `CONFIGFLOW_BACKEND_PORT`（Host） | 本例 `15801`，未指定默认 `5001` | 后端端口被 DSM 等服务占用时 | Nginx 与后端使用相同端口；重建生效，Web 地址不变。不会自动选择空闲值。 |
+| `CONFIGFLOW_BACKEND_HOST`（Host） | 本例 `127.0.0.1` | Docker 只支持 `127.0.0.1` / `0.0.0.0`，Host 建议保持本例 | 将后端限制在主机内部，通过 Web 入口访问；重建生效。 |
+| `SUB_STORE_BACKEND_API_PORT`（Host） | 本例 `15802`，未指定默认 `3001` | 内置 Sub-Store 的端口被占用时 | 启动、就绪检查和转换请求同步改端口；重建生效，Web 地址不变。 |
 | `volumes` | `./data:/data` | NAS 或迁移旧实例时，改成自己的实际数据目录 | 左边的文件保存在设备上，右边 `/data` 保持不变。更新时必须继续使用同一个目录。 |
 | `DATA_DIR` | `/data` | 按本例挂载时保持不变 | 告诉程序把数据存到容器的 `/data`；它应与挂载右侧一致。 |
 | `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 仓库示例默认不启用；本例已填写，建议保留登录保护 | 首次安装时设置自己的账号和密码 | 两项都非空才启用登录。只设置一项不会启用。修改后需重新创建容器。 |
@@ -253,7 +327,7 @@ NAS 部署和命令行部署二选一，不要为同一数据目录同时启动�
 | 访问令牌 | 默认空；需要限制配置链接访问时生成 | 下载链接需带令牌；此令牌也授权 MCP 管理操作，应像密码一样保管 | 配置令牌保护关闭；不要把它与网页登录账号混为一项 |
 | Web 监听端口 | Bridge 示例内部为 `80`；Host 示例被环境变量指定为 `8088`，页面只读 | 改的是容器实际监听端口，详见下一节 | 沿用当前启动设置；不是服务域名里的地址文本 |
 
-内置 Sub-Store 是转换订阅用的程序，默认按需启动，空闲约 5 分钟后休眠。首次转换需要等待启动；看到“休眠中”不代表故障。无需另装 Sub-Store，也无需对外开放其内部 `3001` 端口。
+内置 Sub-Store 是转换订阅用的程序，默认按需启动，空闲约 5 分钟后休眠。首次转换需要等待启动；看到“休眠中”不代表故障。Docker 镜像无需另装 Sub-Store，也无需对外开放其内部端口（默认 `3001`，本页 Host 示例为 `15802`）。
 
 <a id="network"></a>
 ## 选择网络方式和修改端口
@@ -274,12 +348,12 @@ NAS 部署和命令行部署二选一，不要为同一数据目录同时启动�
 
 想交回网页管理，需移除这个环境变量并重建容器。移除后会使用以前通过网页保存的端口；从未保存过就回到 `80`。因此先确认恢复后的端口空闲，再重建，不能只删环境变量后继续假定是 `8088`。
 
-无论从哪个端口访问，Host 的面板后端 `5001`、内置 Sub-Store 默认 `3001` 仍与宿主机其他服务共用端口。只把 Web 改成 `8088`，不能解决这些内部端口的占用问题。
+Host 的三个端口都与宿主机其他服务共用。本页示例指定后端 `15801`、内置 Sub-Store `15802`；未指定时仍默认 `5001`、`3001`。只改 Web 不能解决内部端口占用，遇到冲突要修改对应变量并重建，程序不会自动避让。
 
 ### 从 Web 修改监听端口
 
 1. 进入「系统设置 → 服务配置 → Web 监听端口」。
-2. 填写 `1–65535` 的整数；不要使用内部后端端口 `5001`、Sub-Store 使用的端口或其他已占用端口。
+2. 填写 `1–65535` 的整数；不要使用实际配置的后端和 Sub-Store 端口（默认 `5001` / `3001`，本页 Host 示例 `15801` / `15802`），也不要使用其他已占用端口。
 3. 点击「应用」，阅读当前连接可能断开的提示，再点击「应用新端口」。
 4. 成功后按新端口访问。页面给的是 HTTP 直连参考地址；经过 HTTPS 反向代理时，先更新代理的后端地址，不必把原 HTTPS 域名改成该参考地址。
 5. 如果设备访问 ConfigFlow 的完整地址也变了，另外更新「服务域名」以及已有 Agent 使用的服务地址，并更新客户端保存的配置下载链接。修改监听端口不会自动替这些地方换地址；仍使用同一反向代理域名时，只需按实际情况更新代理后端。
@@ -306,7 +380,7 @@ IPv6 访问地址需加方括号，例如 `http://[2001:db8::10]:8088`，示例�
 3. 确认数据挂载指向准备好的实际目录。
 4. 对照「服务域名」，确认准备安装 Agent 的设备也能打开这个地址。
 
-打不开时，Compose 用户查看 `docker compose logs --tail=100 config-flow`，`docker run` 用户查看 `docker logs --tail=100 config-flow`，NAS 用户查看容器管理器里的日志。按顺序检查容器是否运行、IP、对外端口、挂载权限和防火墙。`5001` 是后端服务端口，不是本章让浏览器访问的网页端口。
+打不开时，Compose 用户查看 `docker compose logs --tail=100 config-flow`，`docker run` 用户查看 `docker logs --tail=100 config-flow`，NAS 用户查看容器管理器里的日志。按顺序检查容器是否运行、IP、对外端口、挂载权限和防火墙。若页面能打开却所有数据失败，检查后端是否因端口占用退出；若订阅转换失败，检查 Sub-Store 端口。后端默认 `5001`（本页 Host 示例 `15801`），不是浏览器访问的 Web 端口。
 
 <a id="maintain"></a>
 ## 停止、更新与退回
@@ -343,7 +417,7 @@ IPv6 访问地址需加方括号，例如 `http://[2001:db8::10]:8088`，示例�
 
 ### 改错端口或需要退回
 
-无法访问时，在原 Compose 或 `docker run` 命令中设置 `CONFIGFLOW_WEB_PORT` 为已确认空闲的端口。Bridge 同时把端口映射右侧改成这个值，然后按原安装方式重建；Host 直接使用这个端口。恢复访问后，再核对网页保存值及服务域名。
+无法访问时，在原 Compose 或 `docker run` 命令中设置 `CONFIGFLOW_WEB_PORT` 为已确认空闲的端口。Bridge 同时把端口映射右侧改成这个值，然后按原安装方式重建；Host 直接使用这个端口。如果 Web 能打开但数据或转换失败，要另外检查后端与 Sub-Store，按对应安装方式修改 `CONFIGFLOW_BACKEND_PORT` / `SUB_STORE_BACKEND_API_PORT` 并重建；只改这两项不改变浏览器地址。恢复访问后，再核对网页保存值及服务域名。
 
 更新前，先从「系统设置」导出全部数据；如需完整保留运行文件，再正常停服并复制**整个实际数据目录**。不要在运行中单独复制数据库文件。JSON 导出不含端口文件和监控历史，具体看 [哪些内容需要另外备份](../manual/system-settings.md#backup-scope)。
 
