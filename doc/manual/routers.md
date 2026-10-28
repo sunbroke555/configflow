@@ -30,6 +30,8 @@ RouterOS 的 HTTPS 管理服务需要 `www-ssl`；使用 HTTP 的 `www` 需要 R
 
 fake-ip 是 OxiDNS/Mihomo 用于分流的临时地址。已经通过这种方式分流的网站，不必再把它的所有真实 IP 手工加入静态路由。Telegram 等可能直接连接 IP 的应用，才需要另外考虑对应 IP 规则集。
 
+需要自己登录路由器逐条填写时，见 [Fake-IP 与 Telegram 静态路由填写表](../guide/first-run.md#manual-routes)，其中列出了目的网段、子网掩码和下一跳。**下一跳填运行 Mihomo、负责接收转发连接的设备 IP**；真实 IP 规则还需按来源排除 Mihomo 设备本身。
+
 静态规则集和策略规则集不能同时选同一项，移到一组会从另一组移除。取消勾选后必须**保存、预览并确认发布**，才会清理对应受管规则；单纯关掉窗口不会修改路由器。
 
 ## DHCP DNS 和强制 DNS
