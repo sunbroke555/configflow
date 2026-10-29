@@ -90,6 +90,7 @@ app.run(host='0.0.0.0', port=int(os.environ['DOCS_API_PORT']), debug=False, use_
   }
   await page.goto(`${base}/setup`)
   await page.locator('#setup-name').waitFor()
+  await capture('panel-header-docs', '管理面板顶栏：右侧查看文档入口', page.locator('header').first())
   await capture('first-run-router', '首次向导：默认 Mihomo + OxiDNS 分流', page.locator('main .max-w-5xl'))
   await page.locator('input[name="setup-goal"][value="gateway"]').check()
   await capture('first-run-gateway', '首次向导：选择 Linux 网关', page.locator('main .max-w-5xl'))

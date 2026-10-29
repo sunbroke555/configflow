@@ -115,7 +115,7 @@
             class="max-[900px]:hidden"
             title="查看文档"
             aria-label="查看文档"
-            @click="openGithub"
+            @click="openDocumentation"
           >
             <FileText class="size-[17px]" />
           </Button>
@@ -320,8 +320,8 @@ const checkAuthStatus = async () => {
   }
 }
 
-const openGithub = () => {
-  window.open('https://github.com/thsrite/configflow', '_blank')
+const openDocumentation = () => {
+  window.open('https://thsrite.github.io/configflow/', '_blank')
 }
 
 const handleCommand = async (command: string) => {

@@ -4,6 +4,7 @@
 
 | 图片 | 场景 | 需要注意 |
 | --- | --- | --- |
+| `panel-header-docs.jpg` | 管理面板顶栏 | 右侧纸张图标为“查看文档”，在新标签页打开使用手册 |
 | `first-run-router.jpg` | 首次向导默认的 Mihomo + OxiDNS 分流 | 尚未创建方案 |
 | `first-run-gateway.jpg` | 改选 Linux 网关 | 第 5 步随之变成客户端设置 |
 | `panel-service-settings.jpg` | 服务域名、访问令牌所在位置 | 独立开发服务不支持容器 Web 监听端口设置；这不是官方容器里的端口状态 |
