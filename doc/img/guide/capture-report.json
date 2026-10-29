@@ -1,8 +1,19 @@
 {
-  "capturedAt": "2026-10-28T10:17:55.865Z",
+  "capturedAt": "2026-10-29T01:54:27.968Z",
   "source": "当前仓库真实 Vue 前端 + Flask API",
   "mock": false,
   "captures": [
+    {
+      "file": "panel-header-docs.jpg",
+      "scene": "管理面板顶栏：右侧查看文档入口",
+      "viewport": {
+        "width": 1280,
+        "height": 1700
+      },
+      "actualUI": true,
+      "mock": false,
+      "note": "隔离临时数据库；地址与名称为演示填写；未执行设备安装、配置发布或 HA 配对。"
+    },
     {
       "file": "first-run-router.jpg",
       "scene": "首次向导：默认 Mihomo + OxiDNS 分流",
