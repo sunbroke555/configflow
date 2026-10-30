@@ -102,6 +102,19 @@ describe('reviewable release operation details', () => {
     const nat = operationDetails({ kind: 'nat_add', summary: '新增', src: ['192.0.2.1-192.0.2.2'], dst: ['198.51.100.0/24'], groups: ['cf_nat_1'], comment: 'cf-mihomo' })
     expect(nat.map(g => g.title)).toEqual(['来源范围', '目的网段', '引用 IP 分组', '规则备注'])
   })
+  it('shows only the planned IPv6 DNS setting and its LAN, without exposing inspection snapshots', () => {
+    const groups = operationDetails({ kind: 'ipv6_dns_update', summary: '关闭 bridge-lan 的 IPv6 DNS 下发',
+      interface: 'bridge-lan', source_interface: 'bridge-lan', values: { 'advertise-dns': 'no' },
+      expected: { 'advertise-dns': 'yes', 'ra-lifetime': '30m', 'dns-servers': '2001:db8::53' },
+      expected_rows: [{ interface: 'pppoe-out', 'advertise-dns': 'self' }], evidence: { unrelated: 'do-not-render' } })
+    expect(groups.map(group => group.title)).toEqual(['目标 LAN', '发布改动'])
+    expect(groups[0].rows).toEqual([{ label: 'LAN 接口', value: 'bridge-lan' }])
+    expect(groups[1].rows).toEqual([{ label: 'DNS 下发 · advertise-dns', before: 'yes', value: 'no' }])
+    expect(groups[1].note).toContain('IPv6 地址和默认网关继续通告')
+    expect(JSON.stringify(groups)).not.toContain('pppoe-out')
+    expect(JSON.stringify(groups)).not.toContain('ra-lifetime')
+    expect(JSON.stringify(groups)).not.toContain('do-not-render')
+  })
   it('mounts detail rows only when expanded, searches every address and paginates large plans', async () => {
     const op = fixture(); op.previous = null
     op.spec = { sources: Array.from({ length: 120 }, (_, i) => `192.0.2.${i + 1}/32`), destinations: [], gateway: '192.0.2.3' }

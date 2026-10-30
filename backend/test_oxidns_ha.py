@@ -500,6 +500,10 @@ def test_router_inspection_switches_to_the_vip(monkeypatch):
                             agent__ha_vip='192.168.0.53', peer__ha_vip='192.168.0.53')
     agents = {item['id']: item for item in (agent, peer)}
     driver = MemoryDriver()
+    # OxiDNS selection also inspects the known LAN; this fixture has no RA service.
+    nd_state = {'/ip/address': [{'.id': '*A', 'address': '192.168.0.1/24', 'interface': 'bridge'}],
+                '/ipv6/nd': []}
+    monkeypatch.setattr(driver, '_list', lambda path: copy.deepcopy(nd_state[path]), raising=False)
     monkeypatch.setattr(api, '_agent', lambda agent_id: agents.get(agent_id) if agent_id else None)
     monkeypatch.setattr(api, 'compute_desired', lambda *args, **kwargs:
                         {key: value for key, value in DHCP_DESIRED.items() if not key.startswith('dns_')})

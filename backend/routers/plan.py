@@ -7,7 +7,8 @@ Stages run in this order (see docs/ROUTER_INTEGRATION_DESIGN.md §6.2):
 2. ``routes``         - router static routes for proxy CIDRs to the gateway.
 3. ``nat_bypass``     - exempt proxy CIDRs from source NAT so mihomo sees client IPs.
 4. ``dhcp_dns``       - optionally replace DNS in the gateway's DHCP network.
-5. ``dns_guard``      - RouterOS only, opt-in: send hard-coded LAN DNS to OxiDNS.
+5. ``ipv6_dns``       - stop same-LAN RA DNS only after the selected DHCP DNS works.
+6. ``dns_guard``      - RouterOS only, opt-in: send hard-coded LAN DNS to OxiDNS.
                        Present only while enabled or while objects remain owned.
 
 Manual objects that already do the right thing are adopted (re-commented with the
@@ -44,6 +45,7 @@ STAGE_TITLES = {
     'routes': '主路由代理路由',
     'nat_bypass': '主路由 NAT 免转换',
     'dhcp_dns': 'DHCP DNS',
+    'ipv6_dns': 'IPv6 DNS 下发',
     'dns_guard': 'DNS 劫持',
     'ipv6_fakeip': 'IPv6 Fake-IP 分流路由',
     'return_cleanup': '移除 mihomo 回流规则',
@@ -679,6 +681,15 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         warnings.extend(ipv6['warnings'])
         stages.insert(2, {'key': 'ipv6_fakeip', 'title': STAGE_TITLES['ipv6_fakeip'], 'manual': manual,
                           'ops': ipv6['ops'], 'note': '仅管理本功能已核实归属的 IPv6 Fake-IP 路由；已有其他路由沿用并保留原归属。'})
+    ipv6_dns = state.ipv6_dns_plan
+    if ipv6_dns is not None:
+        blockers.extend(ipv6_dns['blockers'])
+        warnings.extend(ipv6_dns['warnings'])
+        if ipv6_dns['enabled'] and (not manage_dns or dns['status'] not in {'synced', 'pending'}):
+            blockers.append('IPv6 DNS 下发缺少已确认的 OxiDNS DHCP 目标，请重新预览')
+        stages.append({'key': 'ipv6_dns', 'title': STAGE_TITLES['ipv6_dns'], 'manual': manual,
+                       'enabled': ipv6_dns['enabled'], 'ops': ipv6_dns['ops'],
+                       'note': '先确认 DHCP 已下发所选 OxiDNS，再关闭同一局域网的 IPv6 DNS 通告；保留地址和默认网关通告。'})
     if guard is not None:
         stages.append({
             'key': 'dns_guard', 'title': STAGE_TITLES['dns_guard'], 'manual': manual, 'ops': guard_ops,
@@ -721,7 +732,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         item = dns['items'][0]
         checks['dhcp_dns'] = {'id': item['id'], 'network': item['network'], 'gateway': gateway,
                               'dns': item['desired_dns']}
-    script = driver.render_script(route_ops + nat_ops + dns_ops + guard_ops) if manual else ''
+    if ipv6_dns is not None:
+        checks['ipv6_dns'] = ipv6_dns['check']
+    script = driver.render_script([op for stage in stages if stage['manual'] for op in stage['ops']]) if manual else ''
     evidence = {'context': state.nat_context, 'address_sets': state.address_sets} if state.nat_context is not None else None
     if listed.get('evidence') is not None:
         evidence['nat_list'] = listed['evidence']
@@ -729,6 +742,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}
     if ipv6 is not None:
         evidence = {'nat': evidence, 'ipv6_fakeip': ipv6['evidence'], 'ipv6_check': ipv6['check']}
+    if ipv6_dns is not None:
+        evidence = {'routing': evidence, 'ipv6_dns': ipv6_dns['evidence'], 'ipv6_dns_check': ipv6_dns['check']}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,
                      'state': as_dict(state.dhcp_dns)} if manage_dns else None)
     if dns_evidence is not None and desired.get('dns_ha'):

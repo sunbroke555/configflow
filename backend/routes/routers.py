@@ -9,7 +9,7 @@ from backend.common.config import get_config, get_repository, reset_config_conte
 from backend.routers import dns_guard
 from backend.routers.base import RouterConflictError, RouterError, as_dict, retire_policy_routes
 from backend.routers.desired import compute_desired
-from backend.routers.dhcp_dns import dns_agent_settings, dns_ha_settings
+from backend.routers.dhcp_dns import build_dns_report, dns_agent_settings, dns_ha_settings
 from backend.routers.ikuai import IKuaiDriver
 from backend.routers.plan import build_plan
 from backend.routers.release import AgentReturnRouting, execute
@@ -299,6 +299,14 @@ def _inspect_state(config, router, driver, content_loader=None):
             state.dhcp_dns = driver.read_dhcp_dns()
         except RouterError as error:
             desired['dns_error'] = f'无法读取 DHCP DNS 配置：{error}'
+    if router['type'] == 'routeros' and dns_id and not desired['dns_error']:
+        dns = build_dns_report(desired, state.dhcp_dns)
+        if dns['status'] in {'pending', 'synced'} and len(dns['items']) == 1:
+            from backend.routers import ipv6_dns
+            item = dns['items'][0]
+            scope = {'id': item['id'], 'network': item['network'], 'gateway': desired['proxy_gateway'],
+                     'dns': item['desired_dns']}
+            state.ipv6_dns_plan = ipv6_dns.inspect({**desired, 'ipv6_dns_scope': scope}, driver)
     report = build_report(desired, state)
     if router.get('manage_return_routing') is True:
         report['return_routing'] = _return_routing(gateway_agent)

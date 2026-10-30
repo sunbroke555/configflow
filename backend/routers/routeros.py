@@ -422,6 +422,11 @@ class RouterOSDriver(RouterDriver):
     def _payload(path: str, row: Dict[str, Any]) -> Dict[str, Any]:
         if _truthy(row.get('dynamic')):
             raise RouterError('RouterOS 动态对象不能接管、修改或删除')
+        if path == '/ipv6/nd':
+            from backend.routers.ipv6_dns import _flag
+            if _flag(row, 'dynamic') or _flag(row, 'invalid'):
+                raise RouterError('动态或无效的 IPv6 通告不能修改，请重新预览')
+            _flag(row, 'disabled')
         if path in ROUTE_PATHS:
             return {key: value for key, value in row.items() if key in ROUTE_FIELDS}
         if path == DHCP_NETWORKS:
@@ -637,6 +642,9 @@ class RouterOSDriver(RouterDriver):
         if kind in ('ipv6_fakeip_replace', 'ipv6_fakeip_restore'):
             from backend.routers import ipv6_fakeip
             return (ipv6_fakeip.apply if kind == 'ipv6_fakeip_replace' else ipv6_fakeip.restore)(self, op)
+        if kind == 'ipv6_dns_update':
+            from backend.routers import ipv6_dns
+            return ipv6_dns.apply(self, op)
         if kind in ('dns_guard_replace', 'dns_guard_restore'):
             from backend.routers import dns_guard
             return (dns_guard.apply if kind == 'dns_guard_replace' else dns_guard.restore)(self, op)

@@ -250,6 +250,11 @@ def test_api_inspection_only_reads_selected_dns_and_rejects_stale_target(authent
     client, _, agents, admin, _ = authenticated_app
     from backend.routes import routers as api
     driver = MemoryDriver()
+    # This API case emulates RouterOS with a known LAN and no RA service.
+    # Selecting OxiDNS now checks that LAN before it advertises DHCP DNS.
+    nd_state = {'/ip/address': [{'.id': '*A', 'address': '192.168.0.1/24', 'interface': 'bridge'}],
+                '/ipv6/nd': []}
+    monkeypatch.setattr(driver, '_list', lambda path: copy.deepcopy(nd_state[path]), raising=False)
     dns_agent = dict(DNS_AGENT)
     monkeypatch.setattr(api, '_agent', lambda id: dns_agent if id == 'dns-agent' else
                         {**agents[0], 'host': GATEWAY})

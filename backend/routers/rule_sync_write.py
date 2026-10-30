@@ -227,6 +227,8 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
             # IPv6 is never written by remote-rule sync, but outside edits during
             # this IPv4 delta must fail readback and compensate our own writes.
             _verify('ipv6_fakeip', checks, driver, None)
+        if checks.get('ipv6_dns') is not None:
+            _verify('ipv6_dns', checks, driver, None)
         ensure_current(force=True)
     except (RouterError, RuntimeError) as error:
         try:

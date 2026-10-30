@@ -272,6 +272,8 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                     raise RouterError('目的网段存在冲突或无法完整核对，请手动预览发布')
                 if (state.ipv6_fakeip_plan or {}).get('blockers') or (state.ipv6_fakeip_plan or {}).get('ops'):
                     raise RouterError('IPv6 Fake-IP 配置有差异或未能确认，请先手动预览发布')
+                if (state.ipv6_dns_plan or {}).get('blockers') or (state.ipv6_dns_plan or {}).get('ops'):
+                    raise RouterError('IPv6 DNS 下发有差异或未能确认，请先手动预览发布')
                 writes_started = True
                 outcome = apply_delta(driver, desired, plan, baseline, ensure_current)
                 _save_manifest(profile_id, router, driver)

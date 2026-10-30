@@ -53,7 +53,7 @@ const groupRefs = (op: RouterPlanOperation): DetailRow[] => strings(op.groups).m
 const groupNote = 'iKuai 规则只引用 ConfigFlow 管理的 IP 分组，不再逐条填写网段；增删网段时只改分组内容。'
 export function hasOperationDetails(op: RouterPlanOperation) {
   return ['ros_policy_replace', 'dns_guard_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
-    'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'policy_route_add', 'policy_route_update',
+    'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'ipv6_dns_update', 'policy_route_add', 'policy_route_update',
     'policy_route_delete', 'ikuai_group_add', 'ikuai_group_update', 'ikuai_group_delete'].includes(op.kind || '')
 }
 export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
@@ -145,6 +145,15 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     add('作用网段', safeFields(op.scope))
     add('现有 DHCP 配置', safeFields(op.expected))
     add('发布后的 DNS', [{ label: 'DNS 列表', value: text(op.dns) }], '替换原 DNS 列表，客户端续租或重新连接后生效。')
+  } else if (op.kind === 'ipv6_dns_update') {
+    const before = record(op.expected), after = record(op.values)
+    add('目标 LAN', [
+      { label: 'LAN 接口', value: text(op.interface) },
+      ...(op.source_interface && op.source_interface !== op.interface
+        ? [{ label: '当前通告来源', value: text(op.source_interface) }] : [])
+    ])
+    add('发布改动', [{ label: 'DNS 下发 · advertise-dns', before: text(before['advertise-dns']), value: text(after['advertise-dns']) }],
+      '只关闭此 LAN 的 DNS 下发；IPv6 地址和默认网关继续通告。')
   } else if (op.kind === 'nat_add') {
     add('来源范围', strings(op.src).map(value => ({ label: '来源', value })))
     add('目的网段', strings(op.dst).map(value => ({ label: '目的', value })))
