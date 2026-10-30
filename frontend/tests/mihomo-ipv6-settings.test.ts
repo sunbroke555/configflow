@@ -4,12 +4,13 @@ import { parse } from 'yaml'
 import MihomoIPv6Settings from '@/components/generate/MihomoIPv6Settings.vue'
 import MihomoIPv6Readiness from '@/components/generate/MihomoIPv6Readiness.vue'
 import { Switch } from '@/components/ui/switch'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 
 const wrappers: VueWrapper[] = []
 const mount = (modelValue = 'ipv6: true\ndns:\n  ipv6: false\n', extra = {}) => {
   const wrapper = shallowMount(MihomoIPv6Settings, {
     props: { open: true, modelValue, profileId: 'bound', preferredAgentId: 'entry-device', ...extra },
-    global: { stubs: { Button: false, Primitive: false } },
+    global: { renderStubDefaultSlot: true, stubs: { Button: false, Primitive: false } },
   })
   wrappers.push(wrapper)
   return wrapper
@@ -45,10 +46,40 @@ describe('Mihomo IPv6 settings controls', () => {
   it('passes the fixed device and scope to the on-demand network workflow', async () => {
     const wrapper = mount(undefined, { dirty: true })
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
-    await wrapper.get('button').trigger('click')
+    wrapper.getComponent(Dialog).vm.$emit('update:open', true)
+    await wrapper.vm.$nextTick()
     expect(wrapper.getComponent(MihomoIPv6Readiness).props()).toMatchObject({ open: true, profileId: 'bound', preferredAgentId: 'entry-device', dirty: true })
     await wrapper.setProps({ profileId: 'other-profile' })
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+  })
+
+  it('keeps the check window open while busy and returns without changing the YAML', async () => {
+    const wrapper = mount()
+    const dialog = wrapper.getComponent(Dialog)
+    dialog.vm.$emit('update:open', true)
+    await wrapper.vm.$nextTick()
+    const readiness = wrapper.getComponent(MihomoIPv6Readiness)
+    readiness.vm.$emit('busy', true)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
+    dialog.vm.$emit('update:open', false)
+    const escape = new Event('keydown', { cancelable: true })
+    const outside = new Event('pointerdown', { cancelable: true })
+    const content = wrapper.getComponent(DialogContent)
+    content.vm.$emit('escapeKeyDown', escape)
+    content.vm.$emit('interactOutside', outside)
+    await wrapper.vm.$nextTick()
+    expect(escape.defaultPrevented).toBe(true)
+    expect(outside.defaultPrevented).toBe(true)
+    expect(dialog.props('open')).toBe(true)
+    expect(content.props('showCloseButton')).toBe(false)
+    readiness.vm.$emit('busy', false)
+    await wrapper.vm.$nextTick()
+    dialog.vm.$emit('update:open', false)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
   })
 
   it('uses the full server default only when the user edits an empty document', () => {
