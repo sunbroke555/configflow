@@ -1,5 +1,6 @@
 """Keep the owned rule-update pipeline valid as its resource set changes."""
 from copy import deepcopy
+from urllib.parse import parse_qsl, urlsplit
 
 import yaml
 
@@ -8,7 +9,9 @@ from backend.common.oxidns_common_routing import (
     replace_download_entries,
 )
 from backend.common.oxidns_native import load_native_yaml, native_document, resource_references, relative_resource
-from backend.converters.oxidns import _rule_path, _tag
+from backend.converters.oxidns import _base, _rule_path, _tag
+from backend.converters.mosdns import _build_rule_proxy_url
+from backend.common.profile_context import profile_api_path
 from backend.common.oxidns_settings import OxidnsSettingsError, get_default_oxidns_settings
 from backend.common.oxidns_validation import schemas
 from backend.common.oxidns_references import reference_locations
@@ -299,10 +302,88 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
                 refresh['args'] = deepcopy(_REFRESH)
 
 
+def _refresh_managed_rule_urls(document, config, base_url):
+    """Rebase proven generated downloads without changing custom native state.
+
+    Old native drafts retain absolute URLs from their first template render.
+    The resource path, profile endpoint, source, part and a known capability
+    token together identify a generated URL, even after its origin changes.
+    """
+    downloader = next((item for item in document.get('plugins', [])
+                       if item.get('tag') == 'rules_download'), None)
+    if downloader is None or downloader.get('type') != 'download':
+        return document
+    args = downloader.get('args')
+    if not isinstance(args, dict) or not isinstance(args.get('downloads'), list):
+        return document
+    system = config.get('system_config', {})
+    token = system.get('rule_proxy_token')
+    if not isinstance(token, str) or not token:
+        return document
+    retired = system.get('retired_rule_proxy_tokens', [])
+    tokens = {value for value in [token, *(retired if isinstance(retired, list) else [])]
+              if isinstance(value, str) and value}
+    endpoint = profile_api_path(config, '/mosdns/rule-proxy')
+    if endpoint == '/mosdns/rule-proxy':
+        endpoint = '/api' + endpoint
+    effective = _base(config, base_url)
+    if not effective:
+        return document
+    referenced = {relative_resource(path) for path in resource_references(document)}
+    sources = {}
+    for record in _catalog(config)[0].values():
+        source = record['item'].get('url')
+        if record['suffix'] != 'rulesets' or not isinstance(source, str) or not source:
+            continue
+        for part in record['parts']:
+            path = relative_resource(_rule_path(record['item'], part))
+            if path in referenced:
+                sources[path] = (source, part)
+    output, changed = [], False
+    for entry in args['downloads']:
+        output.append(entry)
+        source_part = sources.get(_path(entry))
+        if source_part is None or not isinstance(entry.get('url'), str):
+            continue
+        source, part = source_part
+        try:
+            parsed = urlsplit(entry['url'])
+            if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+                    or parsed.username is not None or parsed.fragment
+                    or not parsed.path.endswith(endpoint)):
+                continue
+            # Reading port also rejects malformed authorities conservatively.
+            if parsed.port is not None and not 1 <= parsed.port <= 65535:
+                continue
+            pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        except ValueError:
+            continue
+        query = dict(pairs)
+        if (len(pairs) != 3 or set(query) != {'url', 'part', 'token'}
+                or query['token'] not in tokens or query['part'] != part):
+            continue
+        previous_base = parsed._replace(path=parsed.path[:-len(endpoint)], query='', fragment='').geturl()
+        previous_source = previous_base + source if source.startswith('/') else source
+        if query['url'] != previous_source:
+            continue
+        current_source = effective + source if source.startswith('/') else source
+        url = _build_rule_proxy_url(config, effective, current_source, part=part)
+        if entry['url'] != url:
+            output[-1] = {**entry, 'url': url}
+            changed = True
+    if not changed:
+        return document
+    rendered = deepcopy(document)
+    downloader = next(item for item in rendered['plugins'] if item.get('tag') == 'rules_download')
+    replace_download_entries(downloader, output)
+    return rendered
+
+
 def prepare_native_rule_updates(document, settings, config, base_url=''):
     """Render current routing and manual updates without changing the saved draft."""
     from backend.common.oxidns_common_routing import migrate_domain_only_routing
     document, settings = migrate_domain_only_routing(document, settings, config, base_url)
+    document = _refresh_managed_rule_urls(document, config, base_url)
     if any(item.get('type') in ('download', 'reload_provider') or item.get('tag') in _PIPELINE
            for item in document.get('plugins', [])):
         return document
