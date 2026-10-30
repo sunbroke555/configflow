@@ -89,7 +89,10 @@ def _same_gateway(row, gateway):
 def _route_evidence(rows):
     fields = ('.id', 'dst-address', 'gateway', 'immediate-gw', 'routing-table', 'disabled',
               'active', 'blackhole', 'unreachable', 'prohibit', 'comment')
-    return [{key: row.get(key) for key in fields} for row in rows]
+    # RouterOS may return an unchanged route set in a different order. Unlike
+    # firewall rules, this read order is not the route selection order.
+    return sorted(({key: row.get(key) for key in fields} for row in rows),
+                  key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False))
 
 
 def inspect(driver, router, agent, host, configuration, dns_target=None, policy_context=None):

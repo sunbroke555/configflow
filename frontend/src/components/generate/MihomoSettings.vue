@@ -48,7 +48,7 @@ async function load() {
   }
 }
 
-async function save(close = true): Promise<PublishGuard | null> {
+async function save(close = false): Promise<PublishGuard | null> {
   if (!props.open || disposed || loading.value || loadError.value || saving.value || networkBusy.value) return null
   const request = session
   const submitted = content.value

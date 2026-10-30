@@ -180,7 +180,7 @@ describe('Mihomo settings editor', () => {
     expect(wrapper.emitted('update:open')).toBeUndefined()
   })
 
-  it('retains an edited draft on save failure, then closes after a successful draft save', async () => {
+  it('retains an edited draft on save failure, then keeps the saved editor open for further edits', async () => {
     const wrapper = await editor()
     wrapper.getComponent(YamlEditor).vm.$emit('update:modelValue', '')
     await flushPromises()
@@ -193,6 +193,19 @@ describe('Mihomo settings editor', () => {
     wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft')
     await flushPromises()
     expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '', provider_update_interval: 3600 }, 'bound')
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    expect(wrapper.getComponent(SettingsWorkspace).props()).toMatchObject({ open: true, dirty: false, busy: false })
+    expect(notify.success).toHaveBeenCalledWith('基础配置草稿已保存')
+    wrapper.getComponent(YamlEditor).vm.$emit('update:modelValue', '# next edit\n')
+    await flushPromises()
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(true)
+    wrapper.getComponent(SettingsPublishBar).vm.$emit('save-draft')
+    await flushPromises()
+    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '# next edit\n', provider_update_interval: 3600 }, 'bound')
+    expect(wrapper.getComponent(SettingsWorkspace).props('dirty')).toBe(false)
+    expect(customConfigApi.getMihomo).toHaveBeenCalledTimes(1)
+    expect(wrapper.emitted('update:open')).toBeUndefined()
+    wrapper.getComponent(SettingsWorkspace).vm.$emit('update:open', false)
     expect(wrapper.emitted('update:open')).toEqual([[false]])
   })
 

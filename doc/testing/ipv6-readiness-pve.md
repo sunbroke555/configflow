@@ -199,3 +199,12 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 ```
 
 脚本检查实验资源归属，并恢复初始配置。脱敏结果保留在测试服务器 `/tmp/configflow-ipv6-readiness/managed-route-results.json`；凭据和原始配置备份不属于提交范围。
+
+
+## 补齐检查稳定性与保存窗口修复
+
+2026-10-30，补齐检查不再把无关 Agent 的后台记录、全局应用/备份设置和重复保存同一草稿产生的时间戳计为主机配置变化；ROS 路由按内容排序后比较。目标设备身份、网卡、实际草稿与路由变化仍会阻止执行，准备前最后一次复核沿用同样的判断范围。
+
+在测试服务器通过 97 项后端相关用例、130 项前端用例、类型检查、生产构建和 29 个浏览器交互场景。前端覆盖生成页与设备入口保存后继续编辑、重复保存、失败重试、手动关闭和发布流程；[保存后的设置窗口](../img/guide/mihomo-saved-draft-open.png)保留 YAML 与检查入口。
+
+更新 15820 后，在现有隔离 VM151 / CT152 上，分别检查后立即、等待 2 秒、等待 5 秒，再刷新设备列表并补齐，三次均成功。核对原始草稿与全部既有 IPv6 路由字段前后不变，三次 `changed_routes` 均为 0；脱敏证据为测试服务器 `/tmp/configflow-ipv6-readiness/prepare-stability-results.json`。没有通过自动刷新令牌绕过真实配置变化的保护。旧页面应刷新并重新检查一次后使用。
