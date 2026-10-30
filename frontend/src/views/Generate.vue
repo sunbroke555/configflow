@@ -24,7 +24,8 @@
       <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig || ipv6NetworkBusy" />
       <MihomoIPv6Settings v-if="currentConfigType === 'mihomo'" v-model="customConfigContent" :open="customConfigDialogVisible"
         :profile-id="profileId" :preferred-agent-id="agentSettings?.agentId" :default-config="mihomoDefaultConfig"
-        :dirty="customConfigDirty" :disabled="savingCustomConfig" @busy="ipv6NetworkBusy = $event" @validation="ipv6Validation = $event" />
+        :dirty="customConfigDirty" :disabled="savingCustomConfig" @busy="ipv6NetworkBusy = $event" @validation="ipv6Validation = $event"
+        :refresh-key="ipv6Published" />
       <div :inert="savingCustomConfig || ipv6NetworkBusy" class="flex min-h-80 min-w-0 flex-1 flex-col gap-3 p-4 md:p-5">
         <p v-if="settingsContextLabel" class="m-0 shrink-0 break-words text-xs text-muted-foreground">{{ settingsContextLabel }}</p>
         <YamlEditor
@@ -43,6 +44,7 @@
           :disabled="disabled"
           :save="() => saveCustomConfig(false)"
           @save-draft="saveCustomConfig()"
+          @published="ipv6Published++"
         />
       </template>
     </SettingsWorkspace>
@@ -1041,6 +1043,8 @@ const customConfigContent = ref('')
 const mihomoDefaultConfig = ref('')
 const ipv6NetworkBusy = ref(false)
 const ipv6Validation = ref({ invalid: false, dirty: false })
+// A confirmed Mihomo publish changes what the IPv6 steps read from the device.
+const ipv6Published = ref(0)
 const customConfigSavedContent = ref('')
 const mihomoSyncInterval = ref<number | string>(3600)
 const mihomoSavedSyncInterval = ref(3600)

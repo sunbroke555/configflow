@@ -56,7 +56,8 @@ function groupFor(check: IPv6ReadinessCheck): GroupId {
   return 'node'
 }
 
-function issueFor(check: IPv6SummaryCheck, canPrepare = false): string {
+// Also used by the IPv6 step list, so a host problem reads the same in both places.
+export function issueFor(check: IPv6SummaryCheck, canPrepare = false): string {
   const id = check.id
   if (publicationIds.has(id)) return `尚未确认设备使用的是当前保存配置。${publishAction}`
   if (id === 'host_default_route') return 'Mihomo 尚未找到 IPv6 出口，请检查上级路由和自动获取网关设置。'

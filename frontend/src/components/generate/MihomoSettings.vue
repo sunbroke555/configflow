@@ -18,6 +18,8 @@ const savedContent = ref('')
 const defaultConfig = ref('')
 const networkBusy = ref(false)
 const ipv6Validation = ref({ invalid: false, dirty: false })
+// A confirmed publish changes what the IPv6 steps read from the device.
+const ipv6Published = ref(0)
 const syncInterval = ref<number | string>(3600)
 const savedSyncInterval = ref(3600)
 const loading = ref(false)
@@ -96,14 +98,16 @@ onUnmounted(() => { disposed = true })
     <div v-else :inert="saving" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
       <MihomoSyncInterval v-model="syncInterval" :inert="networkBusy" />
       <MihomoIPv6Settings v-model="content" :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId"
-        :default-config="defaultConfig" :dirty="dirty" :disabled="saving" @busy="networkBusy = $event" @validation="ipv6Validation = $event" />
+        :default-config="defaultConfig" :dirty="dirty" :disabled="saving" @busy="networkBusy = $event" @validation="ipv6Validation = $event"
+        :refresh-key="ipv6Published" />
       <div :inert="networkBusy" class="min-h-80 flex-1 p-4 md:p-5">
         <YamlEditor v-model="content" class="h-full min-h-0" placeholder="输入 Mihomo 基础 YAML 配置，例如 mixed-port、dns、tun。" />
       </div>
     </div>
     <template #footer="{ disabled }">
       <SettingsPublishBar :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" service-type="mihomo" :disabled="disabled"
-        :save="() => save(false)" @save-draft="save()" />
+        :save="() => save(false)" @save-draft="save()"
+        @published="ipv6Published++" />
     </template>
   </SettingsWorkspace>
 </template>

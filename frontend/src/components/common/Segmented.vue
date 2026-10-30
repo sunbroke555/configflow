@@ -18,7 +18,7 @@
         type="button"
         role="radio"
         :aria-checked="option.value === modelValue"
-        :disabled="disabled"
+        :disabled="disabled || option.disabled"
         :class="cn(
           'relative z-1 h-[30px] cursor-pointer rounded-[9px] px-3.5 text-[13px] whitespace-nowrap transition-colors duration-250 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 max-sm:px-3',
           block && 'flex-1 px-2',
@@ -39,7 +39,7 @@ import { cn } from '@/lib/utils'
 /** 分段控件：选中项下方有一块滑动的底，用于「定一个参数」的单选 */
 const props = defineProps<{
   modelValue: T
-  options: Array<{ value: T; label: string }>
+  options: Array<{ value: T; label: string; disabled?: boolean }>
   label?: string
   block?: boolean
   disabled?: boolean
@@ -53,8 +53,12 @@ const thumb = ref<Record<string, string>>({ left: '0px', width: '0px' })
 const place = () => {
   const index = props.options.findIndex(o => o.value === props.modelValue)
   // v-for 收集的模板 ref 数组不保证与选项同序，按 DOM 顺序取对应按钮
-  const el = root.value?.querySelectorAll<HTMLButtonElement>('[data-segment]')[index]
-  if (!el) return
+  const el = index < 0 ? undefined : root.value?.querySelectorAll<HTMLButtonElement>('[data-segment]')[index]
+  // A value outside the options (e.g. a handwritten custom state) selects nothing.
+  if (!el) {
+    thumb.value = { left: '0px', width: '0px' }
+    return
+  }
   thumb.value = { left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px` }
 }
 

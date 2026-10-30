@@ -181,13 +181,13 @@ export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field,
       } else {
         document.setIn(['dns', 'fake-ip-range6'], DEFAULT_MIHOMO_FAKE_IPV6_RANGE)
         addedFakeIPv6Range = true
-        notice = `已补充 IPv6 Fake-IP 网段 ${DEFAULT_MIHOMO_FAKE_IPV6_RANGE}；保存后到「上级路由」查看差异并发布路由。`
+        notice = `已补充 IPv6 Fake-IP 网段 ${DEFAULT_MIHOMO_FAKE_IPV6_RANGE}。`
       }
     }
   }
   if (!enabled && dns !== null && typeof dns === 'object' && !Array.isArray(dns)
     && Object.prototype.hasOwnProperty.call(dns, 'fake-ip-range6')) {
-    notice = '已关闭 IPv6 Fake-IP，网段保留供再次开启；保存后到「上级路由」预览发布，撤回 CF 受管路由。'
+    notice = '已关闭 IPv6 Fake-IP，网段保留供再次开启。'
   }
   return { content: document.toString({ lineWidth: 0 }), addedFakeIPv6Range, notice }
 }
@@ -195,4 +195,86 @@ export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field,
 /** String-only compatibility API for callers that do not display edit notices. */
 export function setMihomoIPv6(source: string, field: MihomoIPv6Field, enabled: boolean, defaultSource?: string): string {
   return setMihomoIPv6WithDetails(source, field, enabled, defaultSource).content
+}
+
+/**
+ * The three supported uses of IPv6, mapped onto the effective top-level `ipv6`
+ * (Mihomo default: on) and `dns.ipv6` (default: off):
+ *   off     → ipv6: false, dns.ipv6: false
+ *   nodes   → ipv6: true,  dns.ipv6: false  (clients stay on IPv4)
+ *   clients → ipv6: true,  dns.ipv6: true   (Fake-IP range filled when missing)
+ * Any other handwritten combination is reported as `custom` and never rewritten
+ * until the user picks a mode.
+ */
+export type MihomoIPv6Mode = 'off' | 'nodes' | 'clients'
+export const MIHOMO_IPV6_MODES: readonly MihomoIPv6Mode[] = ['off', 'nodes', 'clients']
+export interface MihomoIPv6ModeOption {
+  available: boolean
+  reason: string
+}
+export interface MihomoIPv6ModeState {
+  /** null when the YAML cannot be read or a value has the wrong type. */
+  mode: MihomoIPv6Mode | 'custom' | null
+  config: MihomoIPv6Config
+  options: Record<MihomoIPv6Mode, MihomoIPv6ModeOption>
+  /** Why a handwritten combination matches none of the modes. */
+  customReason: string
+  /** Why the YAML cannot be read, or why a value cannot be edited here. */
+  lockedReason: string
+  /** Missing values shown with Mihomo's defaults. */
+  defaultNote: string
+}
+
+const targets: Record<MihomoIPv6Mode, Record<MihomoIPv6Field, boolean>> = {
+  off: { core: false, dns: false },
+  nodes: { core: true, dns: false },
+  clients: { core: true, dns: true },
+}
+
+export function readMihomoIPv6Mode(source: string, defaultSource?: string): MihomoIPv6ModeState {
+  const config = readMihomoIPv6(source, defaultSource)
+  const blocked = (reason: string): MihomoIPv6ModeState => ({
+    mode: null, config, customReason: '', lockedReason: reason, defaultNote: '',
+    options: { off: { available: false, reason }, nodes: { available: false, reason }, clients: { available: false, reason } },
+  })
+  if (config.error) return blocked(config.error)
+  const invalid = [config.core, config.dns].filter(value => value.source === 'invalid')
+  if (invalid.length) return blocked(invalid.map(value => value.message).join(' '))
+  const core = config.core.value === true
+  const dns = config.dns.value === true
+  const mode: MihomoIPv6ModeState['mode'] = !core ? (dns ? 'custom' : 'off') : dns ? 'clients' : 'nodes'
+  const options = Object.fromEntries(MIHOMO_IPV6_MODES.map(target => {
+    const locked = (['core', 'dns'] as const).filter(field => config[field].value !== targets[target][field] && !config[field].editable)
+    return [target, { available: !locked.length, reason: locked.map(field => config[field].message).join(' ') }]
+  })) as Record<MihomoIPv6Mode, MihomoIPv6ModeOption>
+  const lockedReason = [...new Set((['core', 'dns'] as const).filter(field => !config[field].editable).map(field => config[field].message))].join(' ')
+  const defaults = [config.core.source === 'default' && 'ipv6（默认开启）', config.dns.source === 'default' && 'dns.ipv6（默认关闭）'].filter(Boolean)
+  return {
+    mode, config, options, lockedReason,
+    customReason: mode === 'custom'
+      ? '顶层 ipv6 为 false，dns.ipv6 却为 true：Mihomo 不使用 IPv6，DNS 仍会返回 IPv6 地址。选择任一模式会改写这两项。' : '',
+    defaultNote: defaults.length ? `YAML 未填写 ${defaults.join('、')}，按 Mihomo 默认值显示。` : '',
+  }
+}
+
+/** Write only the values the chosen mode changes; comments and other YAML stay. */
+export function setMihomoIPv6Mode(source: string, mode: MihomoIPv6Mode, defaultSource?: string): MihomoIPv6Edit {
+  const state = readMihomoIPv6Mode(source, defaultSource)
+  if (state.mode === null) throw new Error(state.lockedReason)
+  if (!state.options[mode].available) throw new Error(state.options[mode].reason)
+  let content = source
+  let addedFakeIPv6Range = false
+  const notices: string[] = []
+  // Turn the core on before DNS so the Fake-IP range is filled exactly once,
+  // and turn DNS off before the core so no step passes through `custom`.
+  const order: MihomoIPv6Field[] = targets[mode].core ? ['core', 'dns'] : ['dns', 'core']
+  for (const field of order) {
+    const current = readMihomoIPv6(content, defaultSource)[field].value
+    if (current === targets[mode][field]) continue
+    const edit = setMihomoIPv6WithDetails(content, field, targets[mode][field], defaultSource)
+    content = edit.content
+    addedFakeIPv6Range ||= edit.addedFakeIPv6Range
+    if (edit.notice && !notices.includes(edit.notice)) notices.push(edit.notice)
+  }
+  return { content, addedFakeIPv6Range, notice: notices.join(' ') }
 }

@@ -27,6 +27,19 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('Mihomo verification lifecycle', () => {
+  it('reports only settled results to an embedding step list', async () => {
+    const wrapper = await render()
+    expect(wrapper.emitted('result')).toEqual([[{ verification: null, fresh: false }]])
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('result')?.at(-1)).toEqual([{ verification: expect.objectContaining({ status: 'running' }), fresh: true }])
+    vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response(report({ status: 'ok' })))
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.emitted('result')?.at(-1)).toEqual([{ verification: expect.objectContaining({ status: 'ok' }), fresh: true }])
+    expect(wrapper.emitted('result')?.every(([value]: any) => value.verification === null || value.verification.status)).toBe(true)
+  })
+
   it('reads saved results without starting a verification until the user asks', async () => {
     const wrapper = await render()
     expect(agentApi.getIPv6Verification).toHaveBeenCalledExactlyOnceWith('gw', 'bound', undefined)

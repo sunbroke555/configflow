@@ -3,8 +3,9 @@ import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import { parse } from 'yaml'
 import MihomoIPv6Settings from '@/components/generate/MihomoIPv6Settings.vue'
 import MihomoIPv6Readiness from '@/components/generate/MihomoIPv6Readiness.vue'
+import MihomoIPv6Steps from '@/components/generate/MihomoIPv6Steps.vue'
+import Segmented from '@/components/common/Segmented.vue'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 
 const wrappers: VueWrapper[] = []
@@ -16,32 +17,64 @@ const mount = (modelValue = 'ipv6: true\ndns:\n  ipv6: false\n', extra = {}) => 
   wrappers.push(wrapper)
   return wrapper
 }
+const selector = (wrapper: VueWrapper) => wrapper.getComponent(Segmented)
+const choose = async (wrapper: VueWrapper, mode: string) => {
+  selector(wrapper).vm.$emit('update:modelValue', mode)
+  await wrapper.vm.$nextTick()
+  return wrapper.emitted('update:modelValue')?.at(-1)?.[0] as string
+}
 afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 
-describe('Mihomo IPv6 settings controls', () => {
-  it('reflects handwritten YAML and keeps the two switches independent', async () => {
+describe('Mihomo IPv6 mode selector', () => {
+  it('offers the three modes and reflects handwritten YAML in both directions', async () => {
     const wrapper = mount()
-    const controls = wrapper.findAllComponents(Switch)
-    expect(controls.map(control => control.props('modelValue'))).toEqual([true, false])
-    controls[1].vm.$emit('update:modelValue', true)
-    const changed = wrapper.emitted('update:modelValue')?.[0][0] as string
+    expect(selector(wrapper).props('options').map((option: { label: string }) => option.label)).toEqual(['关闭', '仅节点使用 IPv6', '客户端也走 IPv6'])
+    expect(selector(wrapper).props('modelValue')).toBe('nodes')
+    const changed = await choose(wrapper, 'clients')
     expect(parse(changed)).toEqual({ ipv6: true, dns: { ipv6: true } })
-    await wrapper.setProps({ modelValue: 'ipv6: false\ndns:\n  ipv6: true\n' })
-    expect(controls.map(control => control.props('modelValue'))).toEqual([false, true])
+    await wrapper.setProps({ modelValue: changed })
+    expect(selector(wrapper).props('modelValue')).toBe('clients')
+    await wrapper.setProps({ modelValue: 'ipv6: false\n' })
+    expect(selector(wrapper).props('modelValue')).toBe('off')
+    expect(wrapper.get('[data-ipv6-mode-description]').text()).toContain('Mihomo 不使用 IPv6')
   })
 
-  it('fills a missing IPv6 Fake-IP range in the draft and directs route publication to the upstream report', async () => {
+  it('mentions in the node-only description that rule-set IPv6 networks still reach the upstream router', () => {
+    const wrapper = mount()
+    expect(wrapper.get('[data-ipv6-mode-description]').text()).toContain('客户端有 IPv6 时，规则集里的 IPv6 网段也会发布到上级路由')
+  })
+
+  it('shows a custom combination with its reason and only rewrites it when a mode is chosen', async () => {
+    const source = 'ipv6: false # off\ndns:\n  ipv6: true # AAAA\n'
+    const wrapper = mount(source)
+    expect(selector(wrapper).props('modelValue')).toBe('custom')
+    expect(wrapper.get('[data-ipv6-mode-custom]').text()).toContain('自定义')
+    expect(wrapper.get('[data-ipv6-mode-custom]').text()).toContain('dns.ipv6 却为 true')
+    expect(wrapper.findComponent(MihomoIPv6Steps).exists()).toBe(false)
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    const changed = await choose(wrapper, 'off')
+    expect(changed).toBe('ipv6: false # off\ndns:\n  ipv6: false # AAAA\n')
+  })
+
+  it('fills a missing Fake-IP range without pointing to a fixed upstream router instruction', async () => {
     const wrapper = mount('ipv6: true\ndns:\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\ntun:\n  enable: true\n')
-    wrapper.findAllComponents(Switch)[1].vm.$emit('update:modelValue', true)
-    await wrapper.vm.$nextTick()
-    const changed = wrapper.emitted('update:modelValue')?.[0][0] as string
+    const changed = await choose(wrapper, 'clients')
     expect(parse(changed).dns).toMatchObject({ ipv6: true, 'fake-ip-range6': 'fc00::1/64' })
-    expect(wrapper.get('[role="status"]').text()).toContain('上级路由')
-    expect(wrapper.get('[role="status"]').text()).toContain('查看差异并发布路由')
+    expect(wrapper.get('[role="status"]').text()).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
+    expect(wrapper.text()).not.toContain('上级路由」查看')
+    expect(wrapper.text()).not.toContain('保存后到「上级路由」')
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
   })
 
-  it('shows the custom range only for enabled IPv6 Fake-IP and reflects handwritten YAML', async () => {
+  it('ignores choosing the current mode', async () => {
+    const wrapper = mount('mixed-port: 7890\n')
+    selector(wrapper).vm.$emit('update:modelValue', 'nodes')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(wrapper.text()).toContain('YAML 未填写 ipv6（默认开启）、dns.ipv6（默认关闭）')
+  })
+
+  it('shows the range only for client IPv6 with Fake-IP and reflects handwritten YAML', async () => {
     const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fd12:3456::1/64 # custom\n'
     const wrapper = mount(source)
     expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd12:3456::1/64')
@@ -70,6 +103,7 @@ describe('Mihomo IPv6 settings controls', () => {
     expect(changed).toContain('fake-ip-range6: fd12:3456::1/64 # keep')
     expect(wrapper.emitted('validation')?.at(-1)).toEqual([{ invalid: false, dirty: false }])
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
     await wrapper.setProps({ modelValue: changed })
     input.vm.$emit('update:modelValue', '')
     await wrapper.vm.$nextTick()
@@ -86,39 +120,67 @@ describe('Mihomo IPv6 settings controls', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
-  it('does not write merely because a missing field has a default', () => {
-    const wrapper = mount('mixed-port: 7890\n')
-    expect(wrapper.findAllComponents(Switch).map(control => control.props('modelValue'))).toEqual([true, false])
-    expect(wrapper.text()).toContain('未填写，沿用 Mihomo 默认开启')
+  it('disables only the modes that would rewrite a shared value', async () => {
+    const wrapper = mount('base: &base\n  ipv6: false\ndns: *base\nipv6: true\n')
+    expect(selector(wrapper).props('options').map((option: { disabled: boolean }) => option.disabled)).toEqual([false, false, true])
+    expect(wrapper.get('[data-ipv6-mode-description]').text()).toContain('别名')
+    selector(wrapper).vm.$emit('update:modelValue', 'clients')
+    await wrapper.vm.$nextTick()
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(wrapper.get('[role="alert"]').text()).toContain('别名')
   })
 
   it('keeps malformed values visible and blocks accidental replacement', () => {
     const wrapper = mount('ipv6: "true"\ndns: false\n')
-    expect(wrapper.findAllComponents(Switch).every(control => control.props('disabled'))).toBe(true)
+    expect(selector(wrapper).props('disabled')).toBe(true)
+    expect(selector(wrapper).props('modelValue')).toBe('')
     expect(wrapper.text()).toContain('不要加引号')
     expect(wrapper.text()).toContain('dns 必须是 YAML 对象')
+    expect(wrapper.findComponent(MihomoIPv6Steps).exists()).toBe(false)
   })
 
-  it('passes the fixed device and scope to the on-demand network workflow', async () => {
-    const wrapper = mount(undefined, { dirty: true })
+  it('lists steps for both IPv6 modes but not when IPv6 is off', async () => {
+    const wrapper = mount(undefined, { dirty: true, refreshKey: 3 })
+    expect(wrapper.getComponent(MihomoIPv6Steps).props()).toMatchObject({ open: true, profileId: 'bound', preferredAgentId: 'entry-device', mode: 'nodes', dirty: true, refreshKey: 3 })
+    await wrapper.setProps({ modelValue: 'ipv6: true\ndns:\n  ipv6: true\n' })
+    expect(wrapper.getComponent(MihomoIPv6Steps).props('mode')).toBe('clients')
+    await wrapper.setProps({ modelValue: 'ipv6: false\n' })
+    expect(wrapper.findComponent(MihomoIPv6Steps).exists()).toBe(false)
+  })
+
+  it('opens the device check for the step target and refreshes the steps after closing it', async () => {
+    const wrapper = mount(undefined, { preferredAgentId: undefined, dirty: true })
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
-    wrapper.getComponent(Dialog).vm.$emit('update:open', true)
+    wrapper.getComponent(MihomoIPv6Steps).vm.$emit('check', 'picked-device')
     await wrapper.vm.$nextTick()
-    expect(wrapper.getComponent(MihomoIPv6Readiness).props()).toMatchObject({ open: true, profileId: 'bound', preferredAgentId: 'entry-device', dirty: true })
+    expect(wrapper.getComponent(MihomoIPv6Readiness).props()).toMatchObject({ open: true, profileId: 'bound', preferredAgentId: 'picked-device', dirty: true })
+    const before = wrapper.getComponent(MihomoIPv6Steps).props('refreshKey')
+    wrapper.getComponent(Dialog).vm.$emit('update:open', false)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+    expect(wrapper.getComponent(MihomoIPv6Steps).props('refreshKey')).toBe(before + 1)
     await wrapper.setProps({ profileId: 'other-profile' })
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+  })
+
+  it('keeps the fixed entry device when a step opens the check', async () => {
+    const wrapper = mount()
+    wrapper.getComponent(MihomoIPv6Steps).vm.$emit('check', 'other-device')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.getComponent(MihomoIPv6Readiness).props('preferredAgentId')).toBe('entry-device')
   })
 
   it('keeps the check window open while busy and returns without changing the YAML', async () => {
     const wrapper = mount()
     const dialog = wrapper.getComponent(Dialog)
-    dialog.vm.$emit('update:open', true)
+    wrapper.getComponent(MihomoIPv6Steps).vm.$emit('check', 'entry-device')
     await wrapper.vm.$nextTick()
     const readiness = wrapper.getComponent(MihomoIPv6Readiness)
     readiness.vm.$emit('busy', true)
     await wrapper.vm.$nextTick()
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([true])
+    expect(wrapper.getComponent(MihomoIPv6Steps).props('disabled')).toBe(true)
+    expect(selector(wrapper).props('disabled')).toBe(true)
     dialog.vm.$emit('update:open', false)
     const escape = new Event('keydown', { cancelable: true })
     const outside = new Event('pointerdown', { cancelable: true })
@@ -139,12 +201,26 @@ describe('Mihomo IPv6 settings controls', () => {
     expect(wrapper.emitted('busy')?.at(-1)).toEqual([false])
   })
 
-  it('uses the full server default only when the user edits an empty document', () => {
+  it('returns focus to the step button that opened the check', async () => {
+    const wrapper = mount()
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+    wrapper.getComponent(MihomoIPv6Steps).vm.$emit('check', 'entry-device')
+    await wrapper.vm.$nextTick()
+    opener.blur()
+    const event = new Event('focusout', { cancelable: true })
+    wrapper.getComponent(DialogContent).vm.$emit('closeAutoFocus', event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
+  })
+
+  it('uses the full server default only when the user edits an empty document', async () => {
     const defaultConfig = 'mixed-port: 7890\ndns:\n  enable: true\n  nameserver: [223.5.5.5]\n'
     const wrapper = mount('', { defaultConfig })
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
-    wrapper.findAllComponents(Switch)[1].vm.$emit('update:modelValue', true)
-    const changed = wrapper.emitted('update:modelValue')?.[0][0] as string
+    const changed = await choose(wrapper, 'clients')
     expect(parse(changed)).toEqual({ ...parse(defaultConfig), dns: { ...parse(defaultConfig).dns, ipv6: true } })
   })
 })

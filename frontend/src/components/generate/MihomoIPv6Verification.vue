@@ -9,6 +9,8 @@ import MihomoIPv6CheckSummary from './MihomoIPv6CheckSummary.vue'
 import type { IPv6Verification, IPv6VerificationResult, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
 const props = defineProps<{ open: boolean; agentId: string; profileId: string; configRevision?: number; deploymentId?: string; auto?: boolean; disabled?: boolean; readiness?: MihomoIPv6Readiness }>()
+// Lets an embedding view (the IPv6 step list) follow the result shown here.
+const emit = defineEmits<{ result: [value: { verification: IPv6Verification | null; fresh: boolean }] }>()
 const verification = ref<IPv6Verification | null>(null)
 const pending = ref(false)
 const starting = ref(false)
@@ -101,6 +103,10 @@ watch(() => [props.open, props.agentId, props.profileId, props.configRevision, p
   if (!props.open || !props.agentId || !validRevision.value) return
   if (props.auto) void start()
   else void read(session)
+}, { immediate: true })
+// Report only settled reads, so a re-read does not flash an empty result.
+watch([verification, freshVerification, pending], ([value, fresh, reading]) => {
+  if (!reading) emit('result', { verification: value, fresh })
 }, { immediate: true })
 onUnmounted(() => { disposed = true; generation++; clearTimeout(timer) })
 </script>
