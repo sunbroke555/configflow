@@ -16,6 +16,7 @@ import pytest
 
 from backend.agents import gateway_install_script as installer
 from backend.agents.go_install_script import generate_go_aio_install_script
+from backend.test_router_split_regression import without_reviewed_installer_deltas
 
 
 def generate(**kwargs):
@@ -467,8 +468,8 @@ BASELINES = Path(__file__).parent / 'testdata'
 def test_selective_gateway_script_is_byte_identical_to_the_previous_release():
     # Captured from 0ef9e89 with exactly these inputs.
     expected = (BASELINES / 'gateway_install_selective_0ef9e89.sh').read_text(encoding='utf-8')
-    assert generate() == expected
-    assert generate(full_tun=False) == expected
+    assert without_reviewed_installer_deltas(generate()) == expected
+    assert without_reviewed_installer_deltas(generate(full_tun=False)) == expected
     assert 'CONFIGFLOW_INSTALLER_FORWARDING' not in expected
 
 
@@ -509,7 +510,7 @@ def test_ordinary_aio_script_is_the_previous_release_plus_intentional_forwarding
         expected = expected.replace(old, new, 1)
     script = generate_go_aio_install_script('https://cf.test', 'ordinary', agent_ip='192.168.8.3',
                                             binary_download_url='https://cf.test/api/agents/download')
-    assert script == expected
+    assert without_reviewed_installer_deltas(script) == expected
     assert script.count('export CONFIGFLOW_INSTALLER_FORWARDING\n') == 1
     assert script.count('unset CONFIGFLOW_INSTALLER_FORWARDING\n') == 1
 

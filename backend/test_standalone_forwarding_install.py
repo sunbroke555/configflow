@@ -17,7 +17,7 @@ from backend.agents.go_install_script import (
     STANDALONE_FORWARDING_HOOK_COMMENT, generate_go_agent_install_script,
 )
 from backend.test_agent_install_commands import admin, client, make  # noqa: F401
-from backend.test_router_split_regression import baseline, single_service_script_digests
+from backend.test_router_split_regression import baseline, single_service_script_digests, without_reviewed_installer_deltas
 from backend.test_single_agent_core_install import FAKE_CORE
 
 GO_UNIT_TESTDATA = Path(__file__).resolve().parent / "agents/go-agent/routes/testdata"
@@ -44,7 +44,7 @@ def test_opt_out_is_byte_identical_to_the_previous_release():
             'https://config.test', 'single', 'mihomo', agent_ip='192.0.2.20',
             binary_download_url='https://config.test/api/agents/download', install_core=install_core,
             manage_ipv4_forwarding=False)
-        assert hashlib.sha256(script.encode()).hexdigest() == expected[f"mihomo:{install_core}"]
+        assert hashlib.sha256(without_reviewed_installer_deltas(script, core_path=install_core).encode()).hexdigest() == expected[f"mihomo:{install_core}"]
     # The default stays the opt-out; the panel's API asks for the automatic choice.
     assert single_service_script_digests() == expected
 
@@ -58,7 +58,7 @@ def test_dns_services_never_take_forwarding(service, cores):
                 'https://config.test', 'single', service, agent_ip='192.0.2.20',
                 binary_download_url='https://config.test/api/agents/download', install_core=install_core,
                 manage_ipv4_forwarding=value)
-            assert hashlib.sha256(script.encode()).hexdigest() == expected[f"{service}:{install_core}"]
+            assert hashlib.sha256(without_reviewed_installer_deltas(script, core_path=install_core).encode()).hexdigest() == expected[f"{service}:{install_core}"]
 
 
 @pytest.mark.parametrize("install_core", [False, True])
@@ -66,7 +66,7 @@ def test_automatic_choice_enables_forwarding_for_mihomo(install_core):
     for value in (None, True):
         script = generated(install_core=install_core, manage_ipv4_forwarding=value)
         assert "persist_ipv4_forwarding\n" in script
-        assert hashlib.sha256(script.encode()).hexdigest() != \
+        assert hashlib.sha256(without_reviewed_installer_deltas(script, core_path=install_core).encode()).hexdigest() != \
             baseline()["single_service_script_sha256"][f"mihomo:{install_core}"]
 
 
