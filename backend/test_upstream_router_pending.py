@@ -53,6 +53,13 @@ def test_pending_counts_the_preview_changes_and_words_ipv6_fakeip_like_the_repor
     ({'enabled': False, 'items': []}, 'ipv6_routes', ['ipv6_routes_replace'], '待撤回'),
     ({'enabled': False}, 'dns_guard', ['dns_guard_replace'], '待撤回'),
     ({'enabled': True}, 'ipv6_dns', ['ipv6_dns_update'], '待关闭'),
+    ({'enabled': True, 'items': [{'status': 'missing'}, {'status': 'missing'}, {'status': 'synced'}]},
+     'ipv6_pd_guard', ['ipv6_pd_guard_sync'], '待安装'),
+    ({'enabled': True, 'items': [{'status': 'adopt'}, {'status': 'adopt'}]}, 'ipv6_pd_guard',
+     ['ipv6_pd_guard_sync'], '待接管'),
+    ({'enabled': True, 'items': [{'status': 'missing'}, {'status': 'update'}]}, 'ipv6_pd_guard',
+     ['ipv6_pd_guard_sync'], '待更新'),
+    ({'enabled': False, 'items': [{'status': 'remove'}]}, 'ipv6_pd_guard', ['ipv6_pd_guard_restore'], '待撤回'),
     ({}, 'routes', ['route_delete', 'policy_route_delete'], '待移除'),
     ({}, 'routes', ['route_add', 'route_delete'], '待更新'),
     ({}, 'routes', ['route_comment'], '待接管'),
@@ -91,6 +98,9 @@ def test_an_unsynchronised_report_without_changes_explains_itself():
     result = pending.summarize(conflict, plan(stage('routes', '主路由代理路由')))
     assert result == {'state': 'blocked', 'pending': 0, 'items': [],
                       'message': '91.108.4.0/22：同网段路由下一跳为 192.0.2.9'}
+    pd_guard = {'in_sync': False, 'ipv6_pd_guard': {'enabled': True, 'blockers': ['找到多个 IPv6 DHCP 客户端'], 'items': []}}
+    skipped = pending.summarize(pd_guard, plan(stage('ipv6_pd_guard', 'IPv6 前缀变化保护', skipped=True)))
+    assert skipped['state'] == 'blocked' and skipped['message'] == '找到多个 IPv6 DHCP 客户端'
     assert pending.summarize({'in_sync': False}, plan())['message'] == pending.GENERIC_BLOCKED
     assert pending.summarize({}, plan())['state'] == 'blocked'
 

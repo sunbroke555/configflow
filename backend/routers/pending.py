@@ -50,7 +50,7 @@ def _stage_word(stage: Dict[str, Any], report: Dict[str, Any]) -> str:
     """Short status for one release stage, worded like the report section it comes from."""
     key = stage.get('key')
     section = report.get(key) if isinstance(report.get(key), dict) else {}
-    if key in ('ipv6_fakeip', 'ipv6_routes', 'dns_guard') and section.get('enabled') is False:
+    if key in ('ipv6_fakeip', 'ipv6_routes', 'dns_guard', 'ipv6_pd_guard') and section.get('enabled') is False:
         return '待撤回'
     if key == 'ipv6_fakeip' and section.get('status') in SECTION_WORDS:
         return SECTION_WORDS[section['status']]
@@ -59,6 +59,9 @@ def _stage_word(stage: Dict[str, Any], report: Dict[str, Any]) -> str:
         return '待添加' if statuses == {'missing'} else '待更新'
     if key == 'ipv6_dns':
         return '待关闭'
+    if key == 'ipv6_pd_guard':
+        statuses = {item.get('status') for item in section.get('items') or []} - {'synced', 'borrowed'}
+        return '待安装' if statuses == {'missing'} else '待接管' if statuses == {'adopt'} else '待更新'
     if key == 'return_cleanup':
         return '待移除'
     return _change_word(stage.get('ops') or [])
@@ -68,6 +71,7 @@ def _blocked_reasons(report: Dict[str, Any]) -> List[str]:
     """Why an unsynchronised report has nothing to publish, in the report's own words."""
     reasons = list((report.get('ipv6_routes') or {}).get('skip') or [])
     reasons += list((report.get('ipv6_dns') or {}).get('blockers') or [])
+    reasons += list((report.get('ipv6_pd_guard') or {}).get('blockers') or [])
     for section in ((report.get('routes') or {}).get('items') or [], (report.get('nat_bypass') or {}).get('items') or []):
         reasons += [f'{item.get("cidr")}：{item.get("detail")}' if item.get('detail') else f'{item.get("cidr")} 存在冲突'
                     for item in section if item.get('status') == 'conflict']
