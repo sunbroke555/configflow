@@ -34,5 +34,11 @@ describe('Segmented', () => {
     await nextTick()
     expect(wrapper.findAll('[role="radio"]').every(item => item.attributes('aria-checked') === 'false')).toBe(true)
     expect(thumb(wrapper)).toContain('width: 0px')
+    // Its 1px ring must not linger as a stray line.
+    expect(thumb(wrapper)).toContain('opacity: 0')
+    await wrapper.setProps({ modelValue: 'c' })
+    await nextTick()
+    await nextTick()
+    expect(thumb(wrapper)).toContain('opacity: 1')
   })
 })

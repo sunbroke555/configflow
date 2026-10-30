@@ -66,6 +66,16 @@ describe('Mihomo IPv6 mode selector', () => {
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
   })
 
+  it('retires a mode notice once the YAML is edited by hand', async () => {
+    const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fd00::1/64\n'
+    const wrapper = mount(source)
+    const changed = await choose(wrapper, 'nodes')
+    await wrapper.setProps({ modelValue: changed })
+    expect(wrapper.get('[role="status"]').text()).toBe('已关闭 IPv6 Fake-IP，网段保留供再次开启。')
+    await wrapper.setProps({ modelValue: changed.replace('ipv6: true', 'ipv6: false') })
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+  })
+
   it('ignores choosing the current mode', async () => {
     const wrapper = mount('mixed-port: 7890\n')
     selector(wrapper).vm.$emit('update:modelValue', 'nodes')

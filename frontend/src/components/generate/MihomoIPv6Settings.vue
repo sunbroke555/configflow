@@ -21,6 +21,8 @@ let checksOpener: HTMLElement | null = null
 const busy = ref(false)
 const error = ref('')
 const changeNotice = ref('')
+// The YAML a notice describes; any later edit (e.g. typed in the editor) retires it.
+let noticeContent = ''
 const id = useId()
 const state = computed(() => readMihomoIPv6Mode(content.value, props.defaultConfig))
 const fakeRange = computed(() => readMihomoFakeIPv6Range(content.value, props.defaultConfig))
@@ -70,6 +72,7 @@ function changeMode(mode: string) {
     const changed = setMihomoIPv6Mode(content.value, mode as MihomoIPv6Mode, props.defaultConfig)
     content.value = changed.content
     changeNotice.value = changed.notice
+    noticeContent = changed.content
     error.value = ''
   } catch (failure) {
     error.value = failure instanceof Error ? failure.message : '无法修改，请在 YAML 中调整。'
@@ -98,6 +101,7 @@ function restoreFocus(event: Event) {
   checksOpener = null
 }
 watch(() => [props.open, props.profileId, props.preferredAgentId], () => { checksOpen.value = false; error.value = ''; changeNotice.value = '' })
+watch(content, value => { if (value !== noticeContent) changeNotice.value = '' })
 watch(busy, value => emit('busy', value))
 </script>
 

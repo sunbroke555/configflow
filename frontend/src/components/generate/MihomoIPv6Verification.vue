@@ -38,7 +38,11 @@ function accept(data: IPv6VerificationResult, session: number, required = false)
     verification.value = null
     return false
   }
-  if (value.config_revision !== props.configRevision || (props.deploymentId && value.deployment_id !== props.deploymentId)) {
+  // A saved result of an older draft is only stale: with the current readiness
+  // the summary asks for a new verification. A run started here, or the result
+  // of one publication, must match exactly.
+  if ((value.config_revision !== props.configRevision || (props.deploymentId && value.deployment_id !== props.deploymentId))
+    && (required || props.deploymentId || !props.readiness)) {
     throw new Error('验收结果对应其他配置版本，请重新检查当前配置后再验证。')
   }
   if (!['running', 'ok', 'warning', 'error'].includes(value.status) || !['mihomo_runtime', 'client_path'].includes(value.scope)

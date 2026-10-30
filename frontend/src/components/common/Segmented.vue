@@ -56,10 +56,10 @@ const place = () => {
   const el = index < 0 ? undefined : root.value?.querySelectorAll<HTMLButtonElement>('[data-segment]')[index]
   // A value outside the options (e.g. a handwritten custom state) selects nothing.
   if (!el) {
-    thumb.value = { left: '0px', width: '0px' }
+    thumb.value = { left: '0px', width: '0px', opacity: '0' }
     return
   }
-  thumb.value = { left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px` }
+  thumb.value = { left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px`, opacity: '1' }
 }
 
 let observer: ResizeObserver | null = null

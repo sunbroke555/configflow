@@ -223,9 +223,9 @@ onUnmounted(() => { disposed = true; session++ })
 <template>
   <section class="min-w-0 space-y-1 pt-3" aria-label="IPv6 设置步骤" data-mihomo-ipv6-steps>
     <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      <h3 class="m-0 min-w-0 flex-1 text-[13px] font-semibold">需要完成的步骤<span v-if="selected" class="ml-2 font-normal text-muted-foreground">设备：{{ selected.name }}</span></h3>
+      <h3 class="m-0 min-w-0 flex-1 text-[13px] font-semibold">需要完成的步骤<span v-if="selected" class="block break-words font-normal text-muted-foreground sm:ml-2 sm:inline">设备：{{ selected.name }}</span></h3>
       <div class="flex shrink-0 items-center gap-1">
-        <Button type="button" variant="ghost" size="icon" class="size-11" aria-label="重新检查步骤" title="重新检查步骤" :disabled="!open || dirty || phase !== 'idle'" @click="refresh">
+        <Button type="button" variant="ghost" size="icon" class="size-11" aria-label="重新检查步骤" title="重新检查步骤" :disabled="!open || dirty || disabled || phase !== 'idle'" @click="refresh">
           <RefreshCw class="size-4" :class="phase === 'checking' && 'animate-spin motion-reduce:animate-none'" aria-hidden="true" />
         </Button>
         <Button type="button" variant="outline" class="min-h-11 shrink-0 border-border-strong text-[13px]" aria-label="检查设备 IPv6" :disabled="disabled" @click="emit('check', selectedId)"><ScanLine class="size-4" aria-hidden="true" />检查设备</Button>
@@ -255,10 +255,10 @@ onUnmounted(() => { disposed = true; session++ })
           </template>
         </AgentStatusRow>
         <!-- Kept mounted so the reminder can report pending work even while its row is hidden. -->
-        <div v-if="item.id === 'upstream' && selectedId" v-show="!dirty && (upstream?.state === 'pending' || upstream?.state === 'unknown')" class="min-w-0 pb-2 text-xs" data-ipv6-step-upstream>
+        <div v-if="item.id === 'upstream' && selectedId" v-show="!dirty && (upstream?.state === 'pending' || upstream?.state === 'unknown')" class="mb-2 ml-2 min-w-0 border-l border-border pl-4 text-xs" data-ipv6-step-upstream>
           <UpstreamRouterPending :agent-id="selectedId" :refresh-key="loads" compact @status="upstream = $event" />
         </div>
-        <div v-if="item.id === 'verify' && readiness && !dirty" v-show="item.tone !== 'success'" class="min-w-0 pb-2 text-xs" data-ipv6-step-verify>
+        <div v-if="item.id === 'verify' && readiness && !dirty" v-show="item.tone !== 'success'" class="mb-2 ml-2 min-w-0 border-l border-border pl-4 text-xs" data-ipv6-step-verify>
           <MihomoIPv6Verification :key="`${selectedId}-${readings}`" :open="open" :agent-id="selectedId" :profile-id="profileId"
             :config-revision="readiness.config_revision" :readiness="readiness" :disabled="!available || phase !== 'idle'" @result="verifier = $event" />
         </div>

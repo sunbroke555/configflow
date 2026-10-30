@@ -106,6 +106,16 @@ describe('Mihomo verification lifecycle', () => {
     expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('preferVerificationSnapshot')).toBe(false)
   })
 
+  it('hands a saved result of an older draft to the summary as stale instead of failing', async () => {
+    vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response(report({ status: 'ok', config_revision: 6 })))
+    const wrapper = await render({ readiness: { config_revision: 7 } })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('verification').config_revision).toBe(6)
+    // Without the current readiness there is nothing to compare against: still an error.
+    const plain = await render()
+    expect(plain.get('[role="alert"]').text()).toContain('其他配置版本')
+  })
+
   it('stops prolonged UI polling without claiming the backend task was canceled or passed', async () => {
     vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response(report()))
     const wrapper = await render({ auto: true, deploymentId: 'current' })
