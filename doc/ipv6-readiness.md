@@ -32,11 +32,11 @@
 - **待更新 / 待撤回**：改网段或关闭 IPv6 Fake-IP 后，再到差异报告预览并发布；只调整已确认归属的受管路由。
 - **冲突 / 待确认**：地址不明确、网段重叠、受管对象被外部修改或读取失败时，保留现场并提示处理。
 
-**防火墙提示**：设备经 ROS 同一 LAN 口转给 Mihomo 时，Mihomo 的回包不经过 ROS，ROS 会把同一连接的后续包判为 `invalid`。如果 IPv6 防火墙 forward 链在放行之前有「drop invalid」（RouterOS 出厂规则就有），每个新连接会卡住约 7 秒。差异报告检测到这种情况时，在「IPv6 Fake-IP 分流路由」中给出原因和一条可复制的放行命令（按 LAN 口进出放行，放在 `drop invalid` 之前），同时覆盖 IPv6 规则集路由。ConfigFlow 只提示，不修改防火墙，路由照常发布。详见 [上游路由](manual/routers.md#ipv6-规则集路由routeros)。
+**防火墙提示**：设备经 ROS 同一 LAN 口转给 Mihomo 时，Mihomo 的回包不经过 ROS，ROS 会把同一连接的后续包判为 `invalid`。如果 IPv6 防火墙 forward 链在放行之前有「drop invalid」（RouterOS 出厂规则就有），每个新连接会卡住约 7 秒。差异报告检测到这种情况时，在「IPv6 Fake-IP 分流路由」中给出原因和一条可复制的放行命令（按 LAN 口进出放行，放在 `drop invalid` 之前），同时覆盖 IPv6 规则集路由。ConfigFlow 只提示，不修改防火墙，路由照常发布。详见 [上游路由](manual/routers.md#ipv6-规则集路由-routeros)。
 
 关闭开关只修改草稿；ROS 上的受管路由要经过上级路由发布才撤回。路由变更和原有发布共用状态复核、写后读取验证和失败补偿。自动 IP 规则同步不会顺带发布这些变更，出现 IPv6 差异时会暂停并要求手动预览。
 
-规则集里的公网 IPv6 网段（如 Telegram 的 `IP-CIDR6`）由「上级路由 → IPv6 规则集路由」处理：「Mihomo 使用 IPv6」开启且有 TUN 时，经同一套预览发布指向这台 Mihomo，下一跳选择与 Fake-IP 相同；无法确定时只跳过这一项。自动规则同步会应用这些网段的增减。详见 [上游路由](manual/routers.md#ipv6-规则集路由routeros)。
+规则集里的公网 IPv6 网段（如 Telegram 的 `IP-CIDR6`）由「上级路由 → IPv6 规则集路由」处理：「Mihomo 使用 IPv6」开启且有 TUN 时，经同一套预览发布指向这台 Mihomo，下一跳选择与 Fake-IP 相同；无法确定时只跳过这一项。自动规则同步会应用这些网段的增减。详见 [上游路由](manual/routers.md#ipv6-规则集路由-routeros)。
 
 ## 验收设置
 
