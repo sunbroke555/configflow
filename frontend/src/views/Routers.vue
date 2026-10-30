@@ -558,7 +558,8 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             · 地址池 <span class="font-mono [overflow-wrap:anywhere]">{{ pdGuard.pool }}</span>
             <template v-if="pdGuard.client"> · DHCP 客户端 <span class="font-mono [overflow-wrap:anywhere]">{{ pdGuard.client }}</span></template>
           </p>
-          <p v-if="pdGuard.message" class="m-0">{{ pdGuard.message }}</p>
+          <!-- A blocked plan's message is its first blocker: shown once, in the warning color below. -->
+          <p v-if="pdGuard.message && !pdGuard.blockers.includes(pdGuard.message)" class="m-0">{{ pdGuard.message }}</p>
           <p v-if="pdGuard.status === 'pending'" class="m-0 text-muted-foreground">在「预览发布」确认后才写入路由器。</p>
           <p v-for="blocker in pdGuard.blockers" :key="blocker" role="alert" class="m-0 break-words text-warning-accent">{{ blocker }}</p>
           <p v-for="warning in pdGuard.warnings" :key="warning" role="status" class="m-0 break-words text-warning-accent">{{ warning }}</p>

@@ -84,6 +84,8 @@ describe('RouterOS IPv6 prefix change guard', () => {
     const section = wrapper.get('[data-router-ipv6-pd-guard]')
     expect(section.findComponent(StatusDot).props()).toMatchObject({ label: '需处理', tone: 'warning' })
     expect(section.get('[role="alert"]').text()).toContain('不能覆盖')
+    // The message repeats the blocker: the reason is said once above the table.
+    expect(section.findAll('p').filter(line => line.text().includes('不能覆盖'))).toHaveLength(1)
     expect(section.text()).toContain('只有这一项保留现状')
     expect(section.text()).toContain('冲突')
     expect(section.text()).not.toContain('cf-pd-rollback')
