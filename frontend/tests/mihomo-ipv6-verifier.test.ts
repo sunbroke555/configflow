@@ -3,6 +3,7 @@ import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { agentApi } from '@/api'
 import MihomoIPv6Verification from '@/components/generate/MihomoIPv6Verification.vue'
 import MihomoIPv6VerificationResult from '@/components/generate/MihomoIPv6VerificationResult.vue'
+import MihomoIPv6CheckSummary from '@/components/generate/MihomoIPv6CheckSummary.vue'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 const response = (data: any) => ({ data } as any)
@@ -73,6 +74,23 @@ describe('Mihomo verification lifecycle', () => {
     await flushPromises()
     expect(wrapper.findComponent(MihomoIPv6VerificationResult).exists()).toBe(false)
     expect(wrapper.text()).not.toContain('old target result')
+  })
+
+  it('uses the new verification snapshot after a run, while historical results use the latest inspection', async () => {
+    vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response(report({ status: 'ok' })))
+    const wrapper = await render({ readiness: { config_revision: 7 } })
+    expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('preferVerificationSnapshot')).toBe(false)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('preferVerificationSnapshot')).toBe(true)
+    vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response(report({ status: 'error', checks: [
+      { id: 'host_default_route', label: '默认路由', status: 'error', message: '本次验收发现路由已消失。' },
+    ] })))
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('verification').checks[0].status).toBe('error')
+    await wrapper.setProps({ configRevision: 8 })
+    expect(wrapper.getComponent(MihomoIPv6CheckSummary).props('preferVerificationSnapshot')).toBe(false)
   })
 
   it('stops prolonged UI polling without claiming the backend task was canceled or passed', async () => {

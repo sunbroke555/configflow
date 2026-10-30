@@ -42,17 +42,36 @@ function readiness(prepared = false) {
     configuration: { ipv6: true, dns_ipv6: false, fake_ipv6_range: null, errors: [] },
     checks: [
       { id: 'configuration', label: '已保存的 IPv6 设置', status: 'ok', message: '已读取保存草稿；设备生效配置需要另行发布。' },
-      { id: 'interface', label: '上联网卡', status: 'ok', message: '实际网卡为 eth0，已取得可用的 IPv6 地址。' },
-      { id: 'ra', label: '默认路由与 RA', status: 'ok', message: '通过 ROS 的 RA 自动获得默认路由，有效期正常更新。' },
-      { id: 'persistence', label: '重启恢复配置', status: prepared ? 'ok' : 'warning', message: prepared ? '已保存恢复配置，尚未实测重启。' : '需要保存 eth0 接受 RA 的设置，保证开启转发后仍能获得默认网关。', details: ['将保存 net.ipv6.conf.eth0.accept_ra=2，保留已有主机网络配置。'] },
+      { id: 'host_interface', label: '上联网卡', status: 'ok', message: '实际网卡为 eth0，已取得可用的 IPv6 地址。' },
+      { id: 'host_default_route', label: '默认路由与 RA', status: 'ok', message: '通过 ROS 的 RA 自动获得默认路由，有效期正常更新。' },
+      { id: 'host_persistence', label: '重启恢复配置', status: prepared ? 'ok' : 'warning', message: prepared ? '已保存恢复配置，尚未实测重启。' : '需要保存 eth0 接受 RA 的设置，保证开启转发后仍能获得默认网关。', details: ['将保存 net.ipv6.conf.eth0.accept_ra=2，保留已有主机网络配置。'] },
     ],
     routers: [{ id: 'ros', name: '家庭 ROS', status: 'warning', can_prepare: false, checks: [
       { id: 'dns', label: 'DNS 路径', status: 'warning', message: '检测到上游 DNS。请核对是否仍统一使用 OxiDNS；不会自动关闭 use-peer-dns。' },
-      { id: 'route', label: 'IPv4 分流', status: 'ok', message: '已有 IPv4 Fake-IP 路由，沿用现有配置。' },
+      { id: 'fake4_0', label: 'IPv4 分流', status: 'ok', message: '已有 IPv4 Fake-IP 路由，沿用现有配置。' },
+      { id: 'ra_input', label: 'RA 接收规则', status: 'ok', message: '已放行必要的 IPv6 通知。', details: ['#2 chain=input action=accept protocol=icmpv6'] },
+      { id: 'fake_ipv6', label: 'IPv6 Fake-IP 路由', status: 'ok', message: '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由' },
     ] }],
     can_prepare: !prepared, prepare_interface: 'eth0', check_token: 'a'.repeat(64),
     connectivity: { status: 'not_checked', message: '尚未验证节点连接。网络参数检查通过不代表代理连接已经成功。' },
   }
+}
+const groupIds = ['ipv6-network', 'restart', 'dns-router', 'node', 'client']
+async function checkFiveGroups(summary) {
+  await summary.waitFor()
+  assert.deepEqual(await summary.locator('[data-ipv6-check-group]').evaluateAll(elements => elements.map(element => element.dataset.ipv6CheckGroup)), groupIds)
+  const buttons = summary.locator('[data-ipv6-check-group] > [data-agent-status-row] > div:first-child > button')
+  assert.equal(await buttons.count(), 5, 'Each group has one accessible details control')
+  const heights = await buttons.evaluateAll(elements => elements.map(element => element.getBoundingClientRect().height))
+  assert.ok(heights.every(height => height >= 44), `Group controls must be at least 44px high: ${heights}`)
+}
+async function checkUnconfiguredClient(summary) {
+  const client = summary.locator('[data-ipv6-check-group="client"]')
+  const header = client.locator('[data-agent-status-row] > div:first-child > button')
+  await header.waitFor()
+  assert.equal(await client.locator('[data-agent-status-row]').getAttribute('data-tone'), 'neutral', 'An unconfigured client is not an acceptance failure or success')
+  assert.match(await header.innerText(), /未配置|无需检查|未验证/)
+  assert.equal(await client.locator('[data-status-details]').isVisible(), false, 'Unconfigured raw checks stay in details')
 }
 const report = { mockedAPI: true, productionEndpointsContacted: false, scenarios: [], pageErrors: [] }
 const { chromium } = await import(process.env.CF_PLAYWRIGHT_MODULE || '/home/sunbroke/rt/private__tmp__configflow-real-env-rebuild__browser-runtime/node_modules/playwright/index.mjs')
@@ -115,10 +134,11 @@ try {
           verification = { status: 'ok', scope: 'mihomo_runtime', config_revision: 7,
             ...(body.deployment_id ? { deployment_id: body.deployment_id } : {}),
             checked_at: '2026-10-30T12:00:00Z', checks: [
-              { id: 'config', label: '配置与主机网络', status: 'ok', message: '当前验收对应已确认的配置版本。' },
-              { id: 'dns', label: 'DNS 实际应答', status: 'ok', message: '实际 DNS 应答符合配置。' },
-              { id: 'proxy', label: '代理网站访问', status: 'ok', message: '检测网站已通过 Mihomo 代理访问。' },
-              { id: 'transport', label: '节点 IPv6 连接', status: 'ok', message: '已取得本次连接使用 IPv6 的证据。' },
+              ...readiness(true).checks,
+              { id: 'runtime_deployed_config', label: '配置与主机网络', status: 'ok', message: '当前验收对应已确认的配置版本。' },
+              { id: 'runtime_dns_a', label: 'DNS 实际应答', status: 'ok', message: '实际 DNS 应答符合配置。' },
+              { id: 'runtime_proxy_http', label: '代理网站访问', status: 'ok', message: '检测网站已通过 Mihomo 代理访问。' },
+              { id: 'runtime_node_ipv6_transport', label: '节点 IPv6 连接', status: 'ok', message: '已取得本次连接使用 IPv6 的证据。' },
               { id: 'client_not_configured', label: '客户端全链路', status: 'unknown', message: '尚未配置独立检测客户端，客户端全链路未验证。' },
             ] }
         }
@@ -145,6 +165,24 @@ try {
     await page.getByRole('button', { name: '检查设备 IPv6', exact: true }).click()
     await page.getByRole('button', { name: '补齐缺少的配置', exact: true }).waitFor()
     assert.deepEqual(writes, [])
+    const manualSummary = page.locator('[data-mihomo-ipv6-readiness] [data-ipv6-check-summary]')
+    await checkFiveGroups(manualSummary)
+    const network = manualSummary.locator('[data-ipv6-check-group="ipv6-network"]')
+    assert.equal(await network.locator('[data-agent-status-row]').getAttribute('data-tone'), 'success')
+    assert.equal(await network.locator('[data-status-notice]').count(), 0, 'Passed groups occupy one line')
+    assert.equal(await network.locator('[data-status-details]').isVisible(), false, 'Passed technical evidence is collapsed')
+    await manualSummary.locator('[data-ipv6-check-group="restart"] [data-status-notice]').filter({ hasText: '开机恢复配置尚未确认齐全' }).waitFor()
+    const dnsGroup = manualSummary.locator('[data-ipv6-check-group="dns-router"]')
+    await dnsGroup.locator('[data-status-notice]').filter({ hasText: '需要核对路由器和客户端是否使用预期的 DNS' }).waitFor()
+    const rawRule = dnsGroup.locator('[data-ipv6-check-id$="ra_input"]')
+    assert.equal(await rawRule.isVisible(), false, 'Router rules do not fill the default view')
+    const dnsHeader = dnsGroup.locator('[data-agent-status-row] > div:first-child > button')
+    await dnsHeader.click()
+    await rawRule.getByText('#2 chain=input action=accept protocol=icmpv6', { exact: true }).waitFor()
+    await page.screenshot({ path: join(output, `${width}-${theme}-expanded-rule.png`) })
+    await dnsHeader.click()
+    assert.equal(await rawRule.isVisible(), false)
+    report.scenarios.push({ width, theme, state: 'five-groups-collapsed-details-visible-problems', touchTargetMin: 44, rawRulePreserved: true })
     for (const accent of ['clay', 'kraft', 'sky']) {
       await page.evaluate(accent => { document.documentElement.dataset.accent = accent }, accent)
       const metrics = await page.evaluate(() => {
@@ -172,7 +210,11 @@ try {
       await page.getByRole('button', { name: '补齐缺少的配置', exact: true }).click()
       await page.getByText('已补齐缺少的配置；节点连接需单独验证。', { exact: true }).waitFor()
       await page.getByRole('button', { name: '验证连接与分流', exact: true }).click()
-      await page.getByText('尚未配置独立检测客户端，客户端全链路未验证。', { exact: true }).waitFor()
+      await manualSummary.locator('[data-ipv6-check-group="node"] [data-agent-status-row][data-tone="success"]').waitFor()
+      await checkFiveGroups(manualSummary)
+      await checkUnconfiguredClient(manualSummary)
+      assert.equal(await manualSummary.locator('[data-ipv6-check-group="node"] [data-status-details]').isVisible(), false)
+      assert.equal(await page.getByRole('button', { name: '主机自检：已通过', exact: true }).count(), 0, 'Manual verification merges into the five existing groups')
       assert.deepEqual(writes, ['prepare', 'verify'])
       await page.getByRole('button', { name: '返回设置', exact: true }).click()
       await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).click()
@@ -217,7 +259,9 @@ try {
     await summary.waitFor()
     assert.deepEqual(writes.slice(-3), ['save', 'publish', 'verify'])
     await summary.click()
-    await automatic.getByText('尚未配置独立检测客户端，客户端全链路未验证。', { exact: true }).waitFor()
+    const automaticGroups = automatic.locator('[data-ipv6-check-summary]')
+    await checkFiveGroups(automaticGroups)
+    await checkUnconfiguredClient(automaticGroups)
     assert.equal(await automatic.getByText('客户端全链路验收', { exact: true }).count(), 0)
     await summary.click()
     await automatic.scrollIntoViewIfNeeded()

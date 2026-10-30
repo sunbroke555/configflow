@@ -4,10 +4,9 @@ import { LoaderCircle, RefreshCw } from '@lucide/vue'
 import { agentApi, profileApi } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
 import MihomoIPv6VerificationSettings from './MihomoIPv6VerificationSettings.vue'
-import type { IPv6ReadinessCheck, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
+import type { MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
 type Agent = { id: string; name: string; profile_id?: string; service_type?: string; status?: string; enabled?: boolean }
 type Profile = { id: string; is_default?: boolean }
@@ -37,8 +36,6 @@ const canPrepare = computed(() => available.value && result.value?.can_prepare =
 const current = (generation: number, id?: string) => !disposed && props.open && generation === session
   && (!id || id === selectedId.value)
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '读取失败，请重试。'
-const labels: Record<IPv6ReadinessCheck['status'], string> = { ok: '已通过', warning: '需留意', error: '未通过', unknown: '未确认' }
-const tones = { ok: 'success', warning: 'warning', error: 'danger', unknown: 'neutral' } as const
 
 async function readTargets() {
   const [agentResponse, profileResponse] = await Promise.all([agentApi.summaries(), profileApi.list()])
@@ -177,7 +174,7 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
 
 <template>
   <div class="min-w-0 space-y-3" data-mihomo-ipv6-readiness>
-    <p class="m-0 text-xs leading-relaxed text-muted-foreground">检查已保存的基础配置、设备网络及关联的上游路由。保存草稿、补齐网络和发布 Mihomo 配置分别生效。</p>
+    <p class="m-0 text-xs leading-relaxed text-muted-foreground">检查已保存的基础配置和设备网络；点开每项可查看详细依据。</p>
     <p v-if="dirty" class="m-0 text-xs text-warning-accent" role="status">有未保存的修改，请先保存草稿，再检查设备 IPv6。</p>
     <div class="flex min-w-0 flex-wrap items-center gap-2">
       <Select v-if="candidates.length > 1 || (candidates.length && !selected)" :model-value="selectedId" :disabled="busy || disabled" @update:model-value="selectTarget">
@@ -194,30 +191,12 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
     <p v-if="error" class="m-0 break-words text-xs text-destructive-accent" role="alert">{{ error }}</p>
     <p v-if="actionMessage" class="m-0 break-words text-xs" role="status">{{ actionMessage }}</p>
     <template v-if="result">
-      <div class="min-w-0 divide-y divide-border/70">
-        <AgentStatusRow v-for="check in result.checks" :key="check.id" :label="check.label" :status="labels[check.status]" :tone="tones[check.status]">
-          <template v-if="check.status !== 'ok'" #notice><p class="m-0 break-words" :role="check.status === 'error' ? 'alert' : undefined">{{ check.message }}</p></template>
-          <template v-if="check.status === 'ok' || check.details?.length" #default>
-            <p v-if="check.status === 'ok'" class="m-0 break-words">{{ check.message }}</p>
-            <p v-for="detail in check.details || []" :key="detail" class="m-0 break-words">{{ detail }}</p>
-          </template>
-        </AgentStatusRow>
-        <template v-for="router in result.routers" :key="router.id">
-          <AgentStatusRow v-for="check in router.checks" :key="`${router.id}-${check.id}`" :label="`${router.name} · ${check.label}`" :status="labels[check.status]" :tone="tones[check.status]">
-            <template v-if="check.status !== 'ok'" #notice><p class="m-0 break-words">{{ check.message }}</p></template>
-            <template v-if="check.status === 'ok' || check.details?.length" #default>
-              <p v-if="check.status === 'ok'" class="m-0 break-words">{{ check.message }}</p>
-              <p v-for="detail in check.details || []" :key="detail" class="m-0 break-words">{{ detail }}</p>
-            </template>
-          </AgentStatusRow>
+      <MihomoIPv6Verification :key="`${selectedId}-${verificationVersion}`" :open="open" :agent-id="selectedId" :profile-id="profileId" :config-revision="result.config_revision" :readiness="result" :disabled="!available">
+        <template #actions>
+          <Button v-if="result.can_prepare" type="button" variant="outline" class="min-h-11" :disabled="!canPrepare" @click="prepare">补齐缺少的配置</Button>
         </template>
-      </div>
-      <div class="flex min-w-0 flex-wrap gap-2">
-        <Button v-if="result.can_prepare" type="button" variant="outline" class="min-h-11" :disabled="!canPrepare" @click="prepare">补齐缺少的配置</Button>
-      </div>
-      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐会保存缺少的主机参数和上方列出的路由，并登记开机恢复。已启用 IPv6 Fake-IP 时，会在网络就绪后按需重新加载正在运行的 Mihomo，使 TUN 获得 IPv6 地址。</p>
-      <p class="m-0 text-xs leading-relaxed text-muted-foreground">连接检测与重启恢复分别判断。找到持久化配置不代表已经实测重启，也不代表所有代理节点都支持 IPv6。</p>
-      <MihomoIPv6Verification :key="`${selectedId}-${verificationVersion}`" :open="open" :agent-id="selectedId" :profile-id="profileId" :config-revision="result.config_revision" :disabled="!available" />
+      </MihomoIPv6Verification>
+      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐会保存缺少的主机参数和路由，并登记开机恢复。启用 IPv6 Fake-IP 时，可能重新加载正在运行的 Mihomo。修改 YAML 仍需单独保存并发布。</p>
     </template>
     <MihomoIPv6VerificationSettings v-if="selected" :open="open" :agent-id="selectedId" :profile-id="profileId" :disabled="busy || disabled" @saved="verificationVersion++" />
   </div>
