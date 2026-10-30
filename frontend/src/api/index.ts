@@ -510,6 +510,14 @@ export const agentApi = {
     api.post<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/prepare`, data, { ...profileOptions(data.profile_id), timeout: 90000 }),
   probeIPv6: (id: string, profileId: string) =>
     api.post<import('@/types/mihomoIPv6').IPv6ProbeResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/probe`, { profile_id: profileId }, { ...profileOptions(profileId), timeout: 60000 }),
+  verifyIPv6: (id: string, data: import('@/types/mihomoIPv6').IPv6VerificationInput) =>
+    api.post<import('@/types/mihomoIPv6').IPv6VerificationResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/verify`, data, { ...profileOptions(data.profile_id), timeout: 60000 }),
+  getIPv6Verification: (id: string, profileId: string, deploymentId?: string) =>
+    api.get<import('@/types/mihomoIPv6').IPv6VerificationResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/verify`, { params: { profile_id: profileId, ...(deploymentId ? { deployment_id: deploymentId } : {}) }, ...profileOptions(profileId), timeout: 60000 }),
+  getIPv6VerificationSettings: (id: string, profileId: string) =>
+    api.get<import('@/types/mihomoIPv6').IPv6VerificationSettingsResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/verification-settings`, { params: { profile_id: profileId }, ...profileOptions(profileId), timeout: 60000 }),
+  setIPv6VerificationSettings: (id: string, profileId: string, settings: import('@/types/mihomoIPv6').IPv6VerificationSettings) =>
+    api.put<import('@/types/mihomoIPv6').IPv6VerificationSettingsResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/verification-settings`, { profile_id: profileId, ...settings }, { ...profileOptions(profileId), timeout: 60000 }),
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),

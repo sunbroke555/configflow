@@ -223,10 +223,15 @@ lock=threading.Lock()
 def event(v):
  with lock,open(LOG,'a') as f:f.write(json.dumps(v)+'\n')
 class HTTP(http.server.BaseHTTPRequestHandler):
- def do_GET(self):
+ protocol_version='HTTP/1.1'
+ def do_HEAD(self):self.respond(False)
+ def do_GET(self):self.respond(True)
+ def respond(self,body):
   v={'path':self.path,'client':self.client_address[0],'origin':'IPv6-node-fixture'}
   b=json.dumps(v).encode();event(dict(v,kind='http'))
-  self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)
+  time.sleep(2 if '__cf_ipv6_verify=' in self.path else .2)
+  self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers()
+  if body:self.wfile.write(b)
  def log_message(self,*a):pass
 def exact(s,n):
  b=b''

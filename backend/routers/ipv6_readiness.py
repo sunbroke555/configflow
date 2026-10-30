@@ -10,13 +10,15 @@ import secrets
 from urllib.parse import quote
 
 from backend.routers.base import RouterError
+from backend.routers.ipv6_policy import POLICY_TABLES, policy_checks
 
 ROUTES = '/ipv6/route'
-TABLES = {
+READINESS_TABLES = {
     'routes': ROUTES, 'addresses': '/ipv6/address', 'nd': '/ipv6/nd',
     'dhcp': '/ipv6/dhcp-client', 'nat': '/ipv6/firewall/nat',
     'filter': '/ipv6/firewall/filter', 'ipv4_addresses': '/ip/address',
 }
+TABLES = {**READINESS_TABLES, **POLICY_TABLES}
 
 
 def enabled(row):
@@ -90,13 +92,28 @@ def _route_evidence(rows):
     return [{key: row.get(key) for key in fields} for row in rows]
 
 
-def inspect(driver, router, agent, host, configuration, dns_target=None):
+def inspect(driver, router, agent, host, configuration, dns_target=None, policy_context=None):
     snapshot, errors = {}, {}
     for key, path in TABLES.items():
+        if key in ('address_lists', 'ipv4_address_lists'):
+            continue
         try:
             snapshot[key] = driver._list(path)
         except RouterError:
             errors[key] = '读取失败，请检查 RouterOS IPv6 支持与账号权限'
+    # Only read address lists referenced by the inspected rules. GeoIP lists
+    # can be large and are irrelevant when no rule in this snapshot uses them.
+    for prefix in ('', 'ipv4_'):
+        key = prefix + 'address_lists'
+        names = {str(row[field]).lstrip('!') for kind in ('filter', 'nat', 'raw', 'mangle')
+                 for row in snapshot.get(prefix + kind, []) for field in ('src-address-list', 'dst-address-list')
+                 if row.get(field)}
+        snapshot[key] = []
+        try:
+            for name in sorted(names):
+                snapshot[key].extend(driver._list(TABLES[key] + '?list=' + quote(name, safe='')))
+        except RouterError:
+            errors[key] = '引用的地址列表未完整读取，无法确认规则匹配'
     try:
         snapshot['dns'] = driver._get('/ip/dns')
     except RouterError:
@@ -126,14 +143,7 @@ def inspect(driver, router, agent, host, configuration, dns_target=None):
         dns_details.append('ROS DNS 与所选 OxiDNS 不完全一致；先核对查询路径，再调整。')
     checks.append(check('dns', 'DNS 路径', 'warning' if dns_details else 'ok',
                         '需要核对 DNS 来源，保留现有设置' if dns_details else '未发现需要自动更改 DNS 的依据', dns_details))
-    nat = [r for r in snapshot.get('nat', []) if enabled(r) and r.get('chain') == 'srcnat'
-           and r.get('action') in ('masquerade', 'src-nat')]
-    checks.append(check('nat', 'IPv6 地址转换', 'warning' if nat else 'ok',
-                        '已有 IPv6 源地址转换；需结合匹配范围判断，保持现有规则' if nat else '未发现 IPv6 源地址转换；此流程不要求新增'))
-    drops = [r for r in snapshot.get('filter', []) if enabled(r) and r.get('chain') == 'forward'
-             and r.get('action') in ('drop', 'reject', 'jump')]
-    checks.append(check('firewall', 'IPv6 转发防火墙', 'warning' if drops else 'ok',
-                        '存在转发限制或跳转，需以实际连接检查确认是否影响当前路径' if drops else '未发现转发丢弃或跳转规则；input 规则保护 ROS 自身'))
+    checks.extend(policy_checks(snapshot, errors, agent, host, configuration, lan, policy_context))
     plan = None
     fake = configuration.get('fake_ipv6_range') if configuration.get('fake_ipv6_enabled') else None
     if fake:
@@ -153,15 +163,14 @@ def inspect(driver, router, agent, host, configuration, dns_target=None):
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', f'{fake} 已指向这台 Mihomo，沿用现有路由'))
         elif rows or conflicts or overlaps_lan:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'error', '已有路由未能确认匹配，或 Fake-IP 与现有网段冲突；请核对，自动配置不会覆盖'))
-        elif errors or not gateway:
+        elif any(key in READINESS_TABLES or key == 'dns' for key in errors) or not gateway:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', '缺少对应路由，但未确认唯一、稳定的同网段下一跳，不能自动添加'))
         else:
             plan = {'dst-address': fake, 'gateway': gateway, 'routing-table': 'main', 'disabled': 'false', 'distance': '1'}
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'将补充 {fake} → {gateway}，只添加这条缺失路由'))
     else:
         checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由'))
-    dependencies = {'wan': ('routes',), 'ra': ('nd', 'ipv4_addresses'), 'dns': ('dns', 'dhcp', 'nd'),
-                    'nat': ('nat',), 'firewall': ('filter',)}
+    dependencies = {'wan': ('routes',), 'ra': ('nd', 'ipv4_addresses'), 'dns': ('dns', 'dhcp', 'nd')}
     for item in checks:
         if any(key in errors for key in dependencies.get(item['id'], ())):
             item.update(status='unknown', message='相关 RouterOS 配置未完整读取，暂时无法判断')

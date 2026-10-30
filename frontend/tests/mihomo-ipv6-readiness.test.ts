@@ -11,7 +11,7 @@ const response = (data: any) => ({ data } as any)
 const gateway = { id: 'gw', name: '客厅 Mihomo', service_type: 'mihomo', profile_id: 'bound', status: 'online' }
 const other = { ...gateway, id: 'other', name: '另一台 Mihomo' }
 const report = (overrides: Partial<Readiness> = {}): Readiness => ({
-  success: true, agent_id: 'gw', profile_id: 'bound',
+  success: true, agent_id: 'gw', profile_id: 'bound', config_revision: 7,
   configuration: { ipv6: true, dns_ipv6: true, fake_ipv6_range: 'fc00::/64', errors: [] }, host: {},
   checks: [{ id: 'ra', label: '网关信息', status: 'ok', message: '通过 RA 自动获得默认路由。' },
     { id: 'persistence', label: '重启恢复配置', status: 'warning', message: '需要保存 eth0 的 RA 设置。', details: ['将保存 eth0.accept_ra=2'] }],
@@ -29,7 +29,7 @@ function deferred() {
 async function mount(props = {}) {
   const wrapper = shallowMount(MihomoIPv6Readiness, {
     props: { open: true, profileId: 'bound', preferredAgentId: 'gw', ...props },
-    global: { stubs: { Button: false, Primitive: false, AgentStatusRow: RowStub } },
+    global: { stubs: { Button: false, Primitive: false, AgentStatusRow: RowStub, MihomoIPv6Verification: false, MihomoIPv6VerificationResult: false } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -41,7 +41,12 @@ beforeEach(() => {
   vi.spyOn(profileApi, 'list').mockResolvedValue(response([{ id: 'bound' }, { id: 'default', is_default: true }]))
   vi.spyOn(agentApi, 'ipv6Readiness').mockResolvedValue(response(report()))
   vi.spyOn(agentApi, 'prepareIPv6').mockResolvedValue(response(report({ can_prepare: false, check_token: 'after-prepare' })))
-  vi.spyOn(agentApi, 'probeIPv6').mockResolvedValue(response(report({ connectivity: { status: 'ok', message: 'IPv6 TCP 连接已通过，未验证代理协议握手。' } })))
+  vi.spyOn(agentApi, 'verifyIPv6').mockResolvedValue(response({ success: true, agent_id: 'gw', profile_id: 'bound', verification: {
+    status: 'ok', scope: 'mihomo_runtime', config_revision: 7,
+    checks: [{ id: 'proxy', label: '代理网站访问', status: 'ok', message: '已通过代理访问检测网站。' },
+      { id: 'client', label: '客户端全链路', status: 'unknown', message: '尚未配置独立检测客户端。' }],
+  } }))
+  vi.spyOn(agentApi, 'getIPv6Verification').mockResolvedValue(response({ success: true, agent_id: 'gw', profile_id: 'bound', verification: null }))
 })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks() })
 
@@ -50,8 +55,7 @@ describe('Mihomo per-device IPv6 workflow', () => {
     const wrapper = await mount()
     expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
     expect(agentApi.prepareIPv6).not.toHaveBeenCalled()
-    expect(agentApi.probeIPv6).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('尚未实际验证节点连接')
+    expect(agentApi.verifyIPv6).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('主路由 · IPv6 Fake-IP 路由')
     expect(wrapper.text()).toContain('检查已保存的基础配置')
   })
@@ -151,13 +155,11 @@ describe('Mihomo per-device IPv6 workflow', () => {
 
   it('runs explicit connectivity verification independently of readiness', async () => {
     const wrapper = await mount()
-    vi.mocked(agentApi.probeIPv6).mockResolvedValue(response({ success: true, agent_id: 'gw', profile_id: 'bound',
-      connectivity: { status: 'ok', message: 'IPv6 TCP 连接已通过，未验证代理协议握手。' } }))
-    await button(wrapper, '验证 IPv6 连接').trigger('click')
+    await button(wrapper, '验证连接与分流').trigger('click')
     await flushPromises()
-    expect(agentApi.probeIPv6).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.verifyIPv6).toHaveBeenCalledExactlyOnceWith('gw', { profile_id: 'bound', expected_config_revision: 7 })
     expect(agentApi.prepareIPv6).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('未验证代理协议握手')
+    expect(wrapper.text()).toContain('尚未配置独立检测客户端')
     expect(wrapper.text()).toContain('主路由 · IPv6 Fake-IP 路由')
     expect(button(wrapper, '补齐缺少的配置')).toBeDefined()
   })

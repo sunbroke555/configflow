@@ -79,6 +79,40 @@ def test_default_and_separate_configuration_flags():
     assert result['ipv6'] is True and result['dns_ipv6'] is False
 
 
+@pytest.mark.parametrize('changed', [{'id': 'm1'}, {'profile_id': 'other'}, {'host': '192.168.0.3'},
+                                    {'host': 'client.example'}, {'host': '127.0.0.1'}, {'enabled': False}])
+def test_policy_client_candidate_requires_independent_saved_address(monkeypatch, changed):
+    from backend.common import client_devices
+    monkeypatch.setattr(client_devices, 'list_devices', lambda _: {'devices': []})
+    source = {'id': 'm1', 'profile_id': 'v6', 'host': '192.168.0.3'}
+    client = {'id': 'client1', 'profile_id': 'v6', 'host': '192.168.0.4', **changed}
+    assert bridge._policy_context({}, source, client)['clients'] == []
+
+
+def test_selected_verification_client_enters_policy_as_candidate_only(environment, monkeypatch):
+    from backend.common import client_devices
+    client, manager, agent, headers, path, *_ = environment
+    probe = manager.register_agent({'name': 'Probe', 'host': '192.168.0.4', 'port': 27648,
+                                    'service_type': 'mosdns', 'deployment_method': 'shell', 'profile_id': 'v6'})
+    def select(agents):
+        next(a for a in agents if a['id'] == agent['id'])['ipv6_verification_settings'] = {
+            'client_agent_id': probe['id'], 'test_url': ''}
+    manager._update_agents(select)
+    devices = {'devices': []}
+    monkeypatch.setattr(client_devices, 'list_devices', lambda _: devices)
+    contexts = []
+    def inspect(*a, **kwargs):
+        contexts.append(kwargs['policy_context'])
+        return {'id': 'r1', 'status': 'ok', 'checks': []}
+    monkeypatch.setattr(ros, 'inspect', inspect)
+    response = client.get(path, headers=headers)
+    assert response.status_code == 200, response.get_json()
+    candidate = contexts[0]['clients'][0]
+    assert candidate['address'] == '192.168.0.4' and candidate['source_candidate'] is True
+    assert '登记地址候选' in candidate['source_note'] and '尚未确认' in candidate['source_note']
+    assert devices == {'devices': []}
+
+
 @pytest.mark.parametrize('raw', ['ipv6: ture', 'ipv6: "true"', 'dns:\n  ipv6: 1', 'dns: []', '[]'])
 def test_invalid_ipv6_types_do_not_offer_preparation(raw):
     assert bridge.configuration({'mihomo': {'custom_config': raw}})[0]['errors']
@@ -155,7 +189,8 @@ def test_peer_dns_and_nat_are_advisories_not_mutations():
     router.rows['/ipv6/dhcp-client'] = [{'use-peer-dns': 'true'}]
     router.rows['/ipv6/firewall/nat'] = [{'chain': 'srcnat', 'action': 'masquerade'}]
     result = inspect_router(router)
-    assert {c['id'] for c in result['checks'] if c['status'] == 'warning'} >= {'dns', 'nat'}
+    assert next(c for c in result['checks'] if c['id'] == 'dns')['status'] == 'warning'
+    assert next(c for c in result['checks'] if c['id'] == 'nat')['status'] == 'unknown'
     assert not router.writes
 
 

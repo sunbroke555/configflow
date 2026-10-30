@@ -9,14 +9,16 @@ import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
+import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import { stripTrailingPunctuation } from '@/lib/text'
+import type { MihomoPublishedTarget } from '@/types/mihomoIPv6'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
 type Agent = { id: string; name: string; profile_id?: string; service_type: string; status?: string; enabled?: boolean; latest_deployment?: AgentDeployment; dns_follow?: { source_agent_id: string } | null; oxidns_ha?: import('@/types/agentDNSHA').AgentDNSHAConfig | null }
 type Profile = { id: string; name: string; is_default?: boolean }
-type Attempt = { session: number; agentId: string; agentName: string; profileId: string; serviceType: ServiceType; deploymentId?: string; saved: boolean; inherited?: boolean }
+type Attempt = { session: number; agentId: string; agentName: string; profileId: string; serviceType: ServiceType; deploymentId?: string; configRevision?: number; saved: boolean; inherited?: boolean }
 
 const props = defineProps<{
   open: boolean
@@ -26,7 +28,7 @@ const props = defineProps<{
   disabled?: boolean
   save: () => Promise<PublishGuard | null>
 }>()
-const emit = defineEmits<{ 'save-draft': [] }>()
+const emit = defineEmits<{ 'save-draft': []; published: [target: MihomoPublishedTarget] }>()
 const agents = ref<Agent[]>([])
 const profiles = ref<Profile[]>([])
 const selectedId = ref('')
@@ -40,6 +42,8 @@ const attempt = ref<Attempt | null>(null)
 const synchronousResult = ref<'idle' | 'done' | 'unknown'>('idle')
 const pendingPosts = reactive(new Set<string>())
 const submittedScopes = new Map<string, { profileId: string; serviceType: ServiceType }>()
+const announcedPublications = new Set<string>()
+const verifiedPublication = ref<MihomoPublishedTarget | null>(null)
 let session = 0
 let targetsInitialized = false
 let disposed = false
@@ -102,6 +106,24 @@ const scopeMessage = computed(() => visibleAttempt.value && !visibleAttempt.valu
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '请稍后重试。'
 const stillCurrent = (current: Attempt) => !disposed && props.open && session === current.session
   && props.profileId === current.profileId && props.serviceType === current.serviceType
+
+watch(task, value => {
+  const current = visibleAttempt.value
+  if (!current || !value || !stillCurrent(current) || !current.saved || current.inherited
+    || current.serviceType !== 'mihomo' || value.status !== 'succeeded'
+    || value.pending || value.request_pending || value.query_error || value.not_recorded
+    || value.manual_rollback || value.rollback_rejected || value.error
+    || value.profile_id !== current.profileId || value.service_type !== current.serviceType
+    || value.config_revision !== current.configRevision
+    || !Number.isInteger(current.configRevision) || current.configRevision! < 0
+    || !current.deploymentId || value.deployment_id !== current.deploymentId) return
+  const key = `${current.agentId}:${current.deploymentId}`
+  if (announcedPublications.has(key)) return
+  announcedPublications.add(key)
+  verifiedPublication.value = { agent_id: current.agentId, profile_id: current.profileId,
+    deployment_id: current.deploymentId, config_revision: current.configRevision! }
+  emit('published', verifiedPublication.value)
+}, { deep: true })
 
 async function readTargets() {
   // Always re-read bindings before publishing; content-sync metadata is unused.
@@ -188,6 +210,7 @@ function selectTarget(value: unknown) {
   selectedId.value = String(value || '')
   targetUnavailable.value = false
   attempt.value = null
+  verifiedPublication.value = null
   synchronousResult.value = 'idle'
   error.value = ''
   submissionFailure.value = null
@@ -199,6 +222,7 @@ async function saveAndPublish() {
   const current: Attempt = { session, agentId: selected.value.id, agentName: selected.value.name,
     profileId: props.profileId, serviceType: props.serviceType, saved: false }
   attempt.value = current
+  verifiedPublication.value = null
   error.value = ''
   submissionFailure.value = null
   synchronousResult.value = 'idle'
@@ -215,6 +239,7 @@ async function saveAndPublish() {
       return
     }
     const publishGuard = { ...savedGuard }
+    current.configRevision = publishGuard.expected_config_revision
     phase.value = 'checking'
     if (!await verifyTarget(current) || !stillCurrent(current)) return
     phase.value = 'submitting'
@@ -295,6 +320,7 @@ watch(() => [props.open, props.profileId, props.serviceType, props.preferredAgen
   loadError.value = ''
   phase.value = 'idle'
   attempt.value = null
+  verifiedPublication.value = null
   error.value = ''
   submissionFailure.value = null
   synchronousResult.value = 'idle'
@@ -370,6 +396,10 @@ onUnmounted(() => { disposed = true; session++ })
         </template>
       </AgentStatusRow>
       <AgentDNSChecks :checks="(submissionFailure || task)?.dns_checks" :checked-at="(submissionFailure || task)?.dns_checked_at" compact />
+      <MihomoIPv6Verification v-if="verifiedPublication" :key="verifiedPublication.deployment_id" :open="open" auto
+        :agent-id="verifiedPublication.agent_id" :profile-id="verifiedPublication.profile_id"
+        :deployment-id="verifiedPublication.deployment_id" :config-revision="verifiedPublication.config_revision" />
+      <p v-else-if="visibleAttempt?.serviceType === 'mihomo' && !visibleAttempt.inherited && task?.status === 'succeeded'" class="m-0 text-warning-accent">暂未确认这次发布的验收结果；可打开「检查设备」查看或重新验证连接与分流。</p>
       <p v-if="task?.status === 'succeeded' && hasDNSFollowers" class="m-0 break-words text-muted-foreground" data-dns-follow-hint>
         后台会继续处理已绑定的 OxiDNS；<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页面查看同步结果或重试</RouterLink>。
       </p>

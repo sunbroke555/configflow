@@ -503,6 +503,18 @@ func IPv6ReadinessHandler(cfg *Config, action string) http.HandlerFunc {
 			ipv6ProbeHandler(cfg, w, r)
 			return
 		}
+		if action == "verify" {
+			ipv6VerifyHandler(cfg, w, r)
+			return
+		}
+		if action == "verify-client" {
+			ipv6VerifyClientHandler(cfg, w, r)
+			return
+		}
+		if action == "verify-connections" {
+			ipv6VerifyConnectionsHandler(cfg, w, r)
+			return
+		}
 		gatewayMu.Lock()
 		defer gatewayMu.Unlock()
 		if action == "status" {

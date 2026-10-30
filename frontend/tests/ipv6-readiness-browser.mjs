@@ -38,7 +38,7 @@ const open = ref(true)
 const initialYAML = '# 保留用户注释\nipv6: true\nmixed-port: 7890\ndns:\n  enable: true\n  ipv6: false # 单独控制 AAAA 答案\n  listen: 0.0.0.0:1053\n  fake-ip-range: 198.18.0.1/16\ntun:\n  enable: true\n  auto-route: true\n'
 const target = { id: 'gw', name: '客厅 Mihomo 网关（保持 IPv4 分流）', service_type: 'mihomo', profile_id: 'bound', status: 'online', enabled: true }
 function readiness(prepared = false) {
-  return { success: true, agent_id: 'gw', profile_id: 'bound', host: {},
+  return { success: true, agent_id: 'gw', profile_id: 'bound', config_revision: 7, host: {},
     configuration: { ipv6: true, dns_ipv6: false, fake_ipv6_range: null, errors: [] },
     checks: [
       { id: 'configuration', label: '已保存的 IPv6 设置', status: 'ok', message: '已读取保存草稿；设备生效配置需要另行发布。' },
@@ -80,6 +80,8 @@ try {
     }, theme)
     let yaml = initialYAML
     let state = 'ready'
+    let verification = null
+    let publishedId = ''
     let release
     const writes = []
     await page.route('**/api/**', async route => {
@@ -91,7 +93,7 @@ try {
         if (request.method() === 'POST') {
           yaml = request.postDataJSON().config
           writes.push('save')
-          data = { success: true }
+          data = { success: true, publish_guard: { expected_profile_id: 'bound', expected_service_type: 'mihomo', expected_config_revision: 7 } }
         } else data = { config: yaml, default_config: initialYAML, provider_update_interval: 3600 }
       } else if (url.pathname === '/api/agents') data = [target]
       else if (url.pathname === '/api/profiles') data = [{ id: 'bound', name: '家庭配置', is_default: true }]
@@ -104,9 +106,34 @@ try {
         assert.deepEqual(request.postDataJSON(), { profile_id: 'bound', interface: 'eth0', check_token: 'a'.repeat(64) })
         writes.push('prepare')
         data = { ...readiness(true), message: '已补齐缺少的配置；节点连接需单独验证。' }
-      } else if (url.pathname === '/api/agents/gw/ipv6-readiness/probe') {
-        writes.push('probe')
-        data = { success: true, agent_id: 'gw', profile_id: 'bound', connectivity: { status: 'ok', message: '节点 IPv6 TCP 端口可达；尚未验证代理握手与客户端分流。' } }
+      } else if (url.pathname === '/api/agents/gw/ipv6-readiness/verify') {
+        if (request.method() === 'POST') {
+          const body = request.postDataJSON()
+          assert.deepEqual(body, { profile_id: 'bound', expected_config_revision: 7,
+            ...(body.deployment_id ? { deployment_id: publishedId } : {}) })
+          writes.push('verify')
+          verification = { status: 'ok', scope: 'mihomo_runtime', config_revision: 7,
+            ...(body.deployment_id ? { deployment_id: body.deployment_id } : {}),
+            checked_at: '2026-10-30T12:00:00Z', checks: [
+              { id: 'config', label: '配置与主机网络', status: 'ok', message: '当前验收对应已确认的配置版本。' },
+              { id: 'dns', label: 'DNS 实际应答', status: 'ok', message: '实际 DNS 应答符合配置。' },
+              { id: 'proxy', label: '代理网站访问', status: 'ok', message: '检测网站已通过 Mihomo 代理访问。' },
+              { id: 'transport', label: '节点 IPv6 连接', status: 'ok', message: '已取得本次连接使用 IPv6 的证据。' },
+              { id: 'client_not_configured', label: '客户端全链路', status: 'unknown', message: '尚未配置独立检测客户端，客户端全链路未验证。' },
+            ] }
+        }
+        data = { success: true, agent_id: 'gw', profile_id: 'bound', verification }
+      } else if (url.pathname === '/api/agents/gw/ipv6-readiness/verification-settings') {
+        assert.equal(request.method(), 'GET')
+        data = { success: true, agent_id: 'gw', profile_id: 'bound', settings: { client_agent_id: '', test_url: '' }, candidates: [
+          { id: 'client', name: '独立检测客户端', host: '192.0.2.30', status: 'online', supported: true },
+        ] }
+      } else if (url.pathname === '/api/agents/gw/push-config') {
+        const body = request.postDataJSON()
+        assert.equal(body.expected_config_revision, 7)
+        publishedId = body.deployment_id
+        writes.push('publish')
+        data = { deployment_id: publishedId, profile_id: 'bound', service_type: 'mihomo', config_revision: 7, status: 'succeeded' }
       } else if (url.pathname === '/api/auth/status') data = { authEnabled: false }
       else data = {}
       await route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) })
@@ -115,14 +142,14 @@ try {
     await page.getByRole('switch', { name: 'Mihomo 使用 IPv6', exact: true }).waitFor()
     assert.equal(await page.getByRole('switch', { name: 'Mihomo 使用 IPv6', exact: true }).getAttribute('aria-checked'), 'true')
     assert.equal(await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).getAttribute('aria-checked'), 'false')
-    await page.getByRole('button', { name: '设备 IPv6 检查', exact: true }).click()
+    await page.getByRole('button', { name: '检查设备 IPv6', exact: true }).click()
     await page.getByRole('button', { name: '补齐缺少的配置', exact: true }).waitFor()
     assert.deepEqual(writes, [])
     for (const accent of ['clay', 'kraft', 'sky']) {
       await page.evaluate(accent => { document.documentElement.dataset.accent = accent }, accent)
       const metrics = await page.evaluate(() => {
-        const dialog = document.querySelector('[data-settings-workspace]')
-        const body = document.querySelector('[data-mihomo-ipv6-settings]')
+        const dialog = document.querySelector('[data-mihomo-ipv6-dialog]')
+        const body = document.querySelector('[data-mihomo-ipv6-readiness]')
         return { viewport: innerWidth, page: document.documentElement.scrollWidth, dialog: dialog.clientWidth,
           dialogScroll: dialog.scrollWidth, panel: body.clientWidth, panelScroll: body.scrollWidth }
       })
@@ -130,17 +157,29 @@ try {
       report.scenarios.push({ width, theme, accent, state: 'ready', metrics })
     }
     await page.evaluate(() => { document.documentElement.dataset.accent = 'clay' })
-    await page.locator('[data-mihomo-ipv6-settings]').scrollIntoViewIfNeeded()
+    await page.locator('[data-mihomo-ipv6-dialog]').scrollIntoViewIfNeeded()
     await page.screenshot({ path: join(output, `${width}-${theme}-ready.png`) })
+    await page.getByRole('button', { name: '验收设置', exact: true }).click()
+    const clientPicker = page.getByRole('combobox', { name: '独立检测客户端', exact: true })
+    await clientPicker.waitFor()
+    assert.ok((await clientPicker.innerText()).includes('不配置'))
+    await page.getByRole('button', { name: '保存验收设置', exact: true }).scrollIntoViewIfNeeded()
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false)
+    await page.screenshot({ path: join(output, `${width}-${theme}-verification-settings.png`) })
+    await page.getByRole('button', { name: '验收设置', exact: true }).click()
+    report.scenarios.push({ width, theme, state: 'optional-client-not-preselected' })
     if (width === 1440 && theme === 'dark') {
       await page.getByRole('button', { name: '补齐缺少的配置', exact: true }).click()
       await page.getByText('已补齐缺少的配置；节点连接需单独验证。', { exact: true }).waitFor()
-      await page.getByRole('button', { name: '验证 IPv6 连接', exact: true }).click()
-      await page.getByText('节点 IPv6 TCP 端口可达；尚未验证代理握手与客户端分流。', { exact: true }).waitFor()
-      assert.deepEqual(writes, ['prepare', 'probe'])
+      await page.getByRole('button', { name: '验证连接与分流', exact: true }).click()
+      await page.getByText('尚未配置独立检测客户端，客户端全链路未验证。', { exact: true }).waitFor()
+      assert.deepEqual(writes, ['prepare', 'verify'])
+      await page.getByRole('button', { name: '返回设置', exact: true }).click()
       await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).click()
+      await page.getByRole('button', { name: '检查设备 IPv6', exact: true }).click()
       await page.getByText('有未保存的修改，请先保存草稿，再检查设备 IPv6。', { exact: true }).waitFor()
       assert.equal(await page.getByRole('button', { name: '重新检查', exact: true }).isDisabled(), true)
+      await page.getByRole('button', { name: '返回设置', exact: true }).click()
       await page.getByRole('button', { name: '保存草稿', exact: true }).click()
       await page.getByRole('button', { name: '打开设置', exact: true }).click()
       await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).waitFor()
@@ -171,6 +210,19 @@ try {
       assert.equal(overflow, false)
       report.scenarios.push({ width, theme, state: 'loading-and-failure', retryAvailable: true, overflow })
     }
+    if (await page.locator('[data-mihomo-ipv6-dialog]').count()) await page.getByRole('button', { name: '返回设置', exact: true }).click()
+    await page.getByRole('button', { name: '保存并发布', exact: true }).click()
+    const automatic = page.locator('[data-ipv6-verifier][aria-label="发布后验收"]')
+    const summary = automatic.getByRole('button', { name: '主机自检：已通过', exact: true })
+    await summary.waitFor()
+    assert.deepEqual(writes.slice(-3), ['save', 'publish', 'verify'])
+    await summary.click()
+    await automatic.getByText('尚未配置独立检测客户端，客户端全链路未验证。', { exact: true }).waitFor()
+    assert.equal(await automatic.getByText('客户端全链路验收', { exact: true }).count(), 0)
+    await summary.click()
+    await automatic.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: join(output, `${width}-${theme}-automatic-summary.png`) })
+    report.scenarios.push({ width, theme, state: 'confirmed-publication-auto-verification', scope: 'host-only', client: 'not-verified' })
     await context.close()
   }
   assert.deepEqual(report.pageErrors, [])

@@ -133,6 +133,39 @@ def _linked(config, agent_id):
     return [r for r in routers_of(config) if r.get('proxy_gateway_agent_id') == agent_id]
 
 
+def _policy_context(config, agent, verification_client=None):
+    _, document = configuration(config)
+    from backend.common.client_devices import list_devices
+    try:
+        clients = [{'address': item['ip']} for item in list_devices(config)['devices']
+                   if item.get('ip') and item.get('ip') != agent.get('host')][:32]
+    except (ValueError, KeyError, TypeError):
+        clients = []
+    candidate = verification_client or {}
+    if (candidate.get('id') and candidate['id'] != agent.get('id')
+            and candidate.get('profile_id') == agent.get('profile_id')
+            and candidate.get('enabled') is not False
+            and candidate.get('host') != agent.get('host')):
+        try:
+            address = ipaddress.ip_address(candidate.get('host'))
+        except ValueError:
+            address = None
+        try:
+            source = ipaddress.ip_address(agent.get('host'))
+        except ValueError:
+            source = None
+        if (address and address != source and not (address.is_unspecified or address.is_loopback or address.is_multicast)
+                and str(address) not in {item['address'] for item in clients}):
+            clients.insert(0, {'address': str(address), 'source_candidate': True,
+                              'source_note': '验收客户端的登记地址候选；尚未确认实际请求使用此源地址，实流路径另行验收。'})
+            clients = clients[:32]
+    dns = document.get('dns') or {}
+    return {'node_targets': [{'address': item['host'], 'port': item['port']}
+                             for item in _probe_targets(config, document) if item['literal']],
+            'clients': clients, 'fake_ipv4_range': dns.get('fake-ip-range')
+            if dns.get('enable') is True and dns.get('enhanced-mode') == 'fake-ip' else None}
+
+
 def _inspect(manager, agent, profile_id, config=None):
     config = get_config(profile_id) if config is None else config
     settings, _ = configuration(config)
@@ -171,6 +204,9 @@ def _inspect(manager, agent, profile_id, config=None):
                                     {'pass': 'ok', 'warn': 'warning', 'fail': 'error', 'info': 'unknown'}.get(item.get('status'), 'unknown'),
                                     str(item.get('message') or '未提供检查结论'), details))
     results = []
+    client_id = (agent.get('ipv6_verification_settings') or {}).get('client_agent_id')
+    verification_client = manager.get_agent_by_id(client_id) if client_id else None
+    policy_context = _policy_context(config, agent, verification_client)
     for router in _linked(config, agent['id']):
         if router.get('type') != 'routeros':
             results.append({'id': router['id'], 'name': router.get('name') or router['id'], 'can_prepare': False,
@@ -181,7 +217,8 @@ def _inspect(manager, agent, profile_id, config=None):
             dns_agent = manager.get_agent_by_id(router.get('dns_agent_id')) if router.get('dns_agent_id') else None
             # A HA virtual IP may differ; it is an advisory, never a DNS rewrite.
             dns_target = (dns_agent or {}).get('host')
-            results.append(ros.inspect(driver, router, agent, host, settings, dns_target))
+            results.append(ros.inspect(driver, router, agent, host, settings, dns_target,
+                                       policy_context=policy_context))
         finally:
             driver.close()
     if not results:

@@ -241,7 +241,8 @@ class AgentManager:
                     'domain_discovery_enabled': existing_agent.get('domain_discovery_enabled', False),
                 }
                 for field in ('config_revision', 'pushed_at', 'applied_content', 'dns_follow', 'dns_follow_state', 'dns_follow_job', 'rule_sync',
-                              'oxidns_ha', 'oxidns_ha_state', 'oxidns_ha_publication', 'node_test_dns_endpoints'):
+                              'oxidns_ha', 'oxidns_ha_state', 'oxidns_ha_publication', 'node_test_dns_endpoints',
+                              'ipv6_verification_settings', 'ipv6_verifications'):
                     if field in existing_agent:
                         updated_agent[field] = deepcopy(existing_agent[field])
                 if existing_agent.get('gateway_installation_id'):
@@ -1002,6 +1003,9 @@ class AgentManager:
                 validation_receipt = validate_bundle(agent_id, bundle)
             self._remember_deployment_content(agent_id, content_bundle, base_url, validation_receipt,
                                               source_snapshot if source_snapshot is not None else resource_config)
+            if agent.get('service_type') == 'mihomo' and source_snapshot is not None:
+                from .ipv6_verification import enroll
+                enroll(self, agent_id, deployment_id, source_snapshot)
             if source_snapshot is not None and agent.get('service_type') in ('mihomo', 'oxidns'):
                 from .rule_sync_store import capture
                 # Geo databases are Agent-carried resources, omitted by the

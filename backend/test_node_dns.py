@@ -63,9 +63,10 @@ def test_custom_encrypted_hostname_requires_explicit_literal_bootstrap():
 
 def test_custom_save_is_global_and_does_not_publish_or_change_profile(repo, monkeypatch):
     from backend.common import agent_manager
+    # Load lazy route imports before replacing a function they may import by name.
+    client = make_client(repo)
     monkeypatch.setattr(agent_manager, 'get_agent_manager', lambda: pytest.fail('Custom DNS must not provision an Agent'))
     shared, profile = repo.get_shared(), repo.get_profile('default')
-    client = make_client(repo)
     value = {'mode': 'custom', 'servers': ['https://DNS.EXAMPLE'], 'bootstrap': ['192.0.2.53:53']}
     response = client.post('/api/nodes/latency/settings', json={'dns': value})
     assert response.status_code == 200
