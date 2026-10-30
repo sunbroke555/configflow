@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
 import MihomoIPv6VerificationSettings from './MihomoIPv6VerificationSettings.vue'
+import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
 import type { MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
 type Agent = { id: string; name: string; profile_id?: string; service_type?: string; status?: string; enabled?: boolean }
@@ -21,6 +22,8 @@ const error = ref('')
 const phase = ref<'idle' | 'loading' | 'checking' | 'preparing'>('idle')
 const verificationVersion = ref(0)
 const actionMessage = ref('')
+// 每次取得检查结果加一：首次显示上级路由提醒，之后重新检查时一并刷新。
+const routerCheck = ref(0)
 let session = 0
 let initialized = false
 let disposed = false
@@ -65,6 +68,7 @@ function acceptResult(data: MihomoIPv6Readiness, id: string) {
     throw new Error(data?.message || '检查结果与当前设备或配置空间不一致，请重新检查。')
   }
   result.value = data
+  routerCheck.value++
 }
 
 async function loadTargets() {
@@ -156,6 +160,7 @@ watch(() => [props.open, props.profileId, props.preferredAgentId] as const, () =
   actionMessage.value = ''
   error.value = ''
   phase.value = 'idle'
+  routerCheck.value = 0
   if (props.open) void loadTargets()
 }, { immediate: true, flush: 'sync' })
 watch(() => props.dirty, dirty => {
@@ -196,8 +201,9 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
           <Button v-if="result.can_prepare" type="button" variant="outline" class="min-h-11" :disabled="!canPrepare" @click="prepare">补齐缺少的配置</Button>
         </template>
       </MihomoIPv6Verification>
-      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐仅处理 Mihomo 主机配置，必要时重新加载 Mihomo；ROS 路由到「上级路由」预览发布。</p>
+      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐仅处理 Mihomo 主机配置，必要时重新加载 Mihomo。</p>
     </template>
+    <UpstreamRouterPending v-if="selectedId && routerCheck && !dirty" :agent-id="selectedId" :refresh-key="routerCheck" />
     <MihomoIPv6VerificationSettings v-if="selected" :open="open" :agent-id="selectedId" :profile-id="profileId" :disabled="busy || disabled" @saved="verificationVersion++" />
   </div>
 </template>

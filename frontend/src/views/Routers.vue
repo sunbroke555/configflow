@@ -175,7 +175,7 @@
       </DialogContent>
     </Dialog>
 
-    <SectionCard v-if="reportRouter && !report" class="mt-4" :title="`差异报告 · ${reportRouter.name}`">
+    <SectionCard v-if="reportRouter && !report" class="mt-4 scroll-mt-20" data-router-report :title="`差异报告 · ${reportRouter.name}`">
       <p v-if="reportLoading" role="status" class="m-0 flex items-center gap-2 text-muted-foreground"><Loader2 class="size-4 animate-spin" />正在生成差异报告…</p>
       <template v-else-if="reportError">
         <p role="alert" class="mt-0 break-words text-destructive-accent">{{ reportError }}</p>
@@ -184,7 +184,7 @@
     </SectionCard>
 
     <template v-if="report">
-      <SectionCard class="mt-4" :title="`差异报告 · ${reportRouter?.name}`" :description="`生成于 ${reportTime}`" persistent-description>
+      <SectionCard class="mt-4 scroll-mt-20" data-router-report :title="`差异报告 · ${reportRouter?.name}`" :description="`生成于 ${reportTime}`" persistent-description>
         <template #actions>
           <span :class="['chip', report.in_sync ? 'chip-ok' : 'chip-warn']">
             {{ report.in_sync ? '已全部同步' : reportSummary.unknown ? '存在待确认项' : '存在差异' }}
@@ -822,7 +822,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
 
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { RouterLink, matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
+import { RouterLink, matchedRouteKey, onBeforeRouteLeave, routeLocationKey, routerKey } from 'vue-router'
 import {
   Activity,
   CircleX,
@@ -864,7 +864,9 @@ import RouterRuleSync from '@/components/routers/RouterRuleSync.vue'
 import RouterOperationPreview from '@/components/routers/RouterOperationPreview.vue'
 import { agentApi, routerApi as baseRouterApi, ruleApi, type StaticRouteChange, type StaticRouteItem, type StaticRoutePlan, type StaticRouteValues } from '@/api'
 import { setupApi } from '@/api/setup'
-import { activeProfileId as selectedProfileId } from '@/profileContext'
+import { activeProfileId as selectedProfileId, scopedRequests, setActiveProfileId } from '@/profileContext'
+import { useProfileStore } from '@/stores/profile'
+import { ROUTER_DEEP_LINK_KEYS, readRouterDeepLink, type RouterDeepLink } from '@/lib/upstreamRouterPending'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { routerCopy } from '@/lib/routerCopy'
 import { copyText } from '@/lib/clipboard'
@@ -1686,5 +1688,81 @@ const applyPlan = async () => {
 
 watch(() => !!(applying.value || saving.value || routeBusy.value || policyLocked.value || dialogVisible.value || planVisible.value || busyId.value), value => emit('busy', value))
 onBeforeUnmount(() => emit('busy', false))
-onMounted(load)
+
+// 直达链接 /routers?router=<id>&profile=<配置空间>&preview=1：打开这台路由器的差异报告，
+// preview=1 时接着打开「预览发布」（仍需用户确认才写入）。路由器在其他配置空间时先切换空间，
+// 页面随空间重建后由新页面继续打开；处理后从地址中移除这三个参数。嵌入向导时不处理。
+const currentRoute = inject(routeLocationKey, null)
+const navigation = inject(routerKey, null)
+const deepLinkOf = () => (props.embedded || props.setupDraftSession || !currentRoute ? null : readRouterDeepLink(currentRoute.query))
+let pageDisposed = false
+let deepLinkBusy = false
+onBeforeUnmount(() => { pageDisposed = true })
+const clearDeepLink = () => {
+  if (!navigation || !currentRoute) return
+  const query = { ...currentRoute.query }
+  for (const key of ROUTER_DEEP_LINK_KEYS) delete query[key]
+  void navigation.replace({ path: currentRoute.path, query, hash: currentRoute.hash })
+}
+/** true：已切换到链接中的配置空间。 */
+const followDeepLinkProfile = async (link: RouterDeepLink) => {
+  if (!link.profile || link.profile === activeProfileId.value) return false
+  const profileStore = useProfileStore()
+  let profiles = profileStore.profiles.value
+  if (!profiles.some(item => item.id === link.profile)) {
+    try { profiles = await profileStore.refreshProfiles() } catch { /* 下方按不存在处理 */ }
+  }
+  const profile = profiles.find(item => item.id === link.profile)
+  if (!profile) {
+    notify.error('链接中的配置空间不存在或已删除，下面是当前配置空间的路由器。')
+    return false
+  }
+  if (scopedRequests.value) {
+    notify.warning(`这台路由器属于配置空间「${profile.name}」。当前配置正在保存，完成后请切换到该空间再查看。`)
+    return false
+  }
+  setActiveProfileId(profile.id)
+  notify.info(`已切换到配置空间「${profile.name}」，查看链接中的路由器。`)
+  return true
+}
+const scrollToReport = () => document.querySelector<HTMLElement>('[data-router-report]')?.scrollIntoView?.({ block: 'start' })
+const openDeepLink = async (link: RouterDeepLink) => {
+  clearDeepLink()
+  if (link.profile && link.profile !== activeProfileId.value) return
+  const target = routers.value.find(item => item.id === link.router)
+  if (!target) {
+    notify.error('链接中的路由器不存在或已删除，请从提醒处重新打开。')
+    return
+  }
+  const opening = openReport(target)
+  await nextTick()
+  scrollToReport()
+  await opening
+  if (pageDisposed || reportRouter.value?.id !== target.id || !report.value) return
+  await nextTick()
+  scrollToReport()
+  if (link.preview) await openPlan()
+}
+const handleDeepLink = async (link: RouterDeepLink, loaded: boolean) => {
+  deepLinkBusy = true
+  try {
+    if (await followDeepLinkProfile(link)) {
+      await nextTick()
+      if (pageDisposed) return  // 页面随配置空间重建，由新页面继续
+      loaded = false
+    }
+    if (!loaded && !await load()) return
+    if (!pageDisposed) await openDeepLink(link)
+  } finally {
+    deepLinkBusy = false
+  }
+}
+onMounted(() => {
+  const link = deepLinkOf()
+  void (link ? handleDeepLink(link, false) : load())
+})
+watch(() => JSON.stringify(deepLinkOf()), () => {
+  const link = deepLinkOf()
+  if (link && !deepLinkBusy && !loading.value) void handleDeepLink(link, true)
+})
 </script>

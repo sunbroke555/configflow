@@ -227,9 +227,10 @@ describe('settings save and publish', () => {
 
   it('keeps saving a draft separate from publication', async () => {
     const save = vi.fn()
-    const wrapper = await render({ save })
+    const saveDraft = vi.fn()
+    const wrapper = await render({ save, onSaveDraft: saveDraft })
     await button(wrapper, '保存草稿').trigger('click')
-    expect(wrapper.emitted('save-draft')).toHaveLength(1)
+    expect(saveDraft).toHaveBeenCalledOnce()
     expect(save).not.toHaveBeenCalled()
     expect(agentApi.pushConfig).not.toHaveBeenCalled()
   })
@@ -302,7 +303,8 @@ describe('settings save and publish', () => {
   ])('requires an explicit choice when the requested agent is absent from the current scope (%j)', async ({ unavailable }) => {
     vi.mocked(agentApi.summaries).mockResolvedValue(response([...unavailable, agent({ id: 'two', name: '书房 DNS' })]))
     const save = vi.fn().mockResolvedValue(guard())
-    const wrapper = await render({ preferredAgentId: 'one', save })
+    const saveDraft = vi.fn()
+    const wrapper = await render({ preferredAgentId: 'one', save, onSaveDraft: saveDraft })
     expect(wrapper.getComponent(Select).props('modelValue')).toBe('')
     expect(wrapper.text()).toContain('原目标设备不可用于此配置空间的 OxiDNS 配置')
     expect(publishButton(wrapper).attributes('disabled')).toBeDefined()
@@ -311,7 +313,7 @@ describe('settings save and publish', () => {
     expect(save).not.toHaveBeenCalled()
     expect(agentApi.pushConfig).not.toHaveBeenCalled()
     await button(wrapper, '保存草稿').trigger('click')
-    expect(wrapper.emitted('save-draft')).toHaveLength(1)
+    expect(saveDraft).toHaveBeenCalledOnce()
     await choose(wrapper, 'two')
     expect(wrapper.text()).not.toContain('原目标设备不可用于')
     await publish(wrapper)

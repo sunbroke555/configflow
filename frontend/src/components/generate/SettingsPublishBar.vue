@@ -10,6 +10,7 @@ import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
+import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import { stripTrailingPunctuation } from '@/lib/text'
@@ -27,8 +28,13 @@ const props = defineProps<{
   preferredAgentId?: string
   disabled?: boolean
   save: () => Promise<PublishGuard | null>
+  /**
+   * 父组件的 @save-draft 监听。声明为 prop 以便等待其结果：返回（或 resolve 为）非空值表示草稿已保存，
+   * Mihomo 据此刷新上级路由提醒；返回 undefined / null 只代表未确认保存。
+   */
+  onSaveDraft?: () => unknown
 }>()
-const emit = defineEmits<{ 'save-draft': []; published: [target: MihomoPublishedTarget] }>()
+const emit = defineEmits<{ published: [target: MihomoPublishedTarget] }>()
 const agents = ref<Agent[]>([])
 const profiles = ref<Profile[]>([])
 const selectedId = ref('')
@@ -44,6 +50,8 @@ const pendingPosts = reactive(new Set<string>())
 const submittedScopes = new Map<string, { profileId: string; serviceType: ServiceType }>()
 const announcedPublications = new Set<string>()
 const verifiedPublication = ref<MihomoPublishedTarget | null>(null)
+// Mihomo 本次打开后每保存成功一次（草稿或发布前的保存）加一，用于提醒并刷新上级路由的待发布状态。
+const routerCheck = ref(0)
 let session = 0
 let targetsInitialized = false
 let disposed = false
@@ -104,6 +112,9 @@ const stageTone = computed(() => error.value ? 'danger' : synchronousResult.valu
 const scopeMessage = computed(() => visibleAttempt.value && !visibleAttempt.value.inherited && (task.value || synchronousResult.value !== 'idle')
   ? `本次发布到「${visibleAttempt.value.agentName}」，仅包含本次保存的配置；后续修改需重新保存并发布。` : '')
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '请稍后重试。'
+// 已选目标时只看这台；生成页未选目标时逐台提醒本空间的 Mihomo。
+const routerAgentIds = computed(() => props.serviceType !== 'mihomo' || !routerCheck.value ? []
+  : selected.value ? [selected.value.id] : candidates.value.map(agent => agent.id))
 const stillCurrent = (current: Attempt) => !disposed && props.open && session === current.session
   && props.profileId === current.profileId && props.serviceType === current.serviceType
 
@@ -217,6 +228,13 @@ function selectTarget(value: unknown) {
   restorePending()
 }
 
+async function saveDraft() {
+  const generation = session
+  let saved: unknown
+  try { saved = await props.onSaveDraft?.() } catch { return }  // 父组件负责保存失败的提示
+  if (saved != null && !disposed && props.open && generation === session) routerCheck.value++
+}
+
 async function saveAndPublish() {
   if (!canPublish.value || !selected.value) return
   const current: Attempt = { session, agentId: selected.value.id, agentName: selected.value.name,
@@ -232,6 +250,7 @@ async function saveAndPublish() {
     if (savedGuard === null) return
     current.saved = true
     if (!stillCurrent(current)) return
+    routerCheck.value++
     if (!savedGuard || savedGuard.expected_profile_id !== current.profileId
       || savedGuard.expected_service_type !== current.serviceType
       || !Number.isInteger(savedGuard.expected_config_revision) || savedGuard.expected_config_revision < 0) {
@@ -321,6 +340,7 @@ watch(() => [props.open, props.profileId, props.serviceType, props.preferredAgen
   phase.value = 'idle'
   attempt.value = null
   verifiedPublication.value = null
+  routerCheck.value = 0
   error.value = ''
   submissionFailure.value = null
   synchronousResult.value = 'idle'
@@ -354,7 +374,7 @@ onUnmounted(() => { disposed = true; session++ })
         <p v-if="!loading && !loadError && targetUnavailable" class="m-0 break-words text-warning-accent" role="status">原目标设备不可用于此配置空间的 {{ serviceLabel }} 配置，请重新选择设备；仍可保存草稿。</p>
       </div>
       <div class="grid min-w-0 shrink-0 grid-cols-2 gap-2 sm:flex">
-        <Button type="button" variant="outline" class="min-h-11 min-w-0 px-3" :disabled="disabled || phase !== 'idle'" @click="emit('save-draft')">
+        <Button type="button" variant="outline" class="min-h-11 min-w-0 px-3" :disabled="disabled || phase !== 'idle'" @click="saveDraft">
           <Save class="size-4 shrink-0" aria-hidden="true" />保存草稿
         </Button>
         <Button type="button" class="min-h-11 min-w-0 px-3" :disabled="!canPublish" @click="saveAndPublish">
@@ -409,6 +429,9 @@ onUnmounted(() => { disposed = true; session++ })
         <Button type="button" variant="outline" class="min-h-11" :disabled="disabled || phase !== 'idle'" @click="activateSaved">应用并启动</Button>
       </div>
       <p v-if="blockedRecovery" class="m-0 text-destructive-accent">请先到 Agent 页面处理回滚结果，确认服务恢复后再发布。</p>
+    </div>
+    <div v-if="routerAgentIds.length" class="min-w-0 space-y-2" data-publish-upstream-routers>
+      <UpstreamRouterPending v-for="agentId in routerAgentIds" :key="agentId" :agent-id="agentId" :refresh-key="routerCheck" compact />
     </div>
   </div>
 </template>
