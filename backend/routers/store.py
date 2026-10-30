@@ -107,6 +107,8 @@ def normalize(payload: Dict[str, Any], existing: Optional[Dict[str, Any]] = None
         router['dns_guard'] = guard
     if existing and existing.get('dns_guard_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
         raise RouterValidationError('请先关闭强制 DNS 并发布撤销，再修改路由器类型或管理地址')
+    if existing and existing.get('ipv6_fakeip_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
+        raise RouterValidationError('请先关闭 IPv6 Fake-IP 并发布撤销，再修改路由器类型或管理地址')
 
     if not router['name']:
         raise RouterValidationError('请填写名称')
@@ -131,7 +133,7 @@ def redact_routers(routers: Any) -> Any:
     for item in routers.get('items') or []:
         if isinstance(item, dict):
             clean = {key: value for key, value in item.items()
-                     if key not in ('password', 'last_probe', 'last_release', 'ros_policy_state', 'dns_guard_state')}
+                     if key not in ('password', 'last_probe', 'last_release', 'ros_policy_state', 'dns_guard_state', 'ipv6_fakeip_state')}
             if clean.get('username'):
                 clean['username'] = '[REDACTED]'
             if clean.get('endpoint'):

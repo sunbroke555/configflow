@@ -226,7 +226,7 @@ def _inspect(manager, agent, profile_id, config=None):
     blocked = bool(settings['errors']) or any(r['status'] == 'error' for r in results)
     authorized_gateway = bool(_linked(config, agent['id'])) or ((config.get('mihomo') or {}).get('linux_gateway') or {}).get('enabled') is True
     can_prepare = (not blocked and settings['ipv6'] is True and authorized_gateway and
-                   (host.get('can_prepare') is True or any(r.get('can_prepare') for r in results)))
+                   host.get('can_prepare') is True)
     if not authorized_gateway:
         checks.append(ros.check('gateway_role', '网关用途', 'warning', '自动开启转发仅适用于已关联上游路由或已启用 Linux 网关的设备'))
     proof = {'agent': {key: agent.get(key) for key in AGENT_FIELDS},
@@ -265,30 +265,15 @@ def prepare(manager, agent_id, profile_id, body):
         current_agent = _agent(manager, agent_id, profile_id)
         if get_config(profile_id) != config or any(current_agent.get(key) != agent.get(key) for key in AGENT_FIELDS):
             raise MonitorError('CHECK_CHANGED', 409, '配置或设备信息已变化，请重新检查')
-        receipts = []
         prepared_host = None
         try:
-            for result in report['routers']:
-                if not result.get('plan'):
-                    continue
-                router = next(r for r in linked if r['id'] == result['id'])
-                driver = _driver(router)
-                stack.callback(driver.close)
-                receipts.append((driver, ros.add_missing_route(driver, result['plan'])))
             if report['host'].get('can_prepare'):
                 prepared_host = _request(agent, 'prepare', {'interface': body['interface'], 'interface_index': report['host'].get('interface_index')})
-        except (RouterError, MonitorError) as error:
-            undo_errors = []
-            for driver, receipt in reversed(receipts):
-                try:
-                    ros.undo_route(driver, receipt)
-                except RouterError as undo:
-                    undo_errors.append(str(undo))
-            message = str(error) + ('；撤销待核对：' + '；'.join(undo_errors) if undo_errors else '；本次新增路由已撤销，主机状态请重新检查')
-            raise MonitorError('PREPARE_FAILED', 502, message) from None
+        except MonitorError as error:
+            raise MonitorError('PREPARE_FAILED', 502, '主机配置补齐失败，请重新检查：' + str(error)) from None
         result = _inspect(manager, agent, profile_id, config)
-        result['message'] = '已补齐可自动处理的配置，请查看剩余检查项并验证节点连接'
-        result['changed_routes'] = len(receipts)
+        result['message'] = '已补齐可自动处理的主机配置；ROS 路由请到上级路由差异报告预览并发布。'
+        result['changed_routes'] = 0
         if prepared_host:
             for item in prepared_host.get('checks', []):
                 if item.get('id') == 'tun_recovery':

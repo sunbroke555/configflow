@@ -63,6 +63,8 @@ def _capture_sync(config, router, driver, desired):
     from backend.common.profile_context import resolve_profile_id
     from backend.routers.rule_sync import capture_manual
     try:
+        if hasattr(driver, 'ipv6_fakeip_manifest'):
+            router = {**router, 'ipv6_fakeip_state': driver.ipv6_fakeip_manifest}
         capture_manual(resolve_profile_id(), config, router, driver, desired)
     except Exception:
         # A runtime receipt I/O problem must not turn a successful manual release
@@ -169,6 +171,8 @@ def update_or_delete_router(router_id):
         if request.method == 'DELETE':
             if existing.get('ros_policy_state'):
                 return jsonify(success=False, message='请先清空策略路由选择并发布撤回，再删除路由器记录'), 409
+            if existing.get('ipv6_fakeip_state'):
+                return jsonify(success=False, message='请先关闭 IPv6 Fake-IP 并发布撤销，再删除路由器记录'), 409
             if existing.get('dns_guard_state'):
                 return jsonify(success=False, message='请先关闭强制 DNS 并发布撤销，再删除路由器记录'), 409
             get_repository().save_router_settings(profile_id, existing, None)
@@ -271,6 +275,25 @@ def _inspect_state(config, router, driver, content_loader=None):
             mangle=[{key: value for key, value in row.items() if key not in {'bytes', 'packets'}}
                     for row in state.ros_policy[MANGLE] if row.get('.id') not in owned_mangle],
             routing_rules=state.ros_policy[RULES], vrfs=state.ros_policy[VRFS], routes=state.ros_policy[ROUTES])
+    if router['type'] == 'routeros':
+        from backend.routers import ipv6_fakeip
+        if ipv6_fakeip.relevant(config, router):
+            from backend.common.profile_context import resolve_profile_id
+            from backend.agents import ipv6_readiness
+            from backend.agents.oxidns_monitor import MonitorError
+            host_report = {}
+            if ipv6_fakeip.settings(config)['enabled']:
+                if not gateway_agent or gateway_agent.get('profile_id') != (config.get('profile_id') or resolve_profile_id()):
+                    host_report = {'error': '代理网关不属于当前配置空间，请重新关联后预览。'}
+                elif gateway_agent.get('service_type') != 'mihomo' or gateway_agent.get('enabled') is False:
+                    host_report = {'error': '代理网关不是可用的 Mihomo 设备，请核对关联。'}
+                else:
+                    try:
+                        host_report = ipv6_readiness._request(gateway_agent)
+                    except MonitorError as error:
+                        host_report = {'error': str(error)}
+            driver.ipv6_fakeip_manifest = router.get('ipv6_fakeip_state')
+            state.ipv6_fakeip_plan = ipv6_fakeip.inspect(config, router, gateway_agent, host_report, driver)
     if dns_id and not desired['dns_error']:
         try:
             state.dhcp_dns = driver.read_dhcp_dns()
@@ -416,6 +439,8 @@ def router_apply(router_id):
                 publication['manifest'] = driver.ros_policy_manifest
             if hasattr(driver, 'dns_guard_manifest'):
                 publication['dns_guard'] = driver.dns_guard_manifest
+            if hasattr(driver, 'ipv6_fakeip_manifest'):
+                publication['ipv6_fakeip'] = driver.ipv6_fakeip_manifest
             get_repository().save_router_publication(resolve_profile_id(), router, **publication)
             reset_config_context()
             if result['ok']:

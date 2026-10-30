@@ -167,7 +167,7 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', '缺少对应路由，但未确认唯一、稳定的同网段下一跳，不能自动添加'))
         else:
             plan = {'dst-address': fake, 'gateway': gateway, 'routing-table': 'main', 'disabled': 'false', 'distance': '1'}
-            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'将补充 {fake} → {gateway}，只添加这条缺失路由'))
+            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少 {fake} → {gateway}；请到上级路由差异报告预览并发布。'))
     else:
         checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由'))
     dependencies = {'wan': ('routes',), 'ra': ('nd', 'ipv4_addresses'), 'dns': ('dns', 'dhcp', 'nd')}
@@ -180,7 +180,7 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
     return {'id': router['id'], 'name': router.get('name') or router['id'], 'checks': checks,
             'status': 'error' if any(c['status'] == 'error' for c in checks) else
                       'warning' if any(c['status'] in ('warning', 'unknown') for c in checks) else 'ok',
-            'can_prepare': plan is not None, 'plan': plan, 'fingerprint': fingerprint}
+            'can_prepare': False, 'route_publication_required': plan is not None, 'plan': plan, 'fingerprint': fingerprint}
 
 
 def add_missing_route(driver, plan):

@@ -24,6 +24,8 @@ PERMISSION_HELP = (
     '保存后重新生成发布预览；连接测试成功不代表已有写入权限。'
 )
 ROUTES = '/ip/route'
+IPV6_ROUTES = '/ipv6/route'
+ROUTE_PATHS = frozenset({ROUTES, IPV6_ROUTES})
 NAT = '/ip/firewall/nat'
 MANGLE = '/ip/firewall/mangle'
 FILTER = '/ip/firewall/filter'
@@ -36,7 +38,7 @@ ADDRESSES = '/ip/firewall/address-list'
 # takes 4-5 s, one route by ID 54 ms and a ?dst-address= read 11 ms. Both are
 # unordered, so no neighbour is ever needed; checks that concern other rows
 # (new IDs, same-destination routes) read only the rows sharing the key.
-SINGLE_ROW_PATHS = frozenset({ADDRESSES, ROUTES})
+SINGLE_ROW_PATHS = frozenset({ADDRESSES, ROUTES, IPV6_ROUTES})
 DHCP_SERVERS = '/ip/dhcp-server'
 DHCP_LEASES = '/ip/dhcp-server/lease'
 DHCP_OPTIONS = '/ip/dhcp-server/option'
@@ -420,7 +422,7 @@ class RouterOSDriver(RouterDriver):
     def _payload(path: str, row: Dict[str, Any]) -> Dict[str, Any]:
         if _truthy(row.get('dynamic')):
             raise RouterError('RouterOS 动态对象不能接管、修改或删除')
-        if path == ROUTES:
+        if path in ROUTE_PATHS:
             return {key: value for key, value in row.items() if key in ROUTE_FIELDS}
         if path == DHCP_NETWORKS:
             return _dhcp_network_attributes(row)
@@ -438,7 +440,7 @@ class RouterOSDriver(RouterDriver):
         """Stable fields of the exact object last written by this transaction."""
         values = self._payload(path, row)
         defaults = {'disabled': 'false', 'comment': ''}
-        if path == ROUTES:
+        if path in ROUTE_PATHS:
             defaults.update({'routing-table': 'main', 'distance': '1', 'scope': '30',
                              'target-scope': '10', 'check-gateway': 'none', 'pref-src': '',
                              'suppress-hw-offload': 'false', 'blackhole': 'false', 'vrf-interface': ''})
@@ -453,7 +455,7 @@ class RouterOSDriver(RouterDriver):
             if path in SINGLE_ROW_PATHS:
                 current = self._find(path, change['id'])
                 # The same-destination check below needs only that destination.
-                rows = self._scoped(path, values) if path == ROUTES and current is None else []
+                rows = self._scoped(path, values) if path in ROUTE_PATHS and current is None else []
             else:
                 rows = self._list(path)
                 current = next((row for row in rows if str(row.get('.id')) == str(change['id'])), None)
@@ -462,7 +464,7 @@ class RouterOSDriver(RouterDriver):
                     raise RouterError('回滚对象已发生外部变化，保留现有配置')
                 return {'path': path, 'id': str(change['id']),
                         'values': {key: value for key, value in values.items() if key != 'place-before'}}
-            if path == ROUTES and any(str(row.get('.id')) not in change.get('known_ids', [])
+            if path in ROUTE_PATHS and any(str(row.get('.id')) not in change.get('known_ids', [])
                     and row.get('dst-address') == values.get('dst-address')
                     and row.get('routing-table', 'main') == values.get('routing-table', 'main') for row in rows):
                 raise RouterError('回滚期间已有其他程序新增同网段路由，保留现有配置')
@@ -495,7 +497,7 @@ class RouterOSDriver(RouterDriver):
         if path in SINGLE_ROW_PATHS:
             row = self._find(path, row_id)
             rows = [row] if row is not None else []
-            if path == ROUTES and row is not None and method == 'DELETE':
+            if path in ROUTE_PATHS and row is not None and method == 'DELETE':
                 # Only same-destination routes matter to the restore check.
                 rows = [row] + [item for item in self._scoped(path, row) if str(item.get('.id')) != row_id]
         else:
@@ -632,6 +634,9 @@ class RouterOSDriver(RouterDriver):
         if kind in ('nat_list_sync', 'nat_list_restore'):
             from backend.routers import routeros_nat_list
             return (routeros_nat_list.apply if kind == 'nat_list_sync' else routeros_nat_list.restore)(self, op)
+        if kind in ('ipv6_fakeip_replace', 'ipv6_fakeip_restore'):
+            from backend.routers import ipv6_fakeip
+            return (ipv6_fakeip.apply if kind == 'ipv6_fakeip_replace' else ipv6_fakeip.restore)(self, op)
         if kind in ('dns_guard_replace', 'dns_guard_restore'):
             from backend.routers import dns_guard
             return (dns_guard.apply if kind == 'dns_guard_replace' else dns_guard.restore)(self, op)

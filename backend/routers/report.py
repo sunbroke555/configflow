@@ -258,6 +258,14 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
             summary[guard['status']] = summary.get(guard['status'], 0) + 1
         result['in_sync'] = (result['in_sync'] and guard['status'] in {'disabled', 'synced'}
                              and not guard['blockers'] and not state.dns_guard_plan['ops'])
+    if state.ipv6_fakeip_plan is not None:
+        from backend.routers.ipv6_fakeip import report as ipv6_report
+        ipv6 = state.ipv6_fakeip_plan
+        result['ipv6_fakeip'] = ipv6_report(ipv6)
+        if ipv6['status'] not in {'disabled', 'borrowed'}:
+            summary[ipv6['status']] = summary.get(ipv6['status'], 0) + 1
+        result['in_sync'] = (result['in_sync'] and ipv6['status'] in {'disabled', 'synced', 'borrowed'}
+                             and not ipv6['blockers'] and not ipv6['ops'])
     result['desired'].pop('dns_guard', None)
     if state.ikuai_groups is not None:
         from backend.routers.ikuai_groups import report_section

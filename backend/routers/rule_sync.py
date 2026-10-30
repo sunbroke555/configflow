@@ -56,6 +56,9 @@ def controls(config, router):
         'fake_ip': str(fake_ip_network(config)), 'oxidns': config.get('oxidns'),
         'proxy_groups': config.get('proxy_groups'),
     }
+    from backend.routers import ipv6_fakeip
+    if router.get('type') == 'routeros' and ipv6_fakeip.relevant(config, router):
+        value['ipv6_fakeip'] = {'settings': ipv6_fakeip.settings(config), 'state': router.get('ipv6_fakeip_state')}
     ha = (dns_agent or {}).get('oxidns_ha') or {}
     if ha.get('enabled') is True:
         # Added only while DNS HA is enabled, like dns_guard above: the DHCP DNS
@@ -267,6 +270,8 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                 plan = build_plan(router, desired, state, report, report['return_routing'], driver)
                 if {item['cidr'] for item in plan['checks']['routes']} != {item['cidr'] for item in desired['proxy_cidrs']}:
                     raise RouterError('目的网段存在冲突或无法完整核对，请手动预览发布')
+                if (state.ipv6_fakeip_plan or {}).get('blockers') or (state.ipv6_fakeip_plan or {}).get('ops'):
+                    raise RouterError('IPv6 Fake-IP 配置有差异或未能确认，请先手动预览发布')
                 writes_started = True
                 outcome = apply_delta(driver, desired, plan, baseline, ensure_current)
                 _save_manifest(profile_id, router, driver)

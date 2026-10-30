@@ -334,7 +334,9 @@ def test_api_preserves_draft_and_ipv4_and_repeated_prepare_is_idempotent(environ
             'profile_id': 'v6', 'interface': report['prepare_interface'], 'check_token': report['check_token']})
         assert response.status_code == 200, response.get_json()
         report = response.get_json()
-    assert len([w for w in router.writes if w[0] == 'PUT']) == 1
+    assert router.writes == []
+    assert report['changed_routes'] == 0
+    assert '上级路由差异报告' in report['message']
     assert manager.repository.get_profile('v6') == before
     assert all(w[1].startswith('/ipv6/route') for w in router.writes)
 
@@ -350,13 +352,14 @@ def test_changed_route_or_interface_blocks_before_any_write(environment):
     assert not router.writes and not any(c[0] == 'prepare' for c in calls)
 
 
-def test_failed_host_prepare_rolls_back_only_new_router_route(environment):
+def test_failed_host_prepare_never_writes_or_removes_router_routes(environment):
     client, _, _, headers, path, router, _, fail = environment
     report = client.get(path, headers=headers).get_json()
     fail.append(True)
     response = client.post(path + '/prepare', headers=headers, json={'interface': 'eth0', 'check_token': report['check_token']})
     assert response.status_code == 502
     assert len(router.rows[ros.ROUTES]) == 1
+    assert router.writes == []
 
 
 def test_probe_is_explicit_saved_tcp_endpoint_not_arbitrary_destination(environment):
