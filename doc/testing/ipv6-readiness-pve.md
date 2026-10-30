@@ -227,7 +227,9 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 
 ## 自定义 IPv6 Fake-IP 网段与 LLA 优先
 
-2026-10-30，在 Mihomo DNS 开关下新增网段输入框，开启 IPv6 Fake-IP 后显示，默认补齐 `fc00::1/64`，已有自定义值沿用。输入与 YAML 双向同步；非法 CIDR、公网和链路本地网段在输入框提示，不写入 YAML，并阻止生成页和面板入口保存或发布。关闭开关收起输入框、保留网段并说明受管路由需通过上级路由发布撤回。[输入框截图](../img/guide/mihomo-ipv6-fakeip-range.png)。
+2026-10-30，在 Mihomo DNS 开关下新增网段输入框，开启 IPv6 Fake-IP 后显示，默认补齐 `fc00::1/64`，已有自定义值沿用。输入与 YAML 双向同步；非法 CIDR、公网和链路本地网段在输入框提示，不写入 YAML，并阻止生成页和面板入口保存或发布。关闭开关收起输入框、保留网段并说明受管路由需通过上级路由发布撤回。
+
+![IPv6 Fake-IP 网段输入框](../img/guide/mihomo-ipv6-fakeip-range.png)
 
 下一跳新建时优先唯一有效的 LLA，附加 ROS 的 LAN 接口；没有 LLA 时回退同 LAN 的唯一 ULA。已有生效且仍属于同一 Mihomo、同一 ROS 接口的路由继续沿用；多 LLA 无法确定时停止，临时、弃用、待确认、地址冲突及其它网卡地址排除。归属核对、预览版本保护和失败恢复保持原流程。
 
