@@ -259,6 +259,8 @@ class RouterState:
     ipv6_routes_plan: Optional[Dict[str, Any]] = None
     # Same-LAN RA DNS advertising is checked only with a valid selected OxiDNS.
     ipv6_dns_plan: Optional[Dict[str, Any]] = None
+    # Opt-in cf-pd script that deprecates the old LAN prefix after a PD change.
+    ipv6_pd_guard_plan: Optional[Dict[str, Any]] = None
     # RouterOS DNS guard: live rows by REST path, and the plan built from them.
     dns_guard: Optional[Dict[str, Any]] = None
     dns_guard_plan: Optional[Dict[str, Any]] = None

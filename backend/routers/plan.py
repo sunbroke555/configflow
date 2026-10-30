@@ -51,6 +51,7 @@ STAGE_TITLES = {
     'dns_guard': 'DNS 劫持',
     'ipv6_fakeip': 'IPv6 Fake-IP 分流路由',
     'ipv6_routes': 'IPv6 规则集路由',
+    'ipv6_pd_guard': 'IPv6 前缀变化保护',
     'return_cleanup': '移除 mihomo 回流规则',
 }
 
@@ -718,6 +719,16 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
             'key': 'dns_guard', 'title': STAGE_TITLES['dns_guard'], 'manual': manual, 'ops': guard_ops,
             'note': ('局域网设备发往其他地址的 53 端口查询转给 OxiDNS；先写放行与回包规则，再启用劫持。'
                      if guard['spec'] else '已关闭强制 DNS：只删除本功能已核实归属的对象，手工规则保留。')})
+    pd_guard = state.ipv6_pd_guard_plan
+    if pd_guard is not None:
+        # Like IPv6 DNS: an unclear PD setup skips only this stage.
+        pd_skipped = bool(pd_guard['blockers'])
+        warnings.extend('IPv6 前缀变化保护本次跳过：' + item for item in pd_guard['blockers'])
+        warnings.extend(pd_guard['warnings'])
+        stages.append({'key': 'ipv6_pd_guard', 'title': STAGE_TITLES['ipv6_pd_guard'], 'manual': manual,
+                       'ops': [] if pd_skipped else pd_guard['ops'], 'skipped': pd_skipped,
+                       'note': ('只管理 ConfigFlow 写入的前缀保护对象；沿用的手动安装不改写，关闭开关时也不删除。'
+                                if pd_guard['enabled'] else '已关闭：只撤回 ConfigFlow 写入的前缀保护对象及其运行状态。')})
     if cleanup_ops:
         stages.append({'key': 'return_cleanup', 'title': STAGE_TITLES['return_cleanup'], 'manual': False,
                        'ops': cleanup_ops,
@@ -759,6 +770,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                               'dns': item['desired_dns']}
     if ipv6_dns is not None:
         checks['ipv6_dns'] = ipv6_dns['check']
+    if pd_guard is not None:
+        checks['ipv6_pd_guard'] = {} if pd_skipped else pd_guard['check']
     script = driver.render_script([op for stage in stages if stage['manual'] for op in stage['ops']]) if manual else ''
     evidence = {'context': state.nat_context, 'address_sets': state.address_sets} if state.nat_context is not None else None
     if listed.get('evidence') is not None:
@@ -772,6 +785,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                     'ipv6_routes_skip': ipv6_routes['skip']}
     if ipv6_dns is not None:
         evidence = {'routing': evidence, 'ipv6_dns': ipv6_dns['evidence'], 'ipv6_dns_check': ipv6_dns['check']}
+    if pd_guard is not None:
+        evidence = {'base': evidence, 'ipv6_pd_guard': pd_guard['evidence'], 'ipv6_pd_guard_status': pd_guard['status']}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,
                      'state': as_dict(state.dhcp_dns)} if manage_dns else None)
     if dns_evidence is not None and desired.get('dns_ha'):

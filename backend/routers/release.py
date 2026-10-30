@@ -138,6 +138,10 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         from backend.routers.ipv6_dns import verify
         verify(driver, checks['ipv6_dns'])
         return
+    if stage == 'ipv6_pd_guard':
+        from backend.routers.ipv6_pd_guard import verify
+        verify(driver, checks['ipv6_pd_guard'])
+        return
     if stage == 'ipv6_fakeip':
         from backend.routers.ipv6_fakeip import verify
         verify(driver, checks['ipv6_fakeip'])
@@ -322,6 +326,11 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 elif current == 'ipv6_dns':
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 OxiDNS DHCP 与同一局域网的 IPv6 DNS 通告一致', 'status': 'verified'})
+                if current == 'ipv6_pd_guard' and stage.get('skipped'):
+                    record({'stage': current, 'summary': 'IPv6 前缀变化保护未能确认，本次保留现状', 'status': 'warning'})
+                elif current == 'ipv6_pd_guard' and plan['checks'].get('ipv6_pd_guard', {}).get('enabled'):
+                    _verify(current, plan['checks'], driver, agent)
+                    record({'stage': current, 'summary': '回读确认 IPv6 前缀变化保护与模板一致', 'status': 'verified'})
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:
                     unchanged = _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认来源策略路由与计划一致', 'status': 'verified'})

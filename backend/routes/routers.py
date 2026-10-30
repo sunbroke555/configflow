@@ -6,7 +6,7 @@ from flask import jsonify, request
 
 from backend.common.auth import require_auth
 from backend.common.config import get_config, get_repository, reset_config_context, save_config
-from backend.routers import dns_guard
+from backend.routers import dns_guard, ipv6_pd_guard
 from backend.routers.base import RouterConflictError, RouterError, as_dict, retire_policy_routes
 from backend.routers.desired import compute_desired
 from backend.routers.dhcp_dns import build_dns_report, dns_agent_settings, dns_ha_settings
@@ -179,6 +179,8 @@ def update_or_delete_router(router_id):
                 return jsonify(success=False, message='请先关闭 Mihomo IPv6 或取消相关规则集，并发布撤回 IPv6 规则集路由，再删除路由器记录'), 409
             if existing.get('dns_guard_state'):
                 return jsonify(success=False, message='请先关闭强制 DNS 并发布撤销，再删除路由器记录'), 409
+            if existing.get('ipv6_pd_guard_state'):
+                return jsonify(success=False, message='请先关闭 IPv6 前缀变化保护并发布撤回，再删除路由器记录'), 409
             get_repository().save_router_settings(profile_id, existing, None)
             reset_config_context()
             logger.info('已删除主路由记录 %s', _label(existing))
@@ -311,6 +313,8 @@ def _inspect_state(config, router, driver, content_loader=None):
             scope = {'id': item['id'], 'network': item['network'], 'gateway': desired['proxy_gateway'],
                      'dns': item['desired_dns']}
             state.ipv6_dns_plan = ipv6_dns.inspect({**desired, 'ipv6_dns_scope': scope}, driver)
+    if ipv6_pd_guard.relevant(router):
+        state.ipv6_pd_guard_plan = ipv6_pd_guard.inspect(router, (gateway_agent or {}).get('host') or '', driver)
     report = build_report(desired, state)
     from backend.routers import forward_hint
     # Read-only: never part of a release operation, check or fingerprint.
@@ -475,6 +479,8 @@ def router_apply(router_id):
                 publication['ipv6_fakeip'] = driver.ipv6_fakeip_manifest
             if hasattr(driver, 'ipv6_routes_manifest'):
                 publication['ipv6_routes'] = driver.ipv6_routes_manifest
+            if hasattr(driver, 'ipv6_pd_guard_manifest'):
+                publication['ipv6_pd_guard'] = driver.ipv6_pd_guard_manifest
             get_repository().save_router_publication(resolve_profile_id(), router, **publication)
             reset_config_context()
             if result['ok']:

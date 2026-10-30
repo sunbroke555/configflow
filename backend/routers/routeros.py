@@ -429,6 +429,10 @@ class RouterOSDriver(RouterDriver):
             _flag(row, 'disabled')
         if path in ROUTE_PATHS:
             return {key: value for key, value in row.items() if key in ROUTE_FIELDS}
+        if path in ('/system/script', '/system/scheduler', '/ipv6/dhcp-client'):
+            # Run counters and lease state change on their own.
+            from backend.routers.ipv6_pd_guard import payload
+            return payload(path, row)
         if path == DHCP_NETWORKS:
             return _dhcp_network_attributes(row)
         if path == NETWATCH:
@@ -648,6 +652,9 @@ class RouterOSDriver(RouterDriver):
         if kind == 'ipv6_dns_update':
             from backend.routers import ipv6_dns
             return ipv6_dns.apply(self, op)
+        if kind in ('ipv6_pd_guard_sync', 'ipv6_pd_guard_restore'):
+            from backend.routers import ipv6_pd_guard
+            return (ipv6_pd_guard.apply if kind == 'ipv6_pd_guard_sync' else ipv6_pd_guard.restore)(self, op)
         if kind in ('dns_guard_replace', 'dns_guard_restore'):
             from backend.routers import dns_guard
             return (dns_guard.apply if kind == 'dns_guard_replace' else dns_guard.restore)(self, op)
