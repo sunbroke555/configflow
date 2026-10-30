@@ -41,7 +41,7 @@ Mihomo 设置里的「IPv6 模式」按使用场景三选一，下方列出这�
 - 从设备面板进入时固定检查该设备；从生成页进入且本配置空间有多台 Mihomo 时，需要先选择设备。原设备改绑、离线或被禁用时不会自动换成其他设备。
 - 防火墙和 NAT 的命令只原样展示后端给出的内容；NAT 问题没有固定命令，需要按提示自行调整 masquerade 的出口接口。
 
-![仅节点使用 IPv6：保存后主机与发布已完成，验收待验证](img/guide/mihomo-ipv6-mode-nodes.png)
+![仅节点使用 IPv6：保存后主机与发布已完成，上级路由仍有待处理项，验收待验证](img/guide/mihomo-ipv6-mode-nodes.png)
 
 ![手机深色主题下的模式与步骤](img/guide/mihomo-ipv6-mode-mobile-dark.png)
 
