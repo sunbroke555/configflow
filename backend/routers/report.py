@@ -266,6 +266,16 @@ def build_report(desired: Dict[str, Any], state: RouterState) -> Dict[str, Any]:
             summary[ipv6['status']] = summary.get(ipv6['status'], 0) + 1
         result['in_sync'] = (result['in_sync'] and ipv6['status'] in {'disabled', 'synced', 'borrowed'}
                              and not ipv6['blockers'] and not ipv6['ops'])
+    if state.ipv6_routes_plan is not None:
+        from backend.routers.ipv6_routes import report as ipv6_routes_report
+        routes6 = state.ipv6_routes_plan
+        result['ipv6_routes'] = ipv6_routes_report(routes6)
+        for item in routes6['items']:
+            if item['status'] != 'borrowed':
+                summary[item['status']] = summary.get(item['status'], 0) + 1
+        # A skipped item does not hold the rest of the release, but is not in sync.
+        result['in_sync'] = (result['in_sync'] and not routes6['ops'] and not routes6['skip']
+                             and routes6['status'] in {'disabled', 'synced'})
     if state.ipv6_dns_plan is not None:
         from backend.routers.ipv6_dns import report as ipv6_dns_report
         ipv6_dns = state.ipv6_dns_plan

@@ -5,6 +5,8 @@ Stages run in this order (see docs/ROUTER_INTEGRATION_DESIGN.md §6.2):
 1. ``return_routing`` - when explicitly enabled, the mihomo Agent marks replies
    so they go back through the router. Disabled by default; existing rules stay.
 2. ``routes``         - router static routes for proxy CIDRs to the gateway.
+   ``ipv6_fakeip`` / ``ipv6_routes`` - RouterOS IPv6 routes to the gateway's IPv6
+                       next hop: the Fake-IPv6 range and rule-set IPv6 networks.
 3. ``nat_bypass``     - exempt proxy CIDRs from source NAT so mihomo sees client IPs.
 4. ``dhcp_dns``       - optionally replace DNS in the gateway's DHCP network.
 5. ``ipv6_dns``       - stop same-LAN RA DNS only after the selected DHCP DNS works.
@@ -48,6 +50,7 @@ STAGE_TITLES = {
     'ipv6_dns': 'IPv6 DNS 下发',
     'dns_guard': 'DNS 劫持',
     'ipv6_fakeip': 'IPv6 Fake-IP 分流路由',
+    'ipv6_routes': 'IPv6 规则集路由',
     'return_cleanup': '移除 mihomo 回流规则',
 }
 
@@ -681,6 +684,21 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         warnings.extend(ipv6['warnings'])
         stages.insert(2, {'key': 'ipv6_fakeip', 'title': STAGE_TITLES['ipv6_fakeip'], 'manual': manual,
                           'ops': ipv6['ops'], 'note': '仅管理本功能已核实归属的 IPv6 Fake-IP 路由；已有其他路由沿用并保留原归属。'})
+    ipv6_routes = state.ipv6_routes_plan
+    if ipv6_routes is not None:
+        # Like IPv6 DNS: a next hop or ownership that cannot be confirmed skips
+        # only this stage. Its routes stay as they are; nothing is guessed.
+        skipped = bool(ipv6_routes['skip'])
+        warnings.extend('IPv6 规则集路由本次跳过：' + item for item in ipv6_routes['skip'])
+        warnings.extend(ipv6_routes['warnings'])
+        position = next(index for index, stage in enumerate(stages) if stage['key'] == 'nat_bypass')
+        stages.insert(position, {
+            'key': 'ipv6_routes', 'title': STAGE_TITLES['ipv6_routes'], 'manual': manual,
+            'enabled': ipv6_routes['enabled'] or bool(ipv6_routes['ops']), 'skipped': skipped,
+            'ops': [] if skipped else ipv6_routes['ops'],
+            'note': ('所选规则集中的公网 IPv6 网段指向这台 Mihomo 的 IPv6 下一跳；只管理本功能已核实归属的路由，'
+                     '已有其他路由沿用或跳过。' if ipv6_routes['enabled']
+                     else 'Mihomo 已关闭 IPv6：只撤回本功能已核实归属的 IPv6 规则集路由。')})
     ipv6_dns = state.ipv6_dns_plan
     if ipv6_dns is not None:
         # Leaving RA DNS as it is was the behaviour before this stage existed:
@@ -714,6 +732,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
     }
     if ipv6 is not None:
         checks['ipv6_fakeip'] = ipv6['check']
+    if ipv6_routes is not None and not ipv6_routes['skip']:
+        checks['ipv6_routes'] = ipv6_routes['check']
     if listed.get('check') is not None:
         checks['nat_list'] = listed['check']
     if policy:
@@ -746,6 +766,9 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}
     if ipv6 is not None:
         evidence = {'nat': evidence, 'ipv6_fakeip': ipv6['evidence'], 'ipv6_check': ipv6['check']}
+    if ipv6_routes is not None:
+        evidence = {'v4': evidence, 'ipv6_routes': ipv6_routes['evidence'], 'ipv6_routes_check': ipv6_routes['check'],
+                    'ipv6_routes_skip': ipv6_routes['skip']}
     if ipv6_dns is not None:
         evidence = {'routing': evidence, 'ipv6_dns': ipv6_dns['evidence'], 'ipv6_dns_check': ipv6_dns['check']}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,

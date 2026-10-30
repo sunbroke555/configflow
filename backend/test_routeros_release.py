@@ -18,6 +18,7 @@ from backend.test_router_release import DESIRED, FakeAgent, GATEWAY, SAFE_RETURN
 
 
 ROUTES = '/ip/route'
+IPV6_ROUTES = '/ipv6/route'
 NAT = '/ip/firewall/nat'
 ADDRESSES = '/ip/firewall/address-list'
 READ_ONLY = {'.id', 'dynamic', 'active', 'invalid', 'bytes', 'packets', 'immediate-gw',
@@ -143,7 +144,8 @@ class StatefulRouterOS:
             assert (target or {}).get('list') in OWN_LISTS, 'Releases must not mutate shared address lists'
         if method in ('PUT', 'PATCH'):
             assert isinstance(json, dict)
-            allowed = {ROUTES: ROUTE_WRITABLE, ADDRESSES: ADDRESS_WRITABLE}.get(collection, NAT_WRITABLE)
+            allowed = {ROUTES: ROUTE_WRITABLE, IPV6_ROUTES: ROUTE_WRITABLE,
+                       ADDRESSES: ADDRESS_WRITABLE}.get(collection, NAT_WRITABLE)
             assert set(json) <= allowed, f'Non-writable properties: {set(json) - allowed}'
             assert not (set(json) & READ_ONLY)
         if method == 'PUT':
@@ -191,11 +193,11 @@ class StatefulRouterOS:
                 return RESTResponse(run_add_script(body['script'], add, fatal=(requests.RequestException,)))
             return RESTResponse(run_list_script(body['script'], self.rows[ADDRESSES],
                                                 lambda fields: add(ADDRESSES, fields)))
-        if path == ROUTES + '/print':
-            visible = [row for row in self.rows[ROUTES] if row.get('.id') not in self.hidden_ids]
+        if path in (ROUTES + '/print', IPV6_ROUTES + '/print') and path.removesuffix('/print') in self.rows:
+            visible = [row for row in self.rows[path.removesuffix('/print')] if row.get('.id') not in self.hidden_ids]
             return RESTResponse(print_rows(visible, body))
         collection = path.removesuffix('/remove')
-        assert path.endswith('/remove') and collection in (ROUTES, NAT, ADDRESSES), path
+        assert path.endswith('/remove') and collection in (ROUTES, IPV6_ROUTES, NAT, ADDRESSES), path
         for row_id in body['.id'].split(','):
             self.writes.append(('DELETE', collection + '/' + row_id, None))
             self.counts[('DELETE', collection)] = self.counts.get(('DELETE', collection), 0) + 1

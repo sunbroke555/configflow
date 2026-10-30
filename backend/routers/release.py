@@ -142,6 +142,10 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
         from backend.routers.ipv6_fakeip import verify
         verify(driver, checks['ipv6_fakeip'])
         return
+    if stage == 'ipv6_routes':
+        from backend.routers.ipv6_routes import verify
+        verify(driver, checks['ipv6_routes'])
+        return
     if stage == 'dns_guard':
         from backend.routers.dns_guard import verify
         verify(driver, checks['dns_guard'])
@@ -308,6 +312,11 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 if current == 'ipv6_fakeip':
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 IPv6 Fake-IP 路由与计划一致', 'status': 'verified'})
+                if current == 'ipv6_routes' and stage.get('skipped'):
+                    record({'stage': current, 'summary': 'IPv6 规则集路由未能确认下一跳或归属，本次保留现状', 'status': 'warning'})
+                elif current == 'ipv6_routes' and plan.get('checks', {}).get('ipv6_routes') is not None:
+                    _verify(current, plan['checks'], driver, agent)
+                    record({'stage': current, 'summary': '回读确认 IPv6 规则集路由与计划一致', 'status': 'verified'})
                 if current == 'ipv6_dns' and stage.get('skipped'):
                     record({'stage': current, 'summary': 'IPv6 DNS 下发未能确认可安全修改的 LAN，本次保留现状', 'status': 'warning'})
                 elif current == 'ipv6_dns':

@@ -169,12 +169,41 @@ class Downloads:
 
 def _save_manifest(profile_id, router, driver):
     from backend.common.config import get_repository, reset_config_context
-    manifest = getattr(driver, 'ros_policy_manifest', None)
     latest = find_router(config_for(profile_id), router['id'])
-    if latest is not None and latest.get('ros_policy_state') == manifest:
+    changes = {}
+    manifest = getattr(driver, 'ros_policy_manifest', None)
+    if latest is None or latest.get('ros_policy_state') != manifest:
+        changes['manifest'] = manifest
+    if hasattr(driver, 'ipv6_routes_manifest'):
+        routes6 = driver.ipv6_routes_manifest
+        if latest is None or latest.get('ipv6_routes_state') != routes6:
+            changes['ipv6_routes'] = routes6
+    if not changes:
         return
-    get_repository().save_router_publication(profile_id, router, manifest=manifest)
+    get_repository().save_router_publication(profile_id, router, **changes)
     reset_config_context()
+
+
+def _ipv6_routes_delta(state, plan):
+    """Keep only IPv6 rule-set route changes the sync may apply; say why others wait.
+
+    A sync applies additions and removals for the gateway enrolled by a manual
+    release, exactly like IPv4. Enrolment, a new next hop, a withdrawal or an
+    unclear setup leave the IPv6 routes as they are, without pausing IPv4.
+    """
+    routes6 = state.ipv6_routes_plan
+    if routes6 is None:
+        return ''
+    reason = '；'.join(routes6['skip'])
+    if not reason and routes6['ops'] and routes6['auto']:
+        reason = routes6['auto'] + '，请手动预览发布'
+    if reason:
+        for stage in plan['stages']:
+            if stage['key'] == 'ipv6_routes':
+                stage['ops'] = []
+        plan['checks'].pop('ipv6_routes', None)
+        return 'IPv6 规则集路由未自动更新：' + reason
+    return ''
 
 
 def _cache_sources(config, router, contents):
@@ -254,7 +283,8 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                     item = find_router(latest, router_id)
                     if (item is None or not item.get('auto_rule_sync')
                             or controls(latest, item) != baseline['control']
-                            or item.get('ros_policy_state') != router.get('ros_policy_state')):
+                            or item.get('ros_policy_state') != router.get('ros_policy_state')
+                            or item.get('ipv6_routes_state') != router.get('ipv6_routes_state')):
                         raise RouterError('同步期间配置已变化，停止应用，请重新手动预览发布')
                     # Local edits must not be included by a remote refresh.
                     current_sources = selected_sources(latest, item)
@@ -276,6 +306,7 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                 # pending change needs the manual preview to apply it.
                 if (state.ipv6_dns_plan or {}).get('ops') and not (state.ipv6_dns_plan or {}).get('blockers'):
                     raise RouterError('IPv6 DNS 下发有待关闭的差异，请先手动预览发布')
+                ipv6_note = _ipv6_routes_delta(state, plan)
                 writes_started = True
                 outcome = apply_delta(driver, desired, plan, baseline, ensure_current)
                 _save_manifest(profile_id, router, driver)
@@ -289,7 +320,8 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                                message='ROS 已核对，正在更新规则缓存', synced_at=now(), **outcome)
                 store.write(profile_id, router_id, receipt)
                 _cache_sources(config, router, contents)
-                receipt.update(status='synced', message='远程规则已核对，ROS 已同步')
+                receipt.update(status='synced', message='远程规则已核对，ROS 已同步'
+                               + (f'；{ipv6_note}' if ipv6_note else ''))
                 store.write(profile_id, router_id, receipt)
         except Exception as error:
             rollback_failed = isinstance(error, RouterRollbackError)

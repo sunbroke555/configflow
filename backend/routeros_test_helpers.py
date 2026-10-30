@@ -8,7 +8,7 @@ import ipaddress
 import re
 
 ADD_LINE = re.compile(r':if \(\$f=0\) do=\{:onerror e in=\{:put \("cf-id:(?P<index>\d+):" \. '
-                      r'\[(?P<path>/ip/route|/ip/firewall/nat)/add (?P<params>.*)\]\)\} '
+                      r'\[(?P<path>/ip/route|/ipv6/route|/ip/firewall/nat)/add (?P<params>.*)\]\)\} '
                       r'do=\{:set f 1; :put \("cf-err:(?P=index):" \. \$e\)\}\}')
 FIELD = re.compile(r'([\w.-]+)=(?:"((?:[^"\\]|\\.)*)"|(yes|no))')
 
