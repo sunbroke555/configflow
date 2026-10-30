@@ -1,27 +1,29 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { Copy, RefreshCw, ScanLine } from '@lucide/vue'
 import { agentApi, profileApi, routerApi } from '@/api'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
-// Placeholder until components/routers/UpstreamRouterPending.vue is available.
-import UpstreamRouterPending from './UpstreamRouterPendingPlaceholder.vue'
+import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
+import { upstreamRouterApi } from '@/api/upstreamRouterPending'
+import { upstreamRouterLink } from '@/lib/upstreamRouterPending'
 import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
 import { copyText } from '@/lib/clipboard'
 import { notify } from '@/lib/feedback'
 import {
   firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, stepVisible, upstreamStep, verifyStep,
-  type IPv6Step, type IPv6StepContext, type IPv6StepId, type OxiDNSLink, type RouterReportRead, type UpstreamPendingStatus,
+  type IPv6Step, type IPv6StepContext, type IPv6StepId, type OxiDNSLink, type UpstreamPendingStatus,
 } from '@/lib/mihomoIPv6Steps'
 import type { IPv6Verification, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
 type Agent = { id: string; name: string; profile_id?: string; service_type?: string; status?: string; enabled?: boolean }
 type Profile = { id: string; is_default?: boolean }
 type Router = { id: string; name?: string; proxy_gateway_agent_id?: string; dns_agent_id?: string }
-const props = defineProps<{ open: boolean; profileId: string; preferredAgentId?: string; mode: 'nodes' | 'clients'; dirty?: boolean; disabled?: boolean; refreshKey?: number }>()
+// refreshKey: a confirmed publish; recheckKey: the device check window closed.
+const props = defineProps<{ open: boolean; profileId: string; preferredAgentId?: string; mode: 'nodes' | 'clients'; dirty?: boolean; disabled?: boolean; refreshKey?: number; recheckKey?: number }>()
 const emit = defineEmits<{ check: [agentId: string] }>()
 
 const agents = ref<Agent[]>([])
@@ -31,14 +33,17 @@ const targetUnavailable = ref(false)
 const phase = ref<'idle' | 'loading' | 'checking'>('idle')
 const error = ref('')
 const readiness = ref<MihomoIPv6Readiness | null>(null)
-const reports = ref<RouterReportRead[]>([])
-const reportsLoading = ref(false)
 const oxidns = ref<OxiDNSLink[]>([])
 const upstream = ref<UpstreamPendingStatus | null>(null)
+// Where the upstream step links: one waiting router opens its preview directly.
+const upstreamLinks = ref<Array<{ key: string; label: string; to: RouteLocationRaw }>>([])
+let upstreamSession = 0
 const verifier = ref<{ verification: IPv6Verification | null; fresh: boolean } | null>(null)
-// Bumped by every check: refreshes the upstream reminder, and once the new
-// readiness arrives, remounts the embedded verifier to re-read its result.
-const loads = ref(0)
+// Bumped after a save, a publish or a manual refresh: the upstream reminder
+// then skips its short server-side reuse. Opening the settings and closing the
+// device check (which refreshes its own reminder) reuse the last read.
+const upstreamKey = ref(0)
+// Bumped by each new readiness: remounts the embedded verifier to re-read it.
 const readings = ref(0)
 let session = 0
 let initialized = false
@@ -63,7 +68,7 @@ const steps = computed(() => {
     host: hostStep(context.value),
     publish: publishStep(context.value),
     upstream: upstreamStep(upstream.value, !!props.dirty),
-    firewall: firewallStep(context.value, reports.value, reportsLoading.value),
+    firewall: firewallStep(context.value),
     oxidns: oxidnsStep(oxidns.value),
     verify: verifyStep(context.value, groups.value, verifier.value?.verification?.status === 'running'),
   }
@@ -90,10 +95,10 @@ async function readTargets() {
 
 function clearResults() {
   readiness.value = null
-  reports.value = []
-  reportsLoading.value = false
   oxidns.value = []
   upstream.value = null
+  upstreamLinks.value = []
+  upstreamSession++
   verifier.value = null
 }
 
@@ -126,14 +131,14 @@ async function loadTargets() {
   if (current(generation) && !error.value) await inspect()
 }
 
-async function inspect() {
+async function inspect(refreshUpstream = false) {
   if (!available.value || phase.value === 'loading') return
   const generation = ++session
   const id = selectedId.value
   const profileId = props.profileId
   phase.value = 'checking'
   error.value = ''
-  loads.value++
+  if (refreshUpstream) upstreamKey.value++
   try {
     const { data } = await agentApi.ipv6Readiness(id, profileId)
     if (!current(generation, id)) return
@@ -151,30 +156,46 @@ async function inspect() {
   } finally {
     if (current(generation, id)) phase.value = 'idle'
   }
-  if (current(generation, id) && readiness.value && props.mode === 'clients') await inspectRouters(generation, id, readiness.value)
+  if (current(generation, id) && readiness.value && props.mode === 'clients') await readOxiDNS(generation, id)
 }
 
-// Read-only: the router list (OxiDNS links) and each linked RouterOS router's
-// difference report (the same-port forward hint and its command).
-async function inspectRouters(generation: number, id: string, data: MihomoIPv6Readiness) {
-  const linked = data.routers.filter(router => !router.checks.some(check => check.id === 'manual'))
-  reportsLoading.value = true
-  const [list, ...results] = await Promise.allSettled([routerApi.list(props.profileId),
-    ...linked.map(router => routerApi.report(router.id, props.profileId))])
+// The saved router settings only (no router is contacted): which linked
+// routers hand their clients an OxiDNS server.
+async function readOxiDNS(generation: number, id: string) {
+  let routers: Router[] = []
+  try {
+    const { data } = await routerApi.list(props.profileId)
+    routers = Array.isArray(data?.routers) ? data.routers : []
+  } catch {
+    // Without the list the OxiDNS hint is simply not shown.
+  }
   if (!current(generation, id)) return
-  reports.value = linked.map((router, index) => {
-    const result = results[index]
-    if (result.status === 'rejected') return { id: router.id, name: router.name, error: messageOf(result.reason) }
-    const body = result.value.data
-    return body?.success === true && body.report ? { id: router.id, name: router.name, report: body.report }
-      : { id: router.id, name: router.name, error: body?.message || '差异报告格式无效' }
-  })
-  const routers: Router[] = list.status === 'fulfilled' && Array.isArray(list.value.data?.routers) ? list.value.data.routers : []
   oxidns.value = routers.filter(router => router.proxy_gateway_agent_id === id && router.dns_agent_id).flatMap(router => {
     const agent = agents.value.find(item => item.id === router.dns_agent_id && item.service_type === 'oxidns')
     return agent ? [{ router: router.name || router.id, agent: agent.name }] : []
   })
-  reportsLoading.value = false
+}
+
+// The reminder itself stays hidden here: the publish bar and the device check
+// show its lines, so this step gives only its status and the way to act. The
+// waiting routers come from the reminder's own read, reused by the server.
+async function followUpstream(status: UpstreamPendingStatus) {
+  upstream.value = status
+  upstreamLinks.value = []
+  const generation = ++upstreamSession
+  const id = selectedId.value
+  if (status.state !== 'pending' && status.state !== 'unknown') return
+  try {
+    const { data } = await upstreamRouterApi.pending(id)
+    if (generation !== upstreamSession || disposed || id !== selectedId.value || data?.success !== true || !Array.isArray(data.routers)) return
+    upstreamLinks.value = data.routers.filter(router => router.state !== 'synced').slice(0, 3).map(router => ({
+      key: `${router.profile_id}:${router.id}`,
+      label: `「${router.name || router.id}」${router.state === 'pending' ? '查看并发布' : router.state === 'blocked' ? '查看原因' : '查看差异报告'}`,
+      to: upstreamRouterLink(router, router.state !== 'unknown'),
+    }))
+  } catch {
+    // The generic link to 上游路由 stays.
+  }
 }
 
 function selectTarget(value: unknown) {
@@ -189,7 +210,7 @@ function selectTarget(value: unknown) {
 function refresh() {
   if (phase.value !== 'idle') return
   if (!agents.value.length || !selected.value || !online.value) void loadTargets()
-  else void inspect()
+  else void inspect(true)
 }
 
 async function copyCommand(command: string) {
@@ -215,8 +236,9 @@ watch(() => [props.open, props.profileId, props.preferredAgentId] as const, () =
 }, { immediate: true, flush: 'sync' })
 // A save (draft no longer dirty), a publish or a closed device check all change
 // what the saved configuration and devices report.
-watch(() => props.dirty, (dirty, before) => { if (before && !dirty) void inspect() })
-watch(() => props.refreshKey, () => void inspect())
+watch(() => props.dirty, (dirty, before) => { if (before && !dirty) void inspect(true) })
+watch(() => props.refreshKey, () => void inspect(true))
+watch(() => props.recheckKey, () => void inspect())
 onUnmounted(() => { disposed = true; session++ })
 </script>
 
@@ -254,10 +276,17 @@ onUnmounted(() => { disposed = true; session++ })
             <RouterLink v-if="item.id === 'oxidns'" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页打开 OxiDNS 设置</RouterLink>
           </template>
         </AgentStatusRow>
-        <!-- Kept mounted so the reminder can report pending work even while its row is hidden. -->
-        <div v-if="item.id === 'upstream' && selectedId" v-show="!dirty && (upstream?.state === 'pending' || upstream?.state === 'unknown')" class="mb-2 ml-2 min-w-0 border-l border-border pl-4 text-xs" data-ipv6-step-upstream>
-          <UpstreamRouterPending :agent-id="selectedId" :refresh-key="loads" compact @status="upstream = $event" />
-        </div>
+        <template v-if="item.id === 'upstream' && selectedId">
+          <!-- Kept mounted, and hidden, so it reports pending work even while this row is hidden;
+               its own lines appear in the publish bar and the device check, not twice on one screen. -->
+          <div class="hidden" data-ipv6-step-upstream-reminder>
+            <UpstreamRouterPending :agent-id="selectedId" :refresh-key="upstreamKey" compact @status="followUpstream" />
+          </div>
+          <div v-if="!dirty && (upstream?.state === 'pending' || upstream?.state === 'unknown')" class="-mt-1 mb-2 flex min-w-0 flex-wrap gap-x-4 text-xs" data-ipv6-step-upstream>
+            <RouterLink v-for="link in upstreamLinks" :key="link.key" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" :to="link.to">{{ link.label }}</RouterLink>
+            <RouterLink v-if="!upstreamLinks.length" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">前往上级路由查看</RouterLink>
+          </div>
+        </template>
         <div v-if="item.id === 'verify' && readiness && !dirty" v-show="item.tone !== 'success'" class="mb-2 ml-2 min-w-0 border-l border-border pl-4 text-xs" data-ipv6-step-verify>
           <MihomoIPv6Verification :key="`${selectedId}-${readings}`" :open="open" :agent-id="selectedId" :profile-id="profileId"
             :config-revision="readiness.config_revision" :readiness="readiness" :disabled="!available || phase !== 'idle'" @result="verifier = $event" />

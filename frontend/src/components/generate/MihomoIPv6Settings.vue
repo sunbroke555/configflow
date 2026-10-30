@@ -137,7 +137,7 @@ watch(busy, value => emit('busy', value))
       <p v-if="changeNotice" class="mb-0 mt-2 break-words text-xs text-muted-foreground" role="status">{{ changeNotice }}</p>
       <p v-if="error" class="mb-0 mt-2 break-words text-xs text-warning-accent" role="alert">{{ error }}</p>
       <MihomoIPv6Steps v-if="stepsMode" :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" :mode="stepsMode"
-        :dirty="dirty" :disabled="disabled || busy" :refresh-key="(refreshKey || 0) + checksClosed" @check="openChecks" />
+        :dirty="dirty" :disabled="disabled || busy" :refresh-key="refreshKey" :recheck-key="checksClosed" @check="openChecks" />
     </div>
     <DialogContent v-if="checksOpen" class="flex min-h-0 max-w-2xl flex-col gap-0 overflow-hidden p-0 max-sm:p-0" :show-close-button="!busy" :aria-describedby="undefined" data-mihomo-ipv6-dialog
       @escape-key-down="guardDismiss" @interact-outside="guardDismiss" @close-auto-focus="restoreFocus">

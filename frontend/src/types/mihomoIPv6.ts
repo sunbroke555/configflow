@@ -4,6 +4,10 @@ export interface IPv6ReadinessCheck {
   status: 'ok' | 'warning' | 'error' | 'unknown'
   message: string
   details?: string[]
+  /** Router path checks: allow / drop / translate / unknown. */
+  decision?: string
+  /** A read-only command from the backend, e.g. the same-port forward accept rule. */
+  command?: string
 }
 
 export interface IPv6Connectivity {

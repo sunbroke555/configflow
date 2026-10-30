@@ -5,14 +5,16 @@ import { RouterLink } from 'vue-router'
 import { agentApi, profileApi, routerApi } from '@/api'
 import MihomoIPv6Steps from '@/components/generate/MihomoIPv6Steps.vue'
 import MihomoIPv6Verification from '@/components/generate/MihomoIPv6Verification.vue'
-import UpstreamRouterPending from '@/components/generate/UpstreamRouterPendingPlaceholder.vue'
+import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
+import { upstreamRouterApi } from '@/api/upstreamRouterPending'
 import { Select } from '@/components/ui/select'
 import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
-import { firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, stepVisible, upstreamStep, verifyStep, type RouterReportRead } from '@/lib/mihomoIPv6Steps'
+import { firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, stepVisible, upstreamStep, verifyStep } from '@/lib/mihomoIPv6Steps'
 import type { IPv6ReadinessCheck, MihomoIPv6Readiness as Readiness } from '@/types/mihomoIPv6'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
 vi.mock('@/lib/clipboard', () => ({ copyText: vi.fn().mockResolvedValue(undefined) }))
+vi.mock('@/api/upstreamRouterPending', () => ({ upstreamRouterApi: { pending: vi.fn() } }))
 
 const response = (data: any) => ({ data } as any)
 const gateway = { id: 'gw', name: '客厅 Mihomo', service_type: 'mihomo', profile_id: 'bound', status: 'online' }
@@ -25,10 +27,12 @@ const readiness = (overrides: Partial<Readiness> = {}): Readiness => ({
   configuration: { ipv6: true, dns_ipv6: true, fake_ipv6_range: 'fc00::/64', errors: [] },
   host: { core: { ipv6: true, 'dns.ipv6': true } },
   checks: [ok('configuration'), ok('host_address'), ok('host_default_route'), ok('host_forwarding_ra')],
-  routers: [{ id: 'ros', name: '主路由', status: 'ok', can_prepare: false, checks: [ok('fake_ipv6'), { ...ok('fake6_0'), decision: 'allow' } as IPv6ReadinessCheck] }],
+  routers: [{ id: 'ros', name: '主路由', status: 'ok', can_prepare: false, checks: [ok('fake_ipv6'), { ...ok('fake6_0'), decision: 'allow' }] }],
   can_prepare: false, prepare_interface: 'eth0', check_token: 'token',
   connectivity: { status: 'not_checked', message: '尚未检查' }, ...overrides,
 })
+const hinted = () => readiness({ routers: [{ id: 'ros', name: '主路由', status: 'warning', can_prepare: false, checks: [ok('fake_ipv6'),
+  { id: 'forward_hairpin', label: 'IPv6 同口转发', status: 'warning', message: hairpinWarning, command }] }] })
 const context = (overrides = {}) => ({ dirty: false, checking: false, readiness: readiness(), ...overrides })
 const passedVerification = {
   status: 'ok' as const, scope: 'client_path' as const, config_revision: 7,
@@ -70,24 +74,22 @@ describe('IPv6 step derivation', () => {
   it('maps the upstream reminder states', () => {
     expect(upstreamStep(null, false)).toMatchObject({ status: '检查中', tone: 'progress' })
     expect(upstreamStep({ state: 'synced', pending: 0 }, false)).toMatchObject({ status: '已同步', tone: 'success', issues: [] })
-    expect(upstreamStep({ state: 'pending', pending: 2 }, false)).toMatchObject({ status: '2 项待发布', tone: 'neutral' })
+    expect(upstreamStep({ state: 'pending', pending: 2 }, false)).toMatchObject({ status: '2 项待处理', tone: 'neutral' })
     expect(upstreamStep({ state: 'none', pending: 0 }, false)).toMatchObject({ status: '未关联上级路由', tone: 'warning' })
     expect(upstreamStep({ state: 'unknown', pending: 0 }, false).status).toBe('无法确认')
     expect(upstreamStep({ state: 'synced', pending: 0 }, true)).toMatchObject({ status: '保存后核对' })
   })
 
-  it('shows no router work when the existing checks and the difference report pass', () => {
-    const reports: RouterReportRead[] = [{ id: 'ros', name: '主路由', report: { ipv6_fakeip: { enabled: true, status: 'synced', blockers: [], warnings: [], fix_command: '' } } }]
-    expect(firewallStep(context(), reports, false)).toMatchObject({ status: '无需处理', tone: 'success', issues: [] })
-    expect(firewallStep(context(), [], true)).toMatchObject({ status: '检查中' })
-    expect(firewallStep(context({ readiness: readiness({ routers: [] }) }), [], false)).toMatchObject({ status: '未关联上级路由' })
+  it('shows no router work when the device check finds none', () => {
+    expect(firewallStep(context())).toMatchObject({ status: '无需处理', tone: 'success', issues: [] })
+    expect(firewallStep(context({ readiness: readiness({ routers: [] }) }))).toMatchObject({ status: '未关联上级路由' })
   })
 
-  it('explains the same-port forward drop once with the backend command', () => {
-    const plan = { enabled: true, status: 'synced', blockers: [], warnings: [hairpinWarning], fix_command: command }
-    const reports: RouterReportRead[] = [{ id: 'ros', name: '主路由', report: { ipv6_fakeip: plan, ipv6_routes: { ...plan, warnings: ['部分规则集未完整读取，不撤回其 IPv6 路由', hairpinWarning] } } }]
-    const result = firewallStep(context(), reports, false)
-    expect(result).toMatchObject({ status: '需处理', tone: 'warning', issues: [`「主路由」：${hairpinWarning}`] })
+  it('explains the same-port forward drop with the backend command, once per command', () => {
+    const data = hinted()
+    data.routers.push({ ...data.routers[0], id: 'ros2', name: '备用路由' })
+    const result = firewallStep(context({ readiness: data }))
+    expect(result).toMatchObject({ status: '需处理', tone: 'warning', issues: [`「主路由」：${hairpinWarning}`, `「备用路由」：${hairpinWarning}`] })
     expect(result.commands).toEqual([{ label: '在 RouterOS 终端执行（主路由）', command }])
     expect(result.note).toContain('ConfigFlow 不修改防火墙和 NAT')
   })
@@ -99,7 +101,7 @@ describe('IPv6 step derivation', () => {
       // A rule-order guess about the return path is not a definite blocker.
       { id: 'fake6_0_return', label: '返回', status: 'warning', decision: 'drop', message: '' },
     ] as IPv6ReadinessCheck[] }]
-    const result = firewallStep(context({ readiness: readiness({ routers }) }), [], false)
+    const result = firewallStep(context({ readiness: readiness({ routers }) }))
     expect(result.status).toBe('需处理')
     expect(result.issues[0]).toContain('IPv6 NAT 会改写客户端发往 Mihomo 的连接')
     expect(result.issues[0]).toContain('masquerade')
@@ -109,13 +111,10 @@ describe('IPv6 step derivation', () => {
 
   it('keeps unreadable or manual routers unconfirmed rather than passed', () => {
     const routers = [{ id: 'ikuai', name: '爱快', status: 'warning', can_prepare: false, checks: [{ id: 'manual', label: '路由器 IPv6', status: 'unknown' as const, message: '此型号请手工核对 IPv6 路由与 DNS' }] },
-      { id: 'ros', name: '主路由', status: 'ok', can_prepare: false, checks: [] }]
-    const result = firewallStep(context({ readiness: readiness({ routers }) }), [{ id: 'ros', name: '主路由', error: '连接超时' }], false)
+      { id: 'ros', name: '主路由', status: 'warning', can_prepare: false, checks: [{ id: 'forward_hairpin', label: 'IPv6 同口转发', status: 'unknown' as const, message: '未能读取 RouterOS IPv6 防火墙' }] }]
+    const result = firewallStep(context({ readiness: readiness({ routers }) }))
     expect(result).toMatchObject({ status: '无法确认', tone: 'neutral' })
-    expect(result.issues).toEqual(['「爱快」：此型号请手工核对 IPv6 路由与 DNS。', '「主路由」的差异报告读取失败：连接超时'])
-    const blocked = firewallStep(context(), [{ id: 'ros', name: '主路由', report: { ipv6_fakeip: { enabled: true, status: 'conflict', blockers: ['未确认下一跳'], warnings: [], fix_command: '' } } }], false)
-    expect(blocked).toMatchObject({ status: '无法确认' })
-    expect(blocked.issues[0]).toContain('上级路由发布')
+    expect(result.issues).toEqual(['「爱快」：此型号请手工核对 IPv6 路由与 DNS。', '「主路由」：未能读取 RouterOS IPv6 防火墙'])
   })
 
   it('only hints at OxiDNS settings when a linked router uses OxiDNS', () => {
@@ -144,14 +143,17 @@ describe('IPv6 step derivation', () => {
   })
 })
 
+const pendingResponse = (routers: any[]) => ({ success: true, agent_id: 'gw', agent_profile_id: 'bound', checked_at: '', cached: true, routers })
+const waitingRouter = (state: string, extra = {}) => ({ id: 'ros', name: '主路由', type: 'routeros', profile_id: 'bound', profile_name: '默认', state,
+  pending: state === 'pending' ? 2 : 0, items: [], message: state === 'pending' ? '' : '下一跳未确认', ...extra })
 const RowStub = defineComponent({ props: ['label', 'status', 'tone'], setup(props, { slots }) {
   return () => h('section', { 'data-row': props.label, 'data-tone': props.tone }, [h('span', props.label), h('span', { 'data-status': '' }, props.status), slots.notice?.()])
 } })
 const wrappers: VueWrapper[] = []
-async function mount(props = {}) {
+async function mount(props = {}, slots = false) {
   const wrapper = shallowMount(MihomoIPv6Steps, {
     props: { open: true, profileId: 'bound', preferredAgentId: 'gw', mode: 'clients', dirty: false, ...props },
-    global: { stubs: { Button: false, Primitive: false, AgentStatusRow: RowStub } },
+    global: { renderStubDefaultSlot: slots, stubs: { Button: false, Primitive: false, AgentStatusRow: RowStub } },
   })
   wrappers.push(wrapper)
   await flushPromises()
@@ -164,17 +166,17 @@ const shown = (wrapper: VueWrapper, id: string) => (row(wrapper, id).element as 
 beforeEach(() => {
   vi.spyOn(agentApi, 'summaries').mockResolvedValue(response([gateway, dnsAgent]))
   vi.spyOn(profileApi, 'list').mockResolvedValue(response([{ id: 'bound' }, { id: 'default', is_default: true }]))
-  vi.spyOn(agentApi, 'ipv6Readiness').mockResolvedValue(response(readiness()))
+  vi.spyOn(agentApi, 'ipv6Readiness').mockResolvedValue(response(hinted()))
   vi.spyOn(routerApi, 'list').mockResolvedValue(response({ success: true, routers: [{ id: 'ros', name: '主路由', proxy_gateway_agent_id: 'gw', dns_agent_id: 'dns' }] }))
-  vi.spyOn(routerApi, 'report').mockResolvedValue(response({ success: true, report: { ipv6_fakeip: { enabled: true, status: 'synced', blockers: [], warnings: [hairpinWarning], fix_command: command } } }))
+  vi.mocked(upstreamRouterApi.pending).mockReset().mockResolvedValue(response(pendingResponse([])))
 })
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.restoreAllMocks() })
 
 describe('Mihomo IPv6 step list', () => {
-  it('checks the fixed device once and reads the router report only for client IPv6', async () => {
+  it('checks the fixed device once and never reads a router report of its own', async () => {
     const wrapper = await mount()
     expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
-    expect(routerApi.report).toHaveBeenCalledExactlyOnceWith('ros', 'bound')
+    // The firewall step uses the device check; only the saved router list is read for OxiDNS.
     expect(routerApi.list).toHaveBeenCalledExactlyOnceWith('bound')
     expect(wrapper.findAll('[data-ipv6-step]').map(item => item.attributes('data-ipv6-step'))).toEqual(['host', 'publish', 'upstream', 'firewall', 'oxidns', 'verify'])
     expect(status(wrapper, 'host')).toBe('已就绪')
@@ -194,35 +196,85 @@ describe('Mihomo IPv6 step list', () => {
     expect(copyText).toHaveBeenCalledWith(command)
   })
 
-  it('keeps node-only steps short and does not read routers', async () => {
+  it('keeps node-only steps short and does not read the router list', async () => {
     const wrapper = await mount({ mode: 'nodes' })
-    expect(routerApi.report).not.toHaveBeenCalled()
     expect(routerApi.list).not.toHaveBeenCalled()
     expect(wrapper.findAll('[data-ipv6-step]').map(item => item.attributes('data-ipv6-step'))).toEqual(['host', 'publish', 'upstream', 'verify'])
     expect(shown(wrapper, 'upstream')).toBe(false)
     wrapper.getComponent(UpstreamRouterPending).vm.$emit('status', { state: 'pending', pending: 4 })
     await flushPromises()
     expect(shown(wrapper, 'upstream')).toBe(true)
-    expect(status(wrapper, 'upstream')).toBe('4 项待发布')
+    expect(status(wrapper, 'upstream')).toBe('4 项待处理')
   })
 
-  it('passes the device and a refresh key to the upstream reminder and follows its status', async () => {
-    const wrapper = await mount()
+  it('keeps the reminder hidden, follows its status and links to the waiting router', async () => {
+    const wrapper = await mount({}, true)
     const pending = wrapper.getComponent(UpstreamRouterPending)
     expect(pending.props()).toMatchObject({ agentId: 'gw', compact: true })
-    const key = pending.props('refreshKey')
+    // Its own lines belong to the publish bar and the device check, never twice on one screen.
+    expect(wrapper.get('[data-ipv6-step-upstream-reminder]').classes()).toContain('hidden')
     pending.vm.$emit('status', { state: 'synced', pending: 0 })
     await flushPromises()
     expect(status(wrapper, 'upstream')).toBe('已同步')
-    expect(row(wrapper, 'upstream').find('[data-row] p').exists()).toBe(false)
-    await wrapper.setProps({ refreshKey: 1 })
+    expect(wrapper.find('[data-ipv6-step-upstream]').exists()).toBe(false)
+    expect(upstreamRouterApi.pending).not.toHaveBeenCalled()
+    vi.mocked(upstreamRouterApi.pending).mockResolvedValue(response(pendingResponse([waitingRouter('pending'), { ...waitingRouter('synced'), id: 'other' }])))
+    pending.vm.$emit('status', { state: 'pending', pending: 2 })
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
-    expect(pending.props('refreshKey')).not.toBe(key)
+    expect(status(wrapper, 'upstream')).toBe('2 项待处理')
+    // Read without refresh: the reminder's read is reused, no router is contacted again.
+    expect(upstreamRouterApi.pending).toHaveBeenCalledExactlyOnceWith('gw')
+    const link = wrapper.get('[data-ipv6-step-upstream]').getComponent(RouterLink)
+    expect(link.props('to')).toEqual({ path: '/routers', query: { router: 'ros', profile: 'bound', preview: '1' } })
+    expect(link.text()).toBe('「主路由」查看并发布')
+    vi.mocked(upstreamRouterApi.pending).mockRejectedValue(new Error('offline'))
+    pending.vm.$emit('status', { state: 'unknown', pending: 0 })
+    await flushPromises()
+    expect(status(wrapper, 'upstream')).toBe('无法确认')
+    expect(wrapper.get('[data-ipv6-step-upstream]').getComponent(RouterLink).props('to')).toBe('/routers')
     pending.vm.$emit('status', { state: 'none', pending: 0 })
     await flushPromises()
     expect(status(wrapper, 'upstream')).toBe('未关联上级路由')
     expect(row(wrapper, 'upstream').getComponent(RouterLink).props('to')).toBe('/routers')
+  })
+
+  it('refreshes the reminder after a save, a publish or a manual refresh but not after the device check', async () => {
+    const wrapper = await mount()
+    const pending = wrapper.getComponent(UpstreamRouterPending)
+    const key = pending.props('refreshKey')
+    await wrapper.setProps({ recheckKey: 1 })
+    await flushPromises()
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
+    expect(pending.props('refreshKey')).toBe(key)
+    await wrapper.setProps({ refreshKey: 1 })
+    await flushPromises()
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(3)
+    expect(pending.props('refreshKey')).not.toBe(key)
+    const published = pending.props('refreshKey')
+    await wrapper.setProps({ dirty: true })
+    await wrapper.setProps({ dirty: false })
+    await flushPromises()
+    expect(pending.props('refreshKey')).not.toBe(published)
+    const saved = pending.props('refreshKey')
+    await wrapper.get('[aria-label="重新检查步骤"]').trigger('click')
+    await flushPromises()
+    expect(pending.props('refreshKey')).not.toBe(saved)
+  })
+
+  it('works with the real reminder: blocked counts as waiting, the reminder lines stay hidden', async () => {
+    vi.mocked(upstreamRouterApi.pending).mockResolvedValue(response(pendingResponse([waitingRouter('blocked')])))
+    const wrapper = shallowMount(MihomoIPv6Steps, {
+      props: { open: true, profileId: 'bound', preferredAgentId: 'gw', mode: 'clients', dirty: false },
+      global: { renderStubDefaultSlot: true, stubs: { Button: false, Primitive: false, AgentStatusRow: RowStub, UpstreamRouterPending: false } },
+    })
+    wrappers.push(wrapper)
+    await flushPromises()
+    await flushPromises()
+    expect(upstreamRouterApi.pending).toHaveBeenNthCalledWith(1, 'gw', expect.objectContaining({ refresh: false }))
+    expect(status(wrapper, 'upstream')).toBe('1 项待处理')
+    expect(wrapper.get('[data-ipv6-step-upstream-reminder]').text()).toContain('有改动暂时无法发布')
+    expect(wrapper.get('[data-ipv6-step-upstream-reminder]').classes()).toContain('hidden')
+    expect(wrapper.get('[data-ipv6-step-upstream]').getComponent(RouterLink).text()).toBe('「主路由」查看原因')
   })
 
   it('collapses acceptance to one line once the embedded verification passes', async () => {
@@ -302,6 +354,6 @@ describe('Mihomo IPv6 step list', () => {
     const wrapper = await mount()
     expect(wrapper.text()).toContain('无法连接 Agent 进行 IPv6 检查')
     for (const id of ['host', 'publish', 'firewall', 'verify']) expect(status(wrapper, id)).toBe('待检查')
-    expect(routerApi.report).not.toHaveBeenCalled()
+    expect(routerApi.list).not.toHaveBeenCalled()
   })
 })

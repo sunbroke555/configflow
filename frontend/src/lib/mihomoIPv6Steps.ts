@@ -1,6 +1,7 @@
 import type { IPv6ReadinessCheck, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 import type { MihomoIPv6Mode } from './mihomoIPv6'
 import { issueFor, type IPv6SummaryGroup } from './mihomoIPv6Summary'
+import type { UpstreamRouterSummary } from './upstreamRouterPending'
 
 /**
  * The checklist under the IPv6 mode. Every step is derived from data that the
@@ -23,8 +24,8 @@ export interface IPv6Step {
   commands?: Array<{ label: string; command: string }>
 }
 
-export type UpstreamPendingState = 'none' | 'synced' | 'pending' | 'unknown'
-export interface UpstreamPendingStatus { state: UpstreamPendingState; pending: number }
+/** What `UpstreamRouterPending` emits; `pending` also counts changes that cannot be published yet. */
+export type UpstreamPendingStatus = UpstreamRouterSummary
 
 export interface IPv6StepContext {
   /** The draft differs from the saved configuration every check reads. */
@@ -34,13 +35,6 @@ export interface IPv6StepContext {
   checking: boolean
 }
 
-interface RoutePlanReport { enabled?: boolean; status?: string; blockers?: string[]; warnings?: string[]; fix_command?: string }
-export interface RouterReportRead {
-  id: string
-  name: string
-  error?: string
-  report?: { ipv6_fakeip?: RoutePlanReport; ipv6_routes?: RoutePlanReport }
-}
 export interface OxiDNSLink { router: string; agent: string }
 
 export const IPV6_STEP_LABELS: Record<IPv6StepId, string> = {
@@ -94,15 +88,18 @@ export function upstreamStep(status: UpstreamPendingStatus | null, dirty: boolea
     return step('upstream', '未关联上级路由', 'warning', ['没有路由器把代理网关设为这台 Mihomo；客户端的 IPv6 流量需要上级路由转给它。'])
   }
   if (status.state === 'synced') return step('upstream', '已同步', 'success')
-  if (status.state === 'pending') return step('upstream', status.pending > 0 ? `${status.pending} 项待发布` : '待发布', 'neutral')
+  if (status.state === 'pending') return step('upstream', status.pending > 0 ? `${status.pending} 项待处理` : '待处理', 'neutral')
   return step('upstream', '无法确认', 'neutral')
 }
 
-type PolicyCheck = IPv6ReadinessCheck & { decision?: string }
-
-export function firewallStep(context: IPv6StepContext, reports: RouterReportRead[], loadingReports: boolean): IPv6Step {
+/**
+ * Router firewall and NAT for client IPv6, from the device check alone: #444's
+ * client Fake-IP path (NAT, forward drops) and #452's same-port forward hint,
+ * which the check evaluates on the rows it already read from the router.
+ */
+export function firewallStep(context: IPv6StepContext): IPv6Step {
   const readiness = context.readiness
-  // Router reports follow the saved Mihomo configuration, not the draft.
+  // The check reads the saved Mihomo configuration, not the draft.
   if (!readiness || context.dirty) return waiting('firewall', context)
   if (!readiness.routers.length) return step('firewall', '未关联上级路由', 'neutral')
   const issues: string[] = []
@@ -110,48 +107,32 @@ export function firewallStep(context: IPv6StepContext, reports: RouterReportRead
   const commands: Array<{ label: string; command: string }> = []
   for (const router of readiness.routers) {
     const name = `「${router.name}」`
-    const checks = router.checks as PolicyCheck[]
-    const manual = checks.find(check => check.id === 'manual')
+    const manual = router.checks.find(check => check.id === 'manual')
     if (manual) {
       unknowns.push(`${name}：${manual.message}。`)
       continue
     }
-    // #444: the client → Fake-IP flow through the router's own LAN port.
-    const flows = checks.filter(check => /^fake6_\d+$/.test(check.id))
+    const flows = router.checks.filter(check => /^fake6_\d+$/.test(check.id))
     if (flows.some(check => check.decision === 'translate')) {
       issues.push(`${name}的 IPv6 NAT 会改写客户端发往 Mihomo 的连接。请给 masquerade 限定出口接口，不要命中 LAN 进 LAN 出的流量。`)
     }
     if (flows.some(check => check.decision === 'drop')) {
       issues.push(`${name}的 IPv6 防火墙会阻断客户端发往 Mihomo 的连接，请检查 forward 链的放行顺序。`)
     }
-    // #452: the same-port forward hint of the router difference report.
-    const read = reports.find(item => item.id === router.id)
-    if (!read) continue
-    if (read.error) {
-      unknowns.push(`${name}的差异报告读取失败：${read.error}`)
-      continue
-    }
-    for (const plan of [read.report?.ipv6_fakeip, read.report?.ipv6_routes]) {
-      if (!plan) continue
-      const warnings = (plan.warnings || []).filter(text => text.includes('防火墙'))
-      if (plan.fix_command) {
-        if (commands.some(item => item.command === plan.fix_command)) continue
-        issues.push(...warnings.map(text => `${name}：${text}`))
-        commands.push({ label: `在 RouterOS 终端执行（${router.name}）`, command: plan.fix_command })
-      } else {
-        unknowns.push(...warnings.map(text => `${name}：${text}`))
+    const hint = router.checks.find(check => check.id === 'forward_hairpin')
+    if (hint?.command) {
+      issues.push(`${name}：${hint.message}`)
+      if (!commands.some(item => item.command === hint.command)) {
+        commands.push({ label: `在 RouterOS 终端执行（${router.name}）`, command: hint.command })
       }
-    }
-    const fakeIP = read.report?.ipv6_fakeip
-    if (fakeIP?.enabled && fakeIP.blockers?.length && !fakeIP.warnings?.length) {
-      unknowns.push(`${name}的 IPv6 Fake-IP 路由暂时不能发布，处理「上级路由发布」中的问题后才能确认防火墙。`)
+    } else if (hint) {
+      unknowns.push(`${name}：${hint.message}`)
     }
   }
-  if (issues.length || commands.length) {
-    return { ...step('firewall', '需处理', 'warning', unique([...issues, ...unknowns]), 'ConfigFlow 不修改防火墙和 NAT，执行后点击「重新检查」。'), commands }
+  if (issues.length) {
+    return { ...step('firewall', '需处理', 'warning', unique([...issues, ...unknowns]), 'ConfigFlow 不修改防火墙和 NAT，处理后点击刷新按钮重新检查。'), commands }
   }
   if (unknowns.length) return step('firewall', '无法确认', 'neutral', unique(unknowns))
-  if (loadingReports) return step('firewall', '检查中', 'progress')
   return step('firewall', '无需处理', 'success')
 }
 
