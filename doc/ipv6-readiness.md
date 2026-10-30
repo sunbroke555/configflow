@@ -2,6 +2,10 @@
 
 适用于客户端继续以 IPv4 分流为主，同时让 Mihomo 使用 IPv6 节点的环境。客户端 IPv6 Fake-IP 是另一个需要路由配套的环节，检查结果会单独列出。
 
+「Mihomo 使用 IPv6」允许 Mihomo 连接 IPv6 节点或网站，设备本身也要有可用的 IPv6 网络。「DNS 返回 IPv6 地址」决定 Mihomo DNS 是否给手机、电脑返回 IPv6 地址；客户端继续走 IPv4 分流时可以关闭，不影响 Mihomo 使用 IPv6 节点。
+
+如果希望客户端也通过 IPv6 访问，还要准备好对应的 IPv6 路由。搭配 OxiDNS 时，应检查「优先 IPv4」等设置是否压下 IPv6 答案；只打开 Mihomo 的 DNS 开关不会自动修改 OxiDNS 或路由器设置。
+
 ## 使用流程
 
 1. 在生成页的「Mihomo 基础配置」或 Mihomo 面板的设置中，分别设置「Mihomo 使用 IPv6」和「DNS 返回 IPv6 地址」。两个开关直接编辑同一份 YAML；手写配置会同步显示。空配置首次操作开关时使用实际默认模板，保留默认 DNS 等设置。

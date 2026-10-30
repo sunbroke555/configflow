@@ -16,9 +16,9 @@ const busy = ref(false)
 const error = ref('')
 const id = useId()
 const state = computed(() => readMihomoIPv6(content.value, props.defaultConfig))
-const fields: Array<{ key: MihomoIPv6Field; label: string; help: string }> = [
-  { key: 'core', label: 'Mihomo 使用 IPv6', help: optionHelp('需要通过 IPv6 连接代理节点或接收 IPv6 流量。', '修改顶层 ipv6。设备还需有可用的 IPv6 地址和出口；开关不会自动把客户端从 IPv4 分流切换成 IPv6。') },
-  { key: 'dns', label: 'DNS 返回 IPv6 地址', help: optionHelp('需要 Mihomo DNS 为客户端提供 IPv6 地址。', '修改 dns 下的 ipv6，允许返回 AAAA 答案。应同时检查 OxiDNS 策略及 IPv6 路由；此项与系统的 IPv6 转发分别生效。') },
+const fields: Array<{ key: MihomoIPv6Field; label: string; hint: string; help: string }> = [
+  { key: 'core', label: 'Mihomo 使用 IPv6', hint: '让 Mihomo 能连接 IPv6 节点或网站。', help: optionHelp('需要通过 IPv6 连接代理节点或接收 IPv6 流量。', '修改顶层 ipv6。设备还需有可用的 IPv6 地址和出口；开关不会自动把客户端从 IPv4 分流切换成 IPv6。') },
+  { key: 'dns', label: 'DNS 返回 IPv6 地址', hint: '客户端走 IPv4 分流时可关闭。', help: optionHelp('希望 DNS 给手机、电脑返回 IPv6 地址时开启。', '开启还需 IPv6 路由可用；若用 OxiDNS，注意「优先 IPv4」可能压下答案。关闭仍可用 IPv6 节点，需「Mihomo 使用 IPv6」开启且设备网络可用。') },
 ]
 function change(field: MihomoIPv6Field, value: boolean) {
   if (props.disabled || busy.value) return
@@ -45,6 +45,7 @@ watch(busy, value => emit('busy', value))
           <FieldHelp :label="field.label" :text="field.help" />
         </div>
         <p class="m-0 text-xs" :class="state[field.key].source === 'invalid' ? 'text-warning-accent' : 'text-muted-foreground'">{{ state.error ? '请先修正下方配置' : state[field.key].message }}</p>
+        <p class="mb-0 mt-1 text-xs leading-relaxed text-muted-foreground">{{ field.hint }}</p>
       </div>
     </div>
     <p v-if="state.error || error" class="mb-0 mt-2 break-words text-xs text-warning-accent" role="alert">{{ error || state.error }}</p>
