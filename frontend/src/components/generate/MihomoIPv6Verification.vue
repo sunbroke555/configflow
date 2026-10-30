@@ -4,12 +4,15 @@ import { LoaderCircle, RefreshCw } from '@lucide/vue'
 import { agentApi } from '@/api'
 import { Button } from '@/components/ui/button'
 import MihomoIPv6VerificationResult from './MihomoIPv6VerificationResult.vue'
-import type { IPv6Verification, IPv6VerificationResult } from '@/types/mihomoIPv6'
+import MihomoIPv6CheckSummary from './MihomoIPv6CheckSummary.vue'
+import type { IPv6Verification, IPv6VerificationResult, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
-const props = defineProps<{ open: boolean; agentId: string; profileId: string; configRevision?: number; deploymentId?: string; auto?: boolean; disabled?: boolean }>()
+const props = defineProps<{ open: boolean; agentId: string; profileId: string; configRevision?: number; deploymentId?: string; auto?: boolean; disabled?: boolean; readiness?: MihomoIPv6Readiness }>()
 const verification = ref<IPv6Verification | null>(null)
 const pending = ref(false)
 const starting = ref(false)
+// A run started or observed in progress here reads a newer static snapshot.
+const freshVerification = ref(false)
 const message = ref('')
 const error = ref('')
 let generation = 0
@@ -38,6 +41,7 @@ function accept(data: IPv6VerificationResult, session: number, required = false)
       || typeof check.label !== 'string' || typeof check.message !== 'string'
       || !['ok', 'warning', 'error', 'unknown'].includes(check.status))) throw new Error('验收结果格式无效，请重新读取。')
   verification.value = value
+  if (value.status === 'running') freshVerification.value = true
   return value.status === 'running'
 }
 
@@ -71,6 +75,7 @@ async function start() {
   started = Date.now()
   pending.value = true
   starting.value = true
+  freshVerification.value = true
   try {
     const { data } = await agentApi.verifyIPv6(props.agentId, { profile_id: props.profileId,
       expected_config_revision: props.configRevision, ...(props.deploymentId ? { deployment_id: props.deploymentId } : {}) })
@@ -86,6 +91,7 @@ watch(() => [props.open, props.agentId, props.profileId, props.configRevision, p
   verification.value = null
   pending.value = false
   starting.value = false
+  freshVerification.value = false
   error.value = ''
   message.value = ''
   started = Date.now()
@@ -103,8 +109,12 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer) })
     <p v-if="message" class="m-0 break-words text-xs text-warning-accent" role="status">{{ message }}</p>
     <p v-if="error" class="m-0 break-words text-xs text-destructive-accent" role="alert">{{ error }}</p>
     <p v-if="!validRevision" class="m-0 text-xs text-warning-accent">请重新检查设备，取得当前配置版本后再验证。</p>
-    <MihomoIPv6VerificationResult v-if="verification && verification.status !== 'running'" :verification="verification" :compact="auto" />
+    <div v-if="readiness" data-mihomo-ipv6-verification>
+      <MihomoIPv6CheckSummary :readiness="readiness" :prefer-verification-snapshot="freshVerification" :verification="verification && !running && !error ? verification : undefined" />
+    </div>
+    <MihomoIPv6VerificationResult v-else-if="verification && verification.status !== 'running'" :verification="verification" :compact="auto" />
     <div class="flex flex-wrap gap-2">
+      <slot name="actions" />
       <Button v-if="!auto || error" type="button" variant="outline" class="min-h-11" :disabled="disabled || pending || running || !validRevision" @click="start"><RefreshCw class="size-3.5" aria-hidden="true" />验证连接与分流</Button>
       <Button v-if="message || (error && running)" type="button" variant="ghost" class="min-h-11" :disabled="pending" @click="error = ''; message = ''; started = Date.now(); read(generation)">重新读取结果</Button>
     </div>
