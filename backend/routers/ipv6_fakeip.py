@@ -151,7 +151,10 @@ def hairpin(driver, lan, cidr):
     Clients reach Mihomo through the router's own LAN port, but Mihomo answers
     them directly. RouterOS then sees only the SYN; the client's next packets
     are ``invalid`` and a default ``drop invalid`` stalls every new connection
-    (VM151, RouterOS 7.25: 6.7-7.4 s each). Read-only: returns (warning, command).
+    (VM151, RouterOS 7.25: 6.7-7.4 s each). ICMPv6 redirects (sent only for an
+    LLA next hop, about one per second, ignored by forwarding Linux clients)
+    ease but do not remove the stall, so the next hop never silences this.
+    Read-only: returns (warning, command).
     """
     from urllib.parse import quote
     from backend.routers.ipv6_policy import evaluate_chain
