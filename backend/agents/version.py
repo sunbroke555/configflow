@@ -1,10 +1,17 @@
 """Agent 版本管理"""
 
 # Agent 最新版本号
-LATEST_AGENT_VERSION = "1.8.49-go"
+LATEST_AGENT_VERSION = "1.8.50-go"
 
 # 版本更新日志（可选）
 VERSION_CHANGELOG = {
+    "1.8.50-go": {
+        "date": "2026-10-30",
+        "features": [
+            "Mihomo IPv6 检查实际网卡、地址、默认路由、转发与 RA 配合及启动恢复配置，沿用已有设置并补齐缺项",
+            "IPv6 节点端口连接单独验证，区分网络准备、持久化配置与实际连通结果"
+        ]
+    },
     "1.8.49-go": {
         "date": "2026-10-27",
         "features": [

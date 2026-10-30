@@ -14,19 +14,24 @@
       :description="customConfigDescription"
       :back-label="settingsBackLabel"
       :dirty="customConfigDirty"
-      :busy="savingCustomConfig"
+      :busy="savingCustomConfig || ipv6NetworkBusy"
       size="wide"
       save-label="保存草稿"
       @save="saveCustomConfig()"
     >
-      <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig" />
-      <div :inert="savingCustomConfig" class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-4 md:p-5">
+      <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+      <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig || ipv6NetworkBusy" />
+      <MihomoIPv6Settings v-if="currentConfigType === 'mihomo'" v-model="customConfigContent" :open="customConfigDialogVisible"
+        :profile-id="profileId" :preferred-agent-id="agentSettings?.agentId" :default-config="mihomoDefaultConfig"
+        :dirty="customConfigDirty" :disabled="savingCustomConfig" @busy="ipv6NetworkBusy = $event" />
+      <div :inert="savingCustomConfig || ipv6NetworkBusy" class="flex min-h-80 min-w-0 flex-1 flex-col gap-3 p-4 md:p-5">
         <p v-if="settingsContextLabel" class="m-0 shrink-0 break-words text-xs text-muted-foreground">{{ settingsContextLabel }}</p>
         <YamlEditor
           v-model="customConfigContent"
           class="h-full min-h-0"
           :placeholder="getCustomConfigPlaceholder()"
         />
+      </div>
       </div>
       <template v-if="currentConfigType !== 'loon'" #footer="{ disabled }">
         <SettingsPublishBar
@@ -660,6 +665,7 @@ import LinuxGatewaySettings from '@/components/generate/LinuxGatewaySettings.vue
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import SettingsWorkspace from '@/components/generate/SettingsWorkspace.vue'
 import MihomoSyncInterval from '@/components/generate/MihomoSyncInterval.vue'
+import MihomoIPv6Settings from '@/components/generate/MihomoIPv6Settings.vue'
 import { isRefreshInterval } from '@/lib/subscriptionRefresh'
 import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
 import { useProfileStore } from '@/stores/profile'
@@ -1031,6 +1037,8 @@ type ConfigType = 'mihomo' | 'surge' | 'loon' | 'mosdns'
 
 const customConfigDialogVisible = ref(false)
 const customConfigContent = ref('')
+const mihomoDefaultConfig = ref('')
+const ipv6NetworkBusy = ref(false)
 const customConfigSavedContent = ref('')
 const mihomoSyncInterval = ref<number | string>(3600)
 const mihomoSavedSyncInterval = ref(3600)
@@ -1619,6 +1627,7 @@ const showCustomConfigDialog = async (type: ConfigType) => {
     const response = await apiMap[type](profileId)
     if (!pageActive) return
     customConfigContent.value = response.data.config || ''
+    mihomoDefaultConfig.value = response.data.default_config || ''
     customConfigSavedContent.value = customConfigContent.value
     if (type === 'mihomo') mihomoSyncInterval.value = mihomoSavedSyncInterval.value = response.data.provider_update_interval ?? 3600
     customConfigDialogVisible.value = true
@@ -1628,7 +1637,7 @@ const showCustomConfigDialog = async (type: ConfigType) => {
 }
 
 const saveCustomConfig = async (close = true): Promise<PublishGuard | null> => {
-  if (!pageActive || !customConfigDialogVisible.value || savingCustomConfig.value) return null
+  if (!pageActive || !customConfigDialogVisible.value || savingCustomConfig.value || ipv6NetworkBusy.value) return null
   const session = customConfigSession.capture()
   const type = currentConfigType.value
   const content = customConfigContent.value

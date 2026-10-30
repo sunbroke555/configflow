@@ -30,6 +30,54 @@ IP_RULE = {'id': 'chat', 'name': '聊天', 'behavior': 'classical', 'format': 't
            'content': 'DOMAIN-SUFFIX,chat.test\nIP-CIDR,198.51.100.0/24,no-resolve', 'enabled': True}
 DOMAIN_RULES = {'direct': ['builtin:direct'], 'proxy': ['builtin:telegram', 'library:chat', 'builtin:proxy']}
 
+# bbb5fd33 added these two HA-only dependency cases to the shared installer
+# helper. Ordinary installers never request either tool, so compare every other
+# byte with the original fixture. Freeze the exact reviewed addition rather
+# than dropping the whole helper or regenerating its baseline hash.
+_NATIVE_HA_DEPENDENCY_CASES = '''        if [ "$agent_tool" = ha_ip ]; then
+            # BusyBox ip lacks JSON output required by the HA Agent.
+            if ! command -v ip >/dev/null 2>&1 || ! ip -j -4 addr show >/dev/null 2>&1; then
+                AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }iproute2(JSON)"
+                case "$AGENT_PACKAGE_MANAGER" in
+                    dnf|yum) agent_add_package iproute ;;
+                    *) agent_add_package iproute2 ;;
+                esac
+            fi
+            continue
+        fi
+        if [ "$agent_tool" = ha_service ]; then
+            if [ "$INIT_SYSTEM" = openrc ]; then
+                if [ ! -x /etc/init.d/keepalived ]; then
+                    AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }keepalived(OpenRC服务)"
+                    if [ "$AGENT_PACKAGE_MANAGER" = apk ]; then agent_add_package keepalived-openrc; else agent_add_package keepalived; fi
+                fi
+            else
+                agent_keepalived_unit=$(systemctl show keepalived.service --property=LoadState --value 2>/dev/null) || agent_keepalived_unit=""
+                case "$agent_keepalived_unit" in
+                    loaded|masked) ;;
+                    *) AGENT_MISSING_DEPENDENCIES="${AGENT_MISSING_DEPENDENCIES:+${AGENT_MISSING_DEPENDENCIES} }keepalived(systemd服务)"; agent_add_package keepalived ;;
+                esac
+            fi
+            continue
+        fi
+'''
+_NATIVE_HA_PACKAGE_CASE = '                keepalived|jq) agent_add_package "$agent_tool" ;;\n'
+_CORE_INSTALL_PATH = 'PATH="${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}:/usr/local/sbin:/usr/local/bin"\nexport PATH\n'
+
+
+def without_reviewed_installer_deltas(script, *, core_path=False):
+    count = script.count(_NATIVE_HA_DEPENDENCY_CASES)
+    assert count >= 1, 'the reviewed native HA dependency addition changed'
+    assert script.count(_NATIVE_HA_DEPENDENCY_CASES + '        if ! command -v "$agent_tool"') == count
+    assert script.count(_NATIVE_HA_PACKAGE_CASE) == count
+    script = script.replace(_NATIVE_HA_DEPENDENCY_CASES, '').replace(_NATIVE_HA_PACKAGE_CASE, '')
+    if core_path:
+        # 707208f4 makes combined single-service installs find cores placed in
+        # /usr/local/bin, even in minimal root shells. Require the exact location.
+        assert script.count('set -eu\n' + _CORE_INSTALL_PATH + 'for cf_argument do\n') == 1
+        script = script.replace(_CORE_INSTALL_PATH, '', 1)
+    return script
+
 
 def _app(tmp_path):
     repository = ProfileRepository(tmp_path)
@@ -73,7 +121,7 @@ def single_service_script_digests():
             script = generate_go_agent_install_script(
                 'https://config.test', 'single', service, agent_ip='192.0.2.20',
                 binary_download_url='https://config.test/api/agents/download', install_core=install_core)
-            result[f'{service}:{install_core}'] = hashlib.sha256(script.encode()).hexdigest()
+            result[f'{service}:{install_core}'] = hashlib.sha256(without_reviewed_installer_deltas(script, core_path=install_core).encode()).hexdigest()
     return result
 
 

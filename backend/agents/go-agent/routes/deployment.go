@@ -289,10 +289,18 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 		result := map[string]interface{}{"success": true, "deployment_protocols": []int{1}, "return_routing_safety_protocols": []int{1}, "service_type": cfg.ServiceType, "config_path": filepath.Base(cfg.ConfigPath)}
 		result["reload_only_protocols"] = []int{1}
 		result["rule_sync_snapshot_protocols"] = []int{1}
+		result["platform"] = gatewayOS
+		if ipv6VerifySupported(cfg) {
+			result["ipv6_client_probe_protocols"] = []int{1}
+			if cfg.ServiceType == "mihomo" {
+				result["ipv6_verification_protocols"] = []int{1}
+			}
+		}
 		if cfg.ServiceType == "mihomo" {
 			result["mihomo_resources"] = mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath))
 			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
 			result["aio_forwarding_protocols"] = []int{1}
+			result["ipv6_readiness_protocols"] = []int{1}
 		}
 		if cfg.ServiceType == "oxidns" {
 			result["oxidns_ha_protocols"] = []int{oxidnsHAProtocol}

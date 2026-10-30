@@ -8,7 +8,7 @@ import SettingsPublishBar from '@/components/generate/SettingsPublishBar.vue'
 import { ruleLocationDetails } from './fixtures/agent-failure'
 
 vi.mock('@/api', () => ({
-  agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
+  agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn(), verifyIPv6: vi.fn(), getIPv6Verification: vi.fn() },
   profileApi: { list: vi.fn() },
 }))
 vi.mock('@/lib/feedback', () => ({ notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }))
@@ -50,6 +50,10 @@ beforeEach(() => {
   vi.mocked(agentApi.pushConfig).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
   vi.mocked(agentApi.getDeployment).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'uploading' }))
   vi.mocked(agentApi.activateDeployment).mockImplementation(async (_id, deploymentId) => response({ deployment_id: deploymentId, status: 'succeeded' }))
+  vi.mocked(agentApi.verifyIPv6).mockImplementation(async (id, input) => response({ success: true, agent_id: id, profile_id: input.profile_id,
+    verification: { status: 'warning', scope: 'mihomo_runtime', deployment_id: input.deployment_id, config_revision: input.expected_config_revision,
+      checks: [{ id: 'client', label: '客户端全链路', status: 'unknown', message: '尚未配置独立检测客户端。' }] } }))
+  vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(response({ success: true, agent_id: 'one', profile_id: 'office', verification: null }))
 })
 afterEach(() => {
   wrappers.splice(0).forEach(wrapper => wrapper.unmount())
@@ -59,6 +63,55 @@ afterEach(() => {
 })
 
 describe('settings save and publish', () => {
+  it('announces only the exact saved Mihomo deployment after confirmed success', async () => {
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mihomo' })]))
+    const accepted = deferred<any>()
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => accepted.promise)
+    const wrapper = await render({ serviceType: 'mihomo', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mihomo' })) })
+    await publish(wrapper)
+    const id = vi.mocked(agentApi.pushConfig).mock.lastCall![1]
+    expect(wrapper.emitted('published')).toBeUndefined()
+    const completed = { deployment_id: id, profile_id: 'office', service_type: 'mihomo', config_revision: 7, status: 'succeeded' }
+    vi.mocked(agentApi.getDeployment).mockResolvedValue(response(completed))
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.emitted('published')).toEqual([[{ agent_id: 'one', profile_id: 'office', deployment_id: id, config_revision: 7 }]])
+    accepted.resolve(response(completed))
+    await flushPromises()
+    expect(wrapper.emitted('published')).toHaveLength(1)
+  })
+
+  it.each([
+    { status: 'ready' }, { status: 'failed' }, { pending: true }, { not_recorded: true }, { request_pending: true },
+    { manual_rollback: true }, { profile_id: 'home' }, { service_type: 'oxidns' },
+    { config_revision: 8 }, { deployment_id: 'another-deployment' },
+  ])('does not announce an unconfirmed or mismatched Mihomo publication (%j)', async change => {
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mihomo' })]))
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({
+      deployment_id: deploymentId, profile_id: 'office', service_type: 'mihomo', config_revision: 7,
+      status: 'succeeded', ...change,
+    }))
+    const wrapper = await render({ serviceType: 'mihomo', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mihomo' })) })
+    await publish(wrapper)
+    expect(wrapper.emitted('published')).toBeUndefined()
+  })
+
+  it('does not announce inherited successes or results after leaving the editing session', async () => {
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mihomo', latest_deployment: {
+      deployment_id: 'old', profile_id: 'office', service_type: 'mihomo', config_revision: 7, status: 'succeeded',
+    } })]))
+    const pending = deferred<any>()
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(() => pending.promise)
+    const wrapper = await render({ serviceType: 'mihomo', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mihomo' })) })
+    expect(wrapper.emitted('published')).toBeUndefined()
+    await publish(wrapper)
+    const id = vi.mocked(agentApi.pushConfig).mock.lastCall![1]
+    await wrapper.setProps({ open: false })
+    pending.resolve(response({ deployment_id: id, profile_id: 'office', service_type: 'mihomo', config_revision: 7, status: 'succeeded' }))
+    await flushPromises()
+    expect(wrapper.emitted('published')).toBeUndefined()
+  })
+
   it('loads and rechecks publish targets without waiting for full content comparison', async () => {
     vi.mocked(agentApi.getAll).mockReturnValue(new Promise(() => {}))
     const wrapper = await render()

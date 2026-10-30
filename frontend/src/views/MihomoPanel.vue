@@ -78,7 +78,7 @@
         <TabsContent value="logs"><MihomoLogs :key="agentId" :agent-id="agentId" :active="tab === 'logs'" :reload-token="reloadToken" /></TabsContent>
       </Tabs>
     </template>
-    <MihomoSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :context-label="settingsEditor.label"
+    <MihomoSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :preferred-agent-id="settingsEditor.agentId" :context-label="settingsEditor.label"
       @update:open="value => { if (!value) settingsEditor = null }" />
   </div>
 </template>
@@ -133,7 +133,7 @@ const statusLoading = ref(false)
 const statusError = ref('')
 const upgradeRequired = ref(false)
 const reloadToken = ref(0)
-const settingsEditor = ref<{ profileId: string; label: string } | null>(null)
+const settingsEditor = ref<{ profileId: string; agentId: string; label: string } | null>(null)
 const openingSettings = ref(false)
 const coreActionStatus = ref('')
 const settingsError = ref('')
@@ -158,7 +158,7 @@ async function openSettings() {
     const profileId = agent.profile_id || defaultProfile?.id
     const profile = profiles.data.find((item: any) => item.id === profileId)
     if (!profile) throw new Error('找不到此 Agent 绑定的配置空间，请检查设备绑定后重试。')
-    settingsEditor.value = { profileId: profile.id, label: `${profile.name || profile.id} · ${agent.name || id}` }
+    settingsEditor.value = { profileId: profile.id, agentId: id, label: `${profile.name || profile.id} · ${agent.name || id}` }
   } catch (failure) {
     if (!disposed && request === settingsRequest) settingsError.value = panelError(failure, '暂时无法打开设置，请重试。')
   } finally {

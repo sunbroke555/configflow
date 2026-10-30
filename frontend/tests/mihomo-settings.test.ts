@@ -63,7 +63,7 @@ async function panel() {
     PageHeader: { template: '<header><slot name="title-extra" /><slot name="actions" /></header>' },
     Button: false,
     Primitive: false,
-    MihomoSettings: { name: 'MihomoSettings', props: ['open', 'profileId', 'contextLabel'], template: '<div />' }
+    MihomoSettings: { name: 'MihomoSettings', props: ['open', 'profileId', 'contextLabel', 'preferredAgentId'], template: '<div />' }
   } } })
   wrappers.push(wrapper)
   await flushPromises()
@@ -93,7 +93,7 @@ describe('Mihomo settings entry', () => {
     await settingsButton(wrapper).trigger('click')
     await flushPromises()
     expect(wrapper.getComponent({ name: 'MihomoSettings' }).props()).toMatchObject({
-      open: true, profileId: 'default', contextLabel: '默认配置 · Gateway'
+      open: true, profileId: 'default', contextLabel: '默认配置 · Gateway', preferredAgentId: 'gw'
     })
     expect(customConfigApi.saveMihomo).not.toHaveBeenCalled()
   })
