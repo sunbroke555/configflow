@@ -62,13 +62,13 @@ Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备�
 
 **自动规则同步**：手动发布过一次后，远程规则集的 IPv6 网段增减会像 IPv4 一样自动应用，同样批量写入、回读，失败时连同本轮 IPv4 改动一起回滚并暂停同步。首次发布、Mihomo 的 IPv6 下一跳变化、关闭 IPv6、受管路由被手工删除，以及本项被跳过时，自动同步不改 IPv6 路由，只更新 IPv4，并在同步结果中说明需要手动预览发布；不会因此暂停同步。IPv6 Fake-IP 路由不在自动同步的范围内。
 
-**防火墙提示：同口转发被「drop invalid」丢弃。** 设备经 ROS 的同一 LAN 口把连接转给 Mihomo，Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv6 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包，每个新连接卡住约 7 秒（实验网 RouterOS 7.25 实测 6.7–7.4 秒，且没有 ICMPv6 重定向兜底）。差异报告按 forward 链的规则顺序检查这种情况，命中时在本项显示提示和一条可复制命令，例如：
+**防火墙提示：同口转发被「drop invalid」丢弃。** 设备经 ROS 的同一 LAN 口把连接转给 Mihomo，Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv6 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包，每个新连接卡住约 7 秒（实验网 RouterOS 7.25 实测 6.7–7.4 秒，且没有 ICMPv6 重定向兜底）。IPv6 Fake-IP 与本项走同一路径，差异报告按 forward 链的规则顺序检查这种情况，命中时在「IPv6 Fake-IP 分流路由」或本项显示提示和一条可复制命令；两项都受影响时，命令只在「IPv6 Fake-IP 分流路由」中显示一次，本项注明见上方。例如：
 
 ```
 /ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*B
 ```
 
-命令只放行从该 LAN 口进、又从同一口转出的连接，`place-before` 指向现有的 `drop invalid` 规则，同时覆盖 IPv6 Fake-IP 网段。防火墙由你管理，ConfigFlow 不会自动写入；路由照常发布。执行后重新生成差异报告，提示消失即可。
+命令只放行从该 LAN 口进、又从同一口转出的连接，`place-before` 指向现有的 `drop invalid` 规则，同时覆盖 IPv6 Fake-IP 网段和规则集网段。防火墙由你管理，ConfigFlow 不会自动写入；路由照常发布。执行后重新生成差异报告，提示消失即可。
 
 与 IPv4 静态路由相同，路由只看目的地址：如果 Mihomo 自己用 DIRECT 直连这些 IPv6 地址，连接会被主路由送回 Mihomo。规则集应走代理。
 

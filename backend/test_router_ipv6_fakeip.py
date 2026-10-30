@@ -35,6 +35,10 @@ class IPv6Router(RouterOS):
         self.rows[fake6.ROUTES] = []
         self.rows[fake6.ADDRESSES] = [{'.id': '*A', 'address': 'fdda::1/64', 'interface': 'bridge'}]
         self.rows[fake6.IPV4_ADDRESSES] = [{'.id': '*B', 'address': '10.0.0.1/24', 'interface': 'bridge'}]
+        # The read-only same-port firewall hint reads these.
+        self.rows.update({fake6.FILTER: [], fake6.ADDRESS_LISTS: [], '/interface': [{'.id': '*I1', 'name': 'bridge'}],
+                          '/interface/list': [{'.id': '*L1', 'name': 'LAN'}],
+                          '/interface/list/member': [{'.id': '*M1', 'list': 'LAN', 'interface': 'bridge'}]})
         self.inactive_new = False
         self.lose_reply = False
 
@@ -339,3 +343,29 @@ def test_noop_preview_also_fingerprints_the_owned_manifest():
     _, _, second = preview(driver, router)
     assert first['empty'] and second['empty']
     assert first['fingerprint'] != second['fingerprint']
+
+
+def test_drop_invalid_on_the_lan_port_is_reported_for_fake_ip_with_one_shared_fix():
+    from backend.routers import ipv6_routes as routes6
+    from backend.test_router_ipv6_routes import DEFCONF
+    session, driver = device()
+    session.rows[fake6.FILTER] = copy.deepcopy(DEFCONF)
+    part, report, plan = preview(driver)
+    command = ('/ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge '
+               'comment="LAN to Mihomo via router" place-before=*11')
+    assert part['fix_command'] == command and report['ipv6_fakeip']['fix_command'] == command
+    assert any('drop invalid' in warning and 'IPv6 Fake-IP' in warning for warning in part['warnings'])
+    assert part['ops'] and not part['blockers']  # only a hint: the route is still published
+    assert not any(method != 'GET' and '/firewall' in path for method, path, _ in session.writes)
+    # With rule-set routes as well, the preview says it once.
+    state = driver.read_state()
+    state.ipv6_fakeip_plan = part
+    state.ipv6_routes_plan = {**routes6.inspect({'mihomo': {'custom_config': 'ipv6: true\ntun:\n  enable: true\n'}},
+                                                ROUTER, {'ipv6_cidrs': [], 'blocking_warnings': []}, AGENT, HOST, driver),
+                              'warnings': list(part['warnings']), 'fix_command': command}
+    both = build_plan(ROUTER, DESIRED, state, build_report(DESIRED, state), {'status': 'disabled'}, driver)
+    assert sum(warning == part['warnings'][0] for warning in both['warnings']) == 1
+    session.rows[fake6.FILTER].insert(0, {'.id': '*F', 'chain': 'forward', 'action': 'accept',
+                                          'in-interface': 'bridge', 'out-interface': 'bridge'})
+    fixed, _, _ = preview(driver)
+    assert fixed['fix_command'] == '' and not fixed['warnings']

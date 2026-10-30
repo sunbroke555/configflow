@@ -243,6 +243,16 @@
             <p class="m-0 text-[12.5px] leading-relaxed text-muted-foreground">根据已保存的 Mihomo 配置，把对应 IPv6 网段交给 Mihomo；改动随上方「预览发布」一起应用。</p>
             <p v-for="blocker in ipv6FakeIP.blockers || []" :key="blocker" role="alert" class="m-0 text-[12.5px] leading-relaxed text-destructive-accent [overflow-wrap:anywhere]">{{ blocker }}</p>
             <p v-for="warning in ipv6FakeIP.warnings || []" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <div v-if="ipv6FakeIP.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-fakeip-command>
+              <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+                <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyCommand(ipv6FakeIP.fix_command)">
+                  <Copy class="size-3.5" aria-hidden="true" />复制
+                </Button>
+              </div>
+              <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6FakeIP.fix_command }}</pre>
+              <p class="m-0 text-muted-foreground">只放行从这个 LAN 口进、又从同一口转出的连接，放在「drop invalid」之前；执行后重新生成差异报告确认。</p>
+            </div>
             <p v-if="!ipv6FakeIP.items.length" class="m-0 text-[12.5px] text-muted-foreground">{{ !ipv6FakeIP.enabled ? '当前保存的配置未启用 IPv6 Fake-IP。' : '暂无可确认的 IPv6 Fake-IP 路由，请查看上方提示。' }}</p>
           </div>
           <div v-if="ipv6FakeIP.items.length" class="cf-table-wrap">
@@ -275,11 +285,12 @@
             </p>
             <p v-for="reason in ipv6Routes.skip" :key="reason" role="alert" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ reason }}</p>
             <p v-if="ipv6Routes.skip.length" class="m-0 text-[12.5px] text-muted-foreground">其他路由、规则和 DNS 照常发布，只有这一项保留现状。</p>
-            <p v-for="warning in ipv6Routes.warnings" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
-            <div v-if="ipv6Routes.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-routes-command>
+            <p v-for="warning in ipv6RoutesWarnings" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <p v-if="ipv6RoutesFixShared" class="m-0 text-[12.5px] leading-relaxed text-warning-accent" data-router-ipv6-routes-fix-shared>IPv6 防火墙会丢弃同口转发的连接，放行命令见上方「IPv6 Fake-IP 分流路由」，同一条命令覆盖这两项。</p>
+            <div v-else-if="ipv6Routes.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-routes-command>
               <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
                 <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
-                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyIPv6RoutesCommand">
+                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyCommand(ipv6Routes.fix_command)">
                   <Copy class="size-3.5" aria-hidden="true" />复制
                 </Button>
               </div>
@@ -887,6 +898,7 @@ interface IPv6FakeIPReport {
   items: { cidr: string; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
   warnings: string[]
   blockers: string[]
+  fix_command?: string
 }
 
 type IPv6DnsStatus = 'disabled' | 'not_required' | 'synced' | 'pending' | 'unknown' | 'blocked'
@@ -1075,14 +1087,18 @@ const ipv6FakeIP = computed(() => report.value?.ipv6_fakeip as IPv6FakeIPReport 
 const ipv6Routes = computed(() => report.value?.ipv6_routes as IPv6RoutesReport | undefined)
 // A skipped item is left as it is: show it as unconfirmed, never as in sync.
 const ipv6RoutesStatus = computed(() => ipv6Routes.value?.skip.length ? 'unknown' : ipv6Routes.value?.status || 'unknown')
+// One same-port accept covers Fake-IP and rule-set routes: show it once, in the Fake-IP card above.
+const ipv6RoutesFixShared = computed(() => !!ipv6Routes.value?.fix_command && ipv6Routes.value.fix_command === ipv6FakeIP.value?.fix_command)
+const ipv6RoutesWarnings = computed(() => (ipv6Routes.value?.warnings || [])
+  .filter(warning => !ipv6RoutesFixShared.value || !(ipv6FakeIP.value?.warnings || []).includes(warning)))
 const dhcpDns = computed(() => report.value?.dhcp_dns as DhcpDnsReport | undefined)
 const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'disabled'])
 const ipv6Dns = computed(() => report.value?.ipv6_dns as IPv6DnsReport | undefined)
 const ipv6DnsStatus = computed(() => IPV6_DNS_STATUS[ipv6Dns.value?.status || 'unknown'] || IPV6_DNS_STATUS.unknown)
 const ipv6DnsMessage = computed(() => ipv6Dns.value?.message || IPV6_DNS_MESSAGE[ipv6Dns.value?.status || 'unknown'])
-async function copyIPv6RoutesCommand() {
+async function copyCommand(command?: string) {
   try {
-    await copyText(ipv6Routes.value?.fix_command || '')
+    await copyText(command || '')
     notify.success('命令已复制。')
   } catch {
     notify.error('复制失败，请手动选择命令。')

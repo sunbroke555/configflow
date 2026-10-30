@@ -35,8 +35,8 @@ const routes6 = (changes = {}) => ({ enabled: true, status: 'missing', gateway: 
 const wrappers: VueWrapper[] = []
 const response = (data: unknown) => ({ data } as any)
 const button = (wrapper: VueWrapper, text: string) => wrapper.findAll('button').find(item => item.text().trim() === text)!
-async function openReport(section?: ReturnType<typeof routes6>) {
-  vi.mocked(routerApi.report).mockResolvedValue(response({ report: { ...report, ...(section ? { ipv6_routes: section } : {}) }, generated_at: '2026-10-31T10:00:00Z' }))
+async function openReport(section?: ReturnType<typeof routes6>, extra: Record<string, unknown> = {}) {
+  vi.mocked(routerApi.report).mockResolvedValue(response({ report: { ...report, ...(section ? { ipv6_routes: section } : {}), ...extra }, generated_at: '2026-10-31T10:00:00Z' }))
   const wrapper = mount(Routers, { attachTo: document.body })
   wrappers.push(wrapper)
   await flushPromises()
@@ -103,6 +103,21 @@ describe('RouterOS IPv6 rule-set routes', () => {
     expect(block.get('button[aria-label="复制 IPv6 同口转发放行命令"]').exists()).toBe(true)
     expect(wrapper.get('[data-router-ipv6-routes]').get('[role="status"]').text()).toContain('invalid')
     expect(wrapper.get('[data-router-ipv6-routes]').find('table').exists()).toBe(true)
+  })
+
+  it('shows the shared same-port fix once, in the Fake-IP card, when both routes need it', async () => {
+    const command = '/ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*11'
+    const warning = 'IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接'
+    const fakeip = { enabled: true, status: 'missing', blockers: [], warnings: [warning], fix_command: command,
+      items: [{ cidr: 'fc00::/64', gateway: 'fe80::4%bridge', status: 'missing', detail: '发布时添加' }] }
+    const wrapper = await openReport(routes6({ warnings: [warning], fix_command: command }), { ipv6_fakeip: fakeip })
+    expect(wrapper.get('[data-router-ipv6-fakeip-command]').get('pre').text()).toBe(command)
+    expect(wrapper.get('[data-router-ipv6-fakeip]').get('[role="status"]').text()).toContain('invalid')
+    const section = wrapper.get('[data-router-ipv6-routes]')
+    expect(section.find('[data-router-ipv6-routes-command]').exists()).toBe(false)
+    expect(section.find('[role="status"]').exists()).toBe(false)
+    expect(section.get('[data-router-ipv6-routes-fix-shared]').text()).toContain('IPv6 Fake-IP 分流路由')
+    expect(wrapper.findAll('pre').filter(item => item.text() === command)).toHaveLength(1)
   })
 
   it('states the RouterOS scope and that iKuai only routes IPv4', () => {

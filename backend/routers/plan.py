@@ -690,7 +690,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         # only this stage. Its routes stay as they are; nothing is guessed.
         skipped = bool(ipv6_routes['skip'])
         warnings.extend('IPv6 规则集路由本次跳过：' + item for item in ipv6_routes['skip'])
-        warnings.extend(ipv6_routes['warnings'])
+        # The same-port firewall hint is shared with IPv6 Fake-IP: say it once.
+        warnings.extend([item for item in ipv6_routes['warnings'] if item not in warnings])
         position = next(index for index, stage in enumerate(stages) if stage['key'] == 'nat_bypass')
         stages.insert(position, {
             'key': 'ipv6_routes', 'title': STAGE_TITLES['ipv6_routes'], 'manual': manual,
