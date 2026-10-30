@@ -26,6 +26,8 @@ from backend.routers.ipv6_fakeip import _correct, evidence, snapshot, stable
 from backend.routers.ipv6_readiness import _gateway, _lan, _network, _same_gateway, enabled, yes
 
 ROUTES = '/ipv6/route'
+FILTER = '/ipv6/firewall/filter'
+ADDRESS_LISTS = '/ipv6/firewall/address-list'
 PREFIX = 'cf-rule6:'
 VERSION = 1
 BAD_FLAGS = ('blackhole', 'unreachable', 'prohibit', 'invalid', 'dynamic', 'connect')
@@ -113,6 +115,46 @@ def _scoped(live, cidrs, ids):
             'addresses': live.get('addresses', []), 'ipv4_addresses': live.get('ipv4_addresses', [])}
 
 
+def _invalid_drop(row):
+    states = str(row.get('connection-state') or '')
+    return (row.get('chain') == 'forward' and row.get('action') == 'drop' and enabled(row)
+            and 'invalid' in states.split(',') and not states.startswith('!'))
+
+
+def hairpin(driver, lan, cidr):
+    """Warn when the forward chain drops the hairpin's later packets as invalid.
+
+    Clients reach Mihomo through the router's own LAN port, but Mihomo answers
+    them directly. RouterOS then sees only the SYN; the client's next packets
+    are ``invalid`` and a default ``drop invalid`` stalls every new connection
+    (VM151, RouterOS 7.25: 6.7-7.4 s each). Read-only: returns (warning, command).
+    """
+    from urllib.parse import quote
+    from backend.routers.ipv6_policy import evaluate_chain
+    try:
+        rows = driver._list(FILTER)
+        snapshot = {'filter': rows, 'interface_lists': driver._list('/interface/list'),
+                    'interface_members': driver._list('/interface/list/member'),
+                    'interfaces': driver._list('/interface'), 'address_lists': []}
+        names = {str(row[field]).lstrip('!') for row in rows if row.get('chain') == 'forward'
+                 for field in ('src-address-list', 'dst-address-list') if row.get(field)}
+        for name in sorted(names):
+            snapshot['address_lists'].extend(driver._list(ADDRESS_LISTS + '?list=' + quote(name, safe='')))
+    except RouterError:
+        return '未能读取 RouterOS IPv6 防火墙，无法确认转给 Mihomo 的连接是否会被 forward 链丢弃', ''
+    packet = {'in-interface': lan, 'out-interface': lan, 'dst-address': cidr, 'protocol': 'tcp',
+              'connection-state': 'invalid'}
+    if evaluate_chain(snapshot, 6, 'filter', 'forward', packet)['decision'] != 'drop':
+        return '', ''
+    drop = next((row for row in rows if _invalid_drop(row)), None)
+    place = f' place-before={drop[".id"]}' if drop and drop.get('.id') else ''
+    command = (f'/ipv6 firewall filter add chain=forward action=accept in-interface={lan} out-interface={lan} '
+               f'comment="LAN to Mihomo via router"{place}')
+    return ('IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接：设备经 ROS 同一 LAN 口转给 Mihomo 时，回程不经过 ROS，'
+            '后续数据包被判为 invalid，每个新连接会卡住约 7 秒。请在「drop invalid」之前放行同口转发（下方命令），'
+            '它同时覆盖 IPv6 Fake-IP；路由照常发布。'), command
+
+
 def _item(cidr, sources, gateway, status, detail):
     return {'cidr': cidr, 'sources': sources, 'gateway': gateway, 'status': status, 'detail': detail}
 
@@ -123,7 +165,7 @@ def inspect(config, router, desired, agent, host, driver):
     driver.ipv6_routes_manifest = copy.deepcopy(previous)
     wanted = {item['cidr']: list(item.get('sources') or []) for item in desired.get('ipv6_cidrs') or []}
     plan = {'enabled': setting['enabled'], 'status': 'disabled', 'gateway': '', 'items': [], 'skip': [],
-            'warnings': [], 'ops': [], 'check': None, 'evidence': {}, 'auto': ''}
+            'warnings': [], 'ops': [], 'check': None, 'evidence': {}, 'auto': '', 'fix_command': ''}
 
     def skipped(reason, status='unknown'):
         plan['skip'].append(reason)
@@ -158,6 +200,9 @@ def inspect(config, router, desired, agent, host, driver):
             return skipped('未确认 Mihomo 唯一、稳定的同网段 IPv6 下一跳（需唯一的链路本地地址，没有时为唯一的 ULA）；'
                            '请先在 Mihomo 设置中检查设备 IPv6 网络')
     plan['gateway'] = gateway or ''
+    if gateway:
+        warning, plan['fix_command'] = hairpin(driver, lan, next(iter(wanted)))
+        plan['warnings'] += [warning] if warning else []
     adds, deletes, retained, active, borrowed, replaced, yielded = [], [], [], [], [], False, False
     own_ids = {entry['id'] for entry in owned}
     local = [network for network in (_network(row.get('address')) for row in live['addresses'])
@@ -248,7 +293,8 @@ def inspect(config, router, desired, agent, host, driver):
 
 
 def report(plan):
-    return {key: copy.deepcopy(plan[key]) for key in ('enabled', 'status', 'gateway', 'items', 'skip', 'warnings')}
+    return {key: copy.deepcopy(plan[key])
+            for key in ('enabled', 'status', 'gateway', 'items', 'skip', 'warnings', 'fix_command')}
 
 
 def _rebuild(driver, previous, live=None):

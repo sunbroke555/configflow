@@ -33,8 +33,9 @@ ROUTER_ID = 'router_d10a2f2c9442'
 COMMENT = 'cf-rule6:' + ROUTER_ID
 GATEWAY = 'fe80::cf:15ff:fe00:52%ether2'
 V6 = ['2001:b28:f23d::/48', '2001:b28:f23f::/48', '2001:67c:4e8::/48', '2a0a:f280::/32', '2001:b28:f242::/48']
-NEW6 = ['2001:b28:f23d::/48', '2001:b28:f23c::/48', '2001:b28:f240::/48', '2001:b28:f244::/48', '2001:b28:f246::/48']
+NEW6 = ['2001:b28:f23d::/48', '2001:b28:f250::/48', '2001:b28:f240::/48', '2001:b28:f244::/48', '2001:b28:f246::/48']
 PROBE = '2001:b28:f23d::1'
+REDIRECTS = []
 
 
 def content(cidrs):
@@ -82,11 +83,16 @@ def probe_reaches_mihomo():
         result = lab.guest(152, 'timeout', '8', 'tcpdump', '-ni', 'eth1', '-c', '2', 'ip6 dst ' + PROBE,
                            check=False, timeout=30)
         captured['out'] = result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace')
+    # A redirect cached by an earlier probe would bypass the router entirely.
+    lab.guest(153, 'ip', '-6', 'route', 'flush', 'cache', check=False)
     thread = threading.Thread(target=capture)
     thread.start()
     time.sleep(2)
     lab.guest(153, 'ping', '-6', '-c', '3', '-i', '0.5', '-W', '1', PROBE, check=False, timeout=30)
     thread.join()
+    redirected = 'via fe80::cf:15ff:fe00:52' in lab.guest(153, 'ip', '-6', 'route', 'get', PROBE,
+                                                         check=False).stdout.decode(errors='replace')
+    REDIRECTS.append(redirected)
     match = re.search(r'(?:^|\n)(\d+) packets? captured', captured['out'])
     assert match, captured['out'][-400:]
     return int(match[1]) > 0
@@ -159,6 +165,9 @@ def main():
         def edit(config):
             document = yaml.safe_load(config['mihomo'].get('custom_config') or '') or {}
             document['ipv6'] = ipv6
+            # Fake-IPv6 has its own stage and lab; keep it out of these previews.
+            if isinstance(document.get('dns'), dict):
+                document['dns']['ipv6'] = False
             document.setdefault('tun', {})['enable'] = True
             config['mihomo']['custom_config'] = yaml.safe_dump(document, allow_unicode=True, sort_keys=False)
         repository.update_profile_transaction(profile, edit)
@@ -292,7 +301,7 @@ def main():
         others = sorted(key for key in before if before[key] != after[key])
         shutil.rmtree(WORK, ignore_errors=True)
     lab.save('ruleset-routes-results.json', {'success': True, 'cases': results, 'adopted_ipv4_comment': bool(adopted),
-                                             'changed_by_others': others})
+                                             'changed_by_others': others, 'client_redirected_after_probe': REDIRECTS})
     print(json.dumps({'success': True, 'cases': results, 'routes_restored': True, 'changed_by_others': others},
                      ensure_ascii=False), flush=True)
 

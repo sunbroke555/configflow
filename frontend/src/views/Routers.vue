@@ -276,6 +276,16 @@
             <p v-for="reason in ipv6Routes.skip" :key="reason" role="alert" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ reason }}</p>
             <p v-if="ipv6Routes.skip.length" class="m-0 text-[12.5px] text-muted-foreground">其他路由、规则和 DNS 照常发布，只有这一项保留现状。</p>
             <p v-for="warning in ipv6Routes.warnings" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <div v-if="ipv6Routes.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-routes-command>
+              <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+                <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyIPv6RoutesCommand">
+                  <Copy class="size-3.5" aria-hidden="true" />复制
+                </Button>
+              </div>
+              <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6Routes.fix_command }}</pre>
+              <p class="m-0 text-muted-foreground">只放行从这个 LAN 口进、又从同一口转出的连接，放在「drop invalid」之前；执行后重新生成差异报告确认。</p>
+            </div>
             <p v-if="!ipv6Routes.items.length" class="m-0 text-[12.5px] text-muted-foreground">所选规则集没有需要处理的公网 IPv6 网段。</p>
           </div>
           <div v-if="ipv6Routes.items.length && !ipv6Routes.skip.length" class="cf-table-wrap">
@@ -869,6 +879,7 @@ interface IPv6RoutesReport {
   items: { cidr: string; sources: string[]; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
   skip: string[]
   warnings: string[]
+  fix_command?: string
 }
 interface IPv6FakeIPReport {
   enabled: boolean
@@ -1069,6 +1080,14 @@ const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'd
 const ipv6Dns = computed(() => report.value?.ipv6_dns as IPv6DnsReport | undefined)
 const ipv6DnsStatus = computed(() => IPV6_DNS_STATUS[ipv6Dns.value?.status || 'unknown'] || IPV6_DNS_STATUS.unknown)
 const ipv6DnsMessage = computed(() => ipv6Dns.value?.message || IPV6_DNS_MESSAGE[ipv6Dns.value?.status || 'unknown'])
+async function copyIPv6RoutesCommand() {
+  try {
+    await copyText(ipv6Routes.value?.fix_command || '')
+    notify.success('命令已复制。')
+  } catch {
+    notify.error('复制失败，请手动选择命令。')
+  }
+}
 async function copyIPv6DnsCommand() {
   try {
     await copyText(ipv6Dns.value?.fix_command || '')

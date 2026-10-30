@@ -22,6 +22,8 @@ class MemoryROS6(MemoryROS):
         super().__init__()
         self.rows[IPV6] = []
         self.rows['/ipv6/address'] = [{'.id': '*A1', 'address': 'fdda::1/64', 'interface': 'bridge'}]
+        for path in ('/ipv6/firewall/filter', '/ipv6/firewall/address-list', '/interface'):
+            self.rows[path] = []
         self.rows['/ip/address'] = [{'.id': '*B1', 'address': '192.168.0.1/24', 'interface': 'bridge',
                                      'actual-interface': 'bridge'}]
 

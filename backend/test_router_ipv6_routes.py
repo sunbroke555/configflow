@@ -41,6 +41,12 @@ class IPv6ROS(StatefulRouterOS):
             {'.id': '*A2', 'address': 'fdda::1/64', 'interface': 'bridge', 'disabled': 'false'}]
         self.rows['/ip/address'] = [{'.id': '*B1', 'address': '10.0.0.1/24', 'interface': 'bridge',
                                      'actual-interface': 'bridge', 'disabled': 'false'}]
+        self.rows['/ipv6/firewall/filter'] = []
+        self.rows['/ipv6/firewall/address-list'] = []
+        self.rows['/interface'] = [{'.id': '*I1', 'name': 'bridge'}, {'.id': '*I2', 'name': 'ether1'}]
+        self.rows['/interface/list'] = [{'.id': '*L1', 'name': 'LAN'}, {'.id': '*L2', 'name': 'WAN'}]
+        self.rows['/interface/list/member'] = [{'.id': '*M1', 'list': 'LAN', 'interface': 'bridge'},
+                                               {'.id': '*M2', 'list': 'WAN', 'interface': 'ether1'}]
         self.inactive = False
 
     def request(self, method, url, json=None, **kwargs):
@@ -313,3 +319,33 @@ def test_owned_ipv6_routes_guard_router_edits_and_are_persisted_with_the_release
         assert acquired
         repository.save_router_publication('default', router, ipv6_routes=manifest)
     assert repository.get_profile('default')['routers']['items'][0]['ipv6_routes_state'] == manifest
+
+
+DEFCONF = [
+    {'.id': '*10', 'chain': 'forward', 'action': 'accept', 'connection-state': 'established,related,untracked',
+     'comment': 'defconf: accept established,related,untracked'},
+    {'.id': '*11', 'chain': 'forward', 'action': 'drop', 'connection-state': 'invalid', 'comment': 'defconf: drop invalid'},
+    {'.id': '*12', 'chain': 'forward', 'action': 'drop', 'src-address-list': 'bad_ipv6'},
+    {'.id': '*13', 'chain': 'forward', 'action': 'accept', 'protocol': 'icmpv6'},
+    {'.id': '*14', 'chain': 'forward', 'action': 'drop', 'in-interface-list': '!LAN'},
+]
+
+
+def test_drop_invalid_before_a_same_port_accept_is_reported_with_a_copyable_fix():
+    session, driver = device()
+    session.rows['/ipv6/firewall/filter'] = copy.deepcopy(DEFCONF)
+    part = inspect(driver, wanted(*TELEGRAM6))
+    assert any('drop invalid' in warning and '7 秒' in warning for warning in part['warnings'])
+    assert part['fix_command'] == ('/ipv6 firewall filter add chain=forward action=accept in-interface=bridge '
+                                   'out-interface=bridge comment="LAN to Mihomo via router" place-before=*11')
+    assert part['ops'] and not part['skip']  # a hint: the routes are still published
+    assert routes6.report(part)['fix_command'] == part['fix_command']
+    session.rows['/ipv6/firewall/filter'].insert(1, {'.id': '*F', 'chain': 'forward', 'action': 'accept',
+                                                     'in-interface': 'bridge', 'out-interface': 'bridge'})
+    fixed = inspect(driver, wanted(*TELEGRAM6))
+    assert fixed['fix_command'] == '' and not fixed['warnings']
+    session.rows['/ipv6/firewall/filter'] = [dict(DEFCONF[1], disabled='true')]
+    assert inspect(driver, wanted(*TELEGRAM6))['fix_command'] == ''
+    session.read_failures.add('/ipv6/firewall/filter')
+    unread = inspect(driver, wanted(*TELEGRAM6))
+    assert unread['fix_command'] == '' and any('未能读取' in warning for warning in unread['warnings'])

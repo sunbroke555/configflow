@@ -94,6 +94,17 @@ describe('RouterOS IPv6 rule-set routes', () => {
     expect(legacy.find('[data-router-ipv6-routes]').exists()).toBe(false)
   })
 
+  it('shows the same-port forward fix as a copyable RouterOS command next to its reason', async () => {
+    const command = '/ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*11'
+    const wrapper = await openReport(routes6({ warnings: ['IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接'], fix_command: command }))
+    const block = wrapper.get('[data-router-ipv6-routes-command]')
+    expect(block.get('pre').text()).toBe(command)
+    expect(block.text()).toContain('drop invalid')
+    expect(block.get('button[aria-label="复制 IPv6 同口转发放行命令"]').exists()).toBe(true)
+    expect(wrapper.get('[data-router-ipv6-routes]').get('[role="status"]').text()).toContain('invalid')
+    expect(wrapper.get('[data-router-ipv6-routes]').find('table').exists()).toBe(true)
+  })
+
   it('states the RouterOS scope and that iKuai only routes IPv4', () => {
     expect(routerCopy.staticRules.help).toContain('iKuai 只处理 IPv4')
     expect(routerCopy.ipv6Routes).toContain('只跳过本项')

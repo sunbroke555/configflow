@@ -259,3 +259,11 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 ### 共享 all 的专用条目命令
 
 2026-10-31，在 VM151（RouterOS 7.25）上临时建立 bridge `cf-tmp-nd`，以现有 ND 条目参数（另加两个 `dns` 地址及 `ra-preference=high`、`other-configuration=yes`）作为 `all` 来源，经 `/rest/execute` 执行后端生成的 `/ipv6 nd add …` 命令。命令被接受，新条目除 `advertise-dns=no` 与接口外，`dns` 列表、`ra-delay`、`ra-interval`、`ra-lifetime`、`ra-preference`、`hop-limit`、`mtu`、`reachable-time`、`retransmit-interval` 及布尔项全部与来源一致；随后删除临时条目与 bridge，ND 配置与测试前完全相同。未修改原有 ND 条目或生产设备。
+
+## IPv6 规则集路由（2026-10-31）
+
+`scripts/tests/ipv6_ruleset_routes_lab.py` 在测试服务器上运行，用本分支后端和预览数据的私有副本直接驱动 VM151（RouterOS 7.25），不改预览服务、不向 CT152 推送配置，只写注释为 `cf-rule6:<路由器>` 的 `/ipv6/route`，结束时恢复 198.18.0.0/16 的注释并核对路由与开始前一致。
+
+通过的场景：发布前客户端（CT153）发往 Telegram IPv6 的包到不了 Mihomo；差异报告给出 `fe80::…%ether2` 下一跳；规则集变化后旧预览被拒绝且无写入；5 条路由一次批量写入并回读；发布后 CT153 发往 `2001:b28:f23d::1` 的包到达 CT152；重复预览为空；自动同步一次增删各 4 条并回读；注入回读失败时设备上全部回滚、管理记录改指新 ID，手动确认空发布后恢复同步；Agent 离线时只跳过本项；关闭 Mihomo IPv6 后一次撤回 5 条。
+
+观察：ping 探测后 CT153 缓存了直达 Mihomo 的路由（ROS 发出了 ICMPv6 重定向），因此每次探测前清空客户端路由缓存。TCP 场景下同口转发会被出厂 `drop invalid` 丢弃，见上游路由文档中的防火墙提示。
