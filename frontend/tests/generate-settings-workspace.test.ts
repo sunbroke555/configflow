@@ -23,10 +23,10 @@ const guard = (service: string, revision = 12) => ({
 })
 const WorkspaceStub = defineComponent({
   name: 'SettingsWorkspace',
-  props: ['open', 'title', 'description', 'dirty', 'busy', 'size', 'saveLabel', 'backLabel'],
+  props: ['open', 'title', 'description', 'dirty', 'busy', 'saveDisabled', 'size', 'saveLabel', 'backLabel'],
   emits: ['save', 'update:open'],
   setup(props, { slots }) {
-    return () => h('section', [slots.default?.(), slots.footer?.({ disabled: props.busy })])
+    return () => h('section', [slots.default?.(), slots.footer?.({ disabled: !!(props.busy || props.saveDisabled) })])
   }
 })
 
@@ -363,6 +363,20 @@ describe('generation settings workspace integration', () => {
     publish.vm.$emit('save-draft')
     await flushPromises()
     expect(workspace.props('open')).toBe(target === 'mihomo')
+  })
+
+  it('blocks a locally invalid IPv6 range in the generate editor before any save or publish', async () => {
+    const { workspace } = await openSettings('mihomo', '基础配置')
+    const control = workspace.getComponent({ name: 'MihomoIPv6Settings' })
+    control.vm.$emit('validation', { invalid: true, dirty: true })
+    await nextTick()
+    expect(workspace.props()).toMatchObject({ dirty: true, saveDisabled: true, busy: false })
+    expect(workspace.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    expect(await workspace.getComponent(SettingsPublishBar).props('save')()).toBeNull()
+    expect(customConfigApi.saveMihomo).not.toHaveBeenCalled()
+    control.vm.$emit('validation', { invalid: false, dirty: false })
+    await nextTick()
+    expect(workspace.getComponent(SettingsPublishBar).props('disabled')).toBe(false)
   })
 
   it('keeps Loon as draft-only because it has no publish target', async () => {

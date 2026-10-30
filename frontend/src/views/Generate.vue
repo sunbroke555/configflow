@@ -15,6 +15,7 @@
       :back-label="settingsBackLabel"
       :dirty="customConfigDirty"
       :busy="savingCustomConfig || ipv6NetworkBusy"
+      :save-disabled="currentConfigType === 'mihomo' && ipv6Validation.invalid"
       size="wide"
       save-label="保存草稿"
       @save="saveCustomConfig()"
@@ -23,7 +24,7 @@
       <MihomoSyncInterval v-if="currentConfigType === 'mihomo'" v-model="mihomoSyncInterval" :inert="savingCustomConfig || ipv6NetworkBusy" />
       <MihomoIPv6Settings v-if="currentConfigType === 'mihomo'" v-model="customConfigContent" :open="customConfigDialogVisible"
         :profile-id="profileId" :preferred-agent-id="agentSettings?.agentId" :default-config="mihomoDefaultConfig"
-        :dirty="customConfigDirty" :disabled="savingCustomConfig" @busy="ipv6NetworkBusy = $event" />
+        :dirty="customConfigDirty" :disabled="savingCustomConfig" @busy="ipv6NetworkBusy = $event" @validation="ipv6Validation = $event" />
       <div :inert="savingCustomConfig || ipv6NetworkBusy" class="flex min-h-80 min-w-0 flex-1 flex-col gap-3 p-4 md:p-5">
         <p v-if="settingsContextLabel" class="m-0 shrink-0 break-words text-xs text-muted-foreground">{{ settingsContextLabel }}</p>
         <YamlEditor
@@ -1039,11 +1040,12 @@ const customConfigDialogVisible = ref(false)
 const customConfigContent = ref('')
 const mihomoDefaultConfig = ref('')
 const ipv6NetworkBusy = ref(false)
+const ipv6Validation = ref({ invalid: false, dirty: false })
 const customConfigSavedContent = ref('')
 const mihomoSyncInterval = ref<number | string>(3600)
 const mihomoSavedSyncInterval = ref(3600)
 const customConfigDirty = computed(() => customConfigContent.value !== customConfigSavedContent.value
-  || (currentConfigType.value === 'mihomo' && mihomoSyncInterval.value !== mihomoSavedSyncInterval.value))
+  || (currentConfigType.value === 'mihomo' && (mihomoSyncInterval.value !== mihomoSavedSyncInterval.value || ipv6Validation.value.dirty)))
 const savingCustomConfig = ref(false)
 const currentConfigType = ref<ConfigType>('mihomo')
 const customConfigSession = trackEditorSession(customConfigDialogVisible, savingCustomConfig)
@@ -1640,6 +1642,7 @@ const saveCustomConfig = async (close = currentConfigType.value !== 'mihomo'): P
   if (!pageActive || !customConfigDialogVisible.value || savingCustomConfig.value || ipv6NetworkBusy.value) return null
   const session = customConfigSession.capture()
   const type = currentConfigType.value
+  if (type === 'mihomo' && ipv6Validation.value.invalid) return null
   const content = customConfigContent.value
   const interval = mihomoSyncInterval.value
   if (type === 'mihomo' && !isRefreshInterval(interval)) {

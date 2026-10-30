@@ -1,27 +1,58 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue'
+import { computed, onUnmounted, ref, useId, watch } from 'vue'
 import { ScanLine } from '@lucide/vue'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import { optionHelp } from '@/lib/optionCopy'
-import { readMihomoIPv6, setMihomoIPv6WithDetails, type MihomoIPv6Field } from '@/lib/mihomoIPv6'
+import { readMihomoIPv6, setMihomoIPv6WithDetails, readMihomoFakeIPv6Range, setMihomoFakeIPv6Range, type MihomoIPv6Field } from '@/lib/mihomoIPv6'
 import MihomoIPv6Readiness from './MihomoIPv6Readiness.vue'
 
 const content = defineModel<string>({ required: true })
 const props = defineProps<{ open: boolean; profileId: string; preferredAgentId?: string; defaultConfig?: string; disabled?: boolean; dirty?: boolean }>()
-const emit = defineEmits<{ busy: [value: boolean] }>()
+const emit = defineEmits<{ busy: [value: boolean]; validation: [value: { invalid: boolean; dirty: boolean }] }>()
 const checksOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
 const changeNotice = ref('')
 const id = useId()
 const state = computed(() => readMihomoIPv6(content.value, props.defaultConfig))
+const fakeRange = computed(() => readMihomoFakeIPv6Range(content.value, props.defaultConfig))
+const rangeInput = ref('')
+const rangeError = ref('')
+const rangeDirty = ref(false)
+const rangeHelp = optionHelp('用于生成客户端收到的 IPv6 Fake-IP，通常保留默认值即可。', '填写 IPv6 内网网段，例如 fc00::1/64，并避开局域网正在使用的网段。修改后保存，到「上级路由」预览并发布对应路由。关闭 DNS IPv6 会保留此值，重新开启时继续使用。')
+watch(() => [content.value, props.defaultConfig, props.open, props.profileId] as const, () => {
+  rangeInput.value = fakeRange.value.value
+  rangeError.value = fakeRange.value.error
+  rangeDirty.value = false
+}, { immediate: true })
+watch(() => [props.open, fakeRange.value.visible, rangeError.value, rangeDirty.value] as const, () => {
+  emit('validation', { invalid: props.open && fakeRange.value.visible && !!rangeError.value,
+    dirty: props.open && fakeRange.value.visible && rangeDirty.value })
+}, { immediate: true })
+onUnmounted(() => emit('validation', { invalid: false, dirty: false }))
+function changeRange(value: string | number) {
+  if (props.disabled || busy.value || !fakeRange.value.editable) return
+  rangeInput.value = String(value)
+  rangeDirty.value = rangeInput.value !== fakeRange.value.value
+  try {
+    const changed = setMihomoFakeIPv6Range(content.value, rangeInput.value, props.defaultConfig)
+    content.value = changed
+    rangeError.value = ''
+    rangeDirty.value = false
+    changeNotice.value = '网段已更新；保存后到「上级路由」查看差异并发布路由。'
+  } catch (failure) {
+    rangeError.value = failure instanceof Error ? failure.message : '请填写有效的 IPv6 内网网段。'
+    changeNotice.value = ''
+  }
+}
 const applyHint = '开关与 YAML 同步，保存并发布后生效。'
 const fields: Array<{ key: MihomoIPv6Field; label: string; help: string }> = [
   { key: 'core', label: 'Mihomo 使用 IPv6', help: optionHelp('需要 Mihomo 通过 IPv6 连接节点或访问网站时开启。', '设备本身需有可用的 IPv6 网络。客户端仍可使用 IPv4 分流，不必同时开启「DNS 返回 IPv6 地址」。') },
-  { key: 'dns', label: 'DNS 返回 IPv6 地址', help: optionHelp('希望 DNS 给手机、电脑返回 IPv6 地址时开启；客户端只走 IPv4 分流时可关闭。', 'Fake-IP 模式下会补上缺失的 IPv6 Fake-IP 网段，已有网段沿用。保存后到「上级路由」查看差异并发布对应路由；TUN 需已开启。若用 OxiDNS，注意「优先 IPv4」可能压下答案。') },
+  { key: 'dns', label: 'DNS 返回 IPv6 地址', help: optionHelp('希望 DNS 给手机、电脑返回 IPv6 地址时开启；客户端只走 IPv4 分流时可关闭。', 'Fake-IP 模式下开启后可在下方填写 IPv6 Fake-IP 网段，已有网段沿用。保存后到「上级路由」查看差异并发布对应路由；TUN 需已开启。若用 OxiDNS，注意「优先 IPv4」可能压下答案。') },
 ]
 function change(field: MihomoIPv6Field, value: boolean) {
   if (props.disabled || busy.value) return
@@ -61,6 +92,17 @@ watch(busy, value => emit('busy', value))
             <DialogTrigger v-if="field.key === 'core'" as-child>
               <Button type="button" variant="outline" class="min-h-11 shrink-0 border-border-strong text-[13px]" aria-label="检查设备 IPv6" :disabled="disabled || busy"><ScanLine class="size-4" aria-hidden="true" />检查设备</Button>
             </DialogTrigger>
+          </div>
+          <div v-if="field.key === 'dns' && fakeRange.visible" class="min-w-0 max-w-sm space-y-1 pb-2 pt-1" data-ipv6-fakeip-range>
+            <div class="flex min-h-8 items-center gap-1">
+              <label :for="`${id}-fakeip-range`" class="text-[13px] font-medium">IPv6 Fake-IP 网段</label>
+              <FieldHelp label="IPv6 Fake-IP 网段" :text="rangeHelp" />
+            </div>
+            <Input :id="`${id}-fakeip-range`" :model-value="rangeInput" placeholder="fc00::1/64" class="min-h-11 font-mono"
+              :disabled="disabled || busy || !fakeRange.editable" :aria-invalid="!!rangeError" :aria-describedby="`${id}-fakeip-range-message`"
+              autocomplete="off" autocapitalize="off" :spellcheck="false" @update:model-value="changeRange" />
+            <p :id="`${id}-fakeip-range-message`" class="m-0 break-words text-xs leading-relaxed"
+              :class="rangeError ? 'text-destructive-accent' : 'text-muted-foreground'" :role="rangeError ? 'alert' : undefined">{{ rangeError || fakeRange.message }}</p>
           </div>
           <div :id="`${id}-${field.key}-description`" class="min-w-0 text-xs leading-relaxed">
             <p v-if="!state.error && (state[field.key].source !== 'explicit' || !state[field.key].editable)" class="m-0 break-words" :class="state[field.key].source === 'invalid' || !state[field.key].editable ? 'text-warning-accent' : 'text-muted-foreground'">{{ state[field.key].message }}</p>

@@ -28,7 +28,7 @@ const scratch = await mkdtemp('/tmp/configflow-ipv6-ui-')
 await cp(join(frontend, 'src'), join(scratch, 'src'), { recursive: true })
 await symlink(dependencies, join(scratch, 'node_modules'))
 await writeFile(join(scratch, 'index.html'), '<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><div id="app"></div><script type="module" src="/main.ts"></script></body></html>')
-await writeFile(join(scratch, 'main.ts'), `import { createApp } from 'vue'; import './src/styles/theme.css'; import './src/styles/tokens.css'; import Harness from './Harness.vue'; createApp(Harness).mount('#app')`)
+await writeFile(join(scratch, 'main.ts'), `import { createApp } from 'vue'; import { EditorView } from 'codemirror'; import './src/styles/theme.css'; import './src/styles/tokens.css'; import Harness from './Harness.vue'; Object.assign(window, { __readMihomoYaml: () => { const node = document.querySelector('.cm-editor'); return node ? EditorView.findFromDOM(node)?.state.doc.toString() : undefined } }); createApp(Harness).mount('#app')`)
 await writeFile(join(scratch, 'Harness.vue'), `<script setup lang="ts">
 import { ref } from 'vue'
 import MihomoSettings from './src/components/generate/MihomoSettings.vue'
@@ -176,6 +176,7 @@ try {
     await page.getByRole('switch', { name: 'Mihomo 使用 IPv6', exact: true }).waitFor()
     assert.equal(await page.getByRole('switch', { name: 'Mihomo 使用 IPv6', exact: true }).getAttribute('aria-checked'), 'true')
     assert.equal(await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).getAttribute('aria-checked'), 'false')
+    assert.equal(await page.getByLabel('IPv6 Fake-IP 网段', { exact: true }).count(), 0, 'The range editor is hidden while DNS IPv6 is off')
     await page.getByRole('button', { name: '检查设备 IPv6', exact: true }).click()
     await page.getByRole('button', { name: '补齐缺少的配置', exact: true }).waitFor()
     assert.deepEqual(writes, [])
@@ -275,6 +276,62 @@ try {
       report.scenarios.push({ width, theme, state: 'loading-and-failure', retryAvailable: true, overflow })
     }
     if (await page.locator('[data-mihomo-ipv6-dialog]').count()) await page.getByRole('button', { name: '返回设置', exact: true }).click()
+
+    const dnsSwitch = page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true })
+    const coreSwitch = page.getByRole('switch', { name: 'Mihomo 使用 IPv6', exact: true })
+    if (await dnsSwitch.getAttribute('aria-checked') === 'false') await dnsSwitch.click()
+    const rangeInput = page.getByLabel('IPv6 Fake-IP 网段', { exact: true })
+    await rangeInput.waitFor()
+    assert.equal(await rangeInput.inputValue(), 'fc00::1/64')
+    assert.equal(await rangeInput.getAttribute('placeholder'), 'fc00::1/64')
+    const customRange = 'fd12:3456::1/64'
+    await rangeInput.fill(customRange)
+    await page.waitForFunction(value => window.__readMihomoYaml()?.includes('fake-ip-range6: ' + value), customRange)
+    const editedYAML = await page.evaluate(() => window.__readMihomoYaml())
+    assert.ok(editedYAML.includes('# 保留用户注释') && editedYAML.includes('# 单独控制 AAAA 答案'))
+    assert.equal(await page.getByRole('button', { name: '保存草稿', exact: true }).isDisabled(), false)
+    report.scenarios.push({ width, theme, state: 'ipv6-fakeip-range-default-and-custom-draft', range: customRange })
+
+    const rangeError = page.locator('[data-mihomo-ipv6-settings] [role="alert"]')
+    for (const invalid of ['not-ipv6', '2001:db8::1/64', 'fe80::1/64', '']) {
+      await rangeInput.fill(invalid)
+      await rangeError.waitFor()
+      assert.equal(await rangeInput.inputValue(), invalid, 'Invalid input remains visible for correction')
+      assert.equal(await page.evaluate(() => window.__readMihomoYaml()), editedYAML, 'Invalid range never overwrites the valid YAML')
+      assert.equal(await page.getByRole('button', { name: '保存草稿', exact: true }).isDisabled(), true)
+      assert.equal(await page.getByRole('button', { name: '保存并发布', exact: true }).isDisabled(), true)
+    }
+    await rangeInput.fill(customRange)
+    await rangeError.waitFor({ state: 'hidden' })
+    assert.equal(await page.getByRole('button', { name: '保存草稿', exact: true }).isDisabled(), false)
+    report.scenarios.push({ width, theme, state: 'ipv6-fakeip-range-invalid-input-blocks-save', cases: ['malformed', 'public', 'link-local', 'empty'] })
+
+    await dnsSwitch.click()
+    await rangeInput.waitFor({ state: 'hidden' })
+    assert.ok((await page.evaluate(() => window.__readMihomoYaml())).includes('fake-ip-range6: ' + customRange), 'Disabling DNS IPv6 retains the chosen range')
+    await dnsSwitch.click()
+    await rangeInput.waitFor()
+    assert.equal(await rangeInput.inputValue(), customRange, 'Re-enabling DNS IPv6 restores the custom value')
+    await coreSwitch.click()
+    await rangeInput.waitFor({ state: 'hidden' })
+    await coreSwitch.click()
+    await rangeInput.waitFor()
+    assert.equal(await rangeInput.inputValue(), customRange, 'Re-enabling core IPv6 also preserves the custom value')
+    report.scenarios.push({ width, theme, state: 'ipv6-fakeip-range-switches-preserve-custom-value' })
+
+    await page.getByRole('button', { name: '保存草稿', exact: true }).click()
+    await page.waitForFunction(() => !document.querySelector('[data-settings-workspace] [inert]'))
+    assert.ok(yaml.includes('fake-ip-range6: ' + customRange), 'The saved draft contains the custom range')
+    assert.equal(await rangeInput.inputValue(), customRange)
+    assert.equal(await page.locator('[data-settings-workspace]').isVisible(), true)
+    await rangeInput.scrollIntoViewIfNeeded()
+    const rangeMetrics = await page.locator('[data-mihomo-ipv6-settings]').evaluate(element => ({
+      page: document.documentElement.scrollWidth, viewport: innerWidth, width: element.clientWidth, scroll: element.scrollWidth,
+    }))
+    assert.ok(rangeMetrics.page <= rangeMetrics.viewport && rangeMetrics.scroll <= rangeMetrics.width + 1, 'The new field does not cause horizontal overflow')
+    await page.screenshot({ path: join(output, `${width}-${theme}-ipv6-fakeip-range.png`) })
+    report.scenarios.push({ width, theme, state: 'ipv6-fakeip-range-save-stays-open', metrics: rangeMetrics })
+
     await page.getByRole('button', { name: '保存并发布', exact: true }).click()
     const automatic = page.locator('[data-ipv6-verifier][aria-label="发布后验收"]')
     const automaticGroups = automatic.locator('[data-ipv6-check-summary]')

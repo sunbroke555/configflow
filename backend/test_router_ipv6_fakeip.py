@@ -159,6 +159,49 @@ def test_link_local_next_hop_is_scoped_to_unique_ros_lan():
     assert part['check']['spec']['gateway'] == 'fe80::4%bridge'
 
 
+def test_new_managed_route_prefers_link_local_over_available_ula():
+    session, driver = device()
+    host = {'addresses': [*HOST['addresses'], {'address': 'fe80::4'}]}
+    part, _, plan = preview(driver, host=host)
+    assert part['check']['spec']['gateway'] == 'fe80::4%bridge'
+    assert execute(plan, driver, None)['ok']
+    assert session.rows[fake6.ROUTES][0]['gateway'] == 'fe80::4%bridge'
+
+
+@pytest.mark.parametrize('ownership', ['owned', 'borrowed'])
+def test_existing_correct_ula_route_is_preserved_when_link_local_becomes_preferred(ownership):
+    session, driver = device()
+    if ownership == 'owned':
+        router, _ = publish(driver)
+    else:
+        router = ROUTER
+        session.rows[fake6.ROUTES] = [row()]
+    before = copy.deepcopy(session.rows[fake6.ROUTES])
+    session.writes.clear()
+    host = {'addresses': [*HOST['addresses'], {'address': 'fe80::4'}]}
+    part, report, plan = preview(driver, router=router, host=host)
+    assert part['status'] == ('synced' if ownership == 'owned' else 'borrowed')
+    assert part['check']['spec']['gateway'] == 'fdda::4%bridge'
+    assert not part['ops'] and not part['blockers'] and report['in_sync']
+    assert execute(plan, driver, None)['ok']
+    assert session.rows[fake6.ROUTES] == before and not session.writes
+
+def test_new_route_blocks_ambiguous_link_local_even_with_unique_ula():
+    _, driver = device()
+    host = {'addresses': [*HOST['addresses'], {'address': 'fe80::4'}, {'address': 'fe80::5'}]}
+    part, _, plan = preview(driver, host=host)
+    assert part['blockers'] and plan['blockers'] and not part['ops']
+
+
+def test_existing_ula_on_wrong_ros_interface_is_not_preserved():
+    session, driver = device()
+    session.rows[fake6.ROUTES] = [row(**{'immediate-gw': 'fdda::4%other-lan'})]
+    host = {'addresses': [*HOST['addresses'], {'address': 'fe80::4'}]}
+    part, _, plan = preview(driver, host=host)
+    assert part['blockers'] and plan['blockers'] and not part['ops']
+    assert not session.writes
+
+
 def test_lan_overlap_and_missing_tun_are_blockers():
     session, driver = device()
     session.rows[fake6.ADDRESSES].append({'.id': '*C', 'address': 'fc00::1/64', 'interface': 'other'})

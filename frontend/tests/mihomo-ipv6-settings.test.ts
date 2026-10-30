@@ -3,6 +3,7 @@ import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import { parse } from 'yaml'
 import MihomoIPv6Settings from '@/components/generate/MihomoIPv6Settings.vue'
 import MihomoIPv6Readiness from '@/components/generate/MihomoIPv6Readiness.vue'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 
@@ -38,6 +39,51 @@ describe('Mihomo IPv6 settings controls', () => {
     expect(wrapper.get('[role="status"]').text()).toContain('上级路由')
     expect(wrapper.get('[role="status"]').text()).toContain('查看差异并发布路由')
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+  })
+
+  it('shows the custom range only for enabled IPv6 Fake-IP and reflects handwritten YAML', async () => {
+    const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fd12:3456::1/64 # custom\n'
+    const wrapper = mount(source)
+    expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd12:3456::1/64')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    await wrapper.setProps({ modelValue: source.replace('fd12:3456', 'fd56:789a') })
+    expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd56:789a::1/64')
+    await wrapper.setProps({ modelValue: source.replace('  ipv6: true', '  ipv6: false') })
+    expect(wrapper.findComponent(Input).exists()).toBe(false)
+    await wrapper.setProps({ modelValue: source.replace('fake-ip\n', 'redir-host\n') })
+    expect(wrapper.findComponent(Input).exists()).toBe(false)
+  })
+
+  it('retains invalid input without writing YAML and clears validation when corrected', async () => {
+    const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fc00::1/64 # keep\n'
+    const wrapper = mount(source)
+    const input = wrapper.getComponent(Input)
+    input.vm.$emit('update:modelValue', 'fe80::1/64')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
+    expect(input.props('modelValue')).toBe('fe80::1/64')
+    expect(wrapper.get('[role="alert"]').text()).toContain('内网网段')
+    expect(wrapper.emitted('validation')?.at(-1)).toEqual([{ invalid: true, dirty: true }])
+    input.vm.$emit('update:modelValue', 'fd12:3456::1/64')
+    await wrapper.vm.$nextTick()
+    const changed = wrapper.emitted('update:modelValue')?.at(-1)?.[0] as string
+    expect(changed).toContain('fake-ip-range6: fd12:3456::1/64 # keep')
+    expect(wrapper.emitted('validation')?.at(-1)).toEqual([{ invalid: false, dirty: false }])
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    await wrapper.setProps({ modelValue: changed })
+    input.vm.$emit('update:modelValue', '')
+    await wrapper.vm.$nextTick()
+    await wrapper.setProps({ open: false })
+    expect(wrapper.emitted('validation')?.at(-1)).toEqual([{ invalid: false, dirty: false }])
+  })
+
+  it('locks a shared range and explains how to edit its source', () => {
+    const source = 'range: &range fd12::1/64\nipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: *range\n'
+    const wrapper = mount(source)
+    expect(wrapper.getComponent(Input).attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('下方 YAML')
+    wrapper.getComponent(Input).vm.$emit('update:modelValue', 'fd56::1/64')
+    expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
   it('does not write merely because a missing field has a default', () => {

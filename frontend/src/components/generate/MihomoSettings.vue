@@ -17,12 +17,13 @@ const content = ref('')
 const savedContent = ref('')
 const defaultConfig = ref('')
 const networkBusy = ref(false)
+const ipv6Validation = ref({ invalid: false, dirty: false })
 const syncInterval = ref<number | string>(3600)
 const savedSyncInterval = ref(3600)
 const loading = ref(false)
 const saving = ref(false)
 const loadError = ref('')
-const dirty = computed(() => content.value !== savedContent.value || syncInterval.value !== savedSyncInterval.value)
+const dirty = computed(() => content.value !== savedContent.value || syncInterval.value !== savedSyncInterval.value || ipv6Validation.value.dirty)
 let session = 0
 let disposed = false
 const current = (request: number) => !disposed && props.open && session === request
@@ -49,7 +50,7 @@ async function load() {
 }
 
 async function save(close = false): Promise<PublishGuard | null> {
-  if (!props.open || disposed || loading.value || loadError.value || saving.value || networkBusy.value) return null
+  if (!props.open || disposed || loading.value || loadError.value || saving.value || networkBusy.value || ipv6Validation.value.invalid) return null
   const request = session
   const submitted = content.value
   const interval = syncInterval.value
@@ -83,7 +84,7 @@ onUnmounted(() => { disposed = true })
 
 <template>
   <SettingsWorkspace :open="open" title="Mihomo 基础配置" :dirty="dirty" :busy="saving || networkBusy"
-    :save-disabled="loading || Boolean(loadError)" save-label="保存草稿" back-label="返回 Mihomo 面板" size="wide"
+    :save-disabled="loading || Boolean(loadError) || ipv6Validation.invalid" save-label="保存草稿" back-label="返回 Mihomo 面板" size="wide"
     description="设置端口、DNS、TUN 等基础选项。生成时会合并此配置空间的节点、策略组和规则。请使用 YAML 格式；留空并保存可恢复默认基础配置。"
     @update:open="emit('update:open', $event)" @save="save()">
     <p class="m-0 shrink-0 break-words border-b border-border px-4 py-2 text-xs text-muted-foreground sm:px-5">{{ contextLabel }}</p>
@@ -95,7 +96,7 @@ onUnmounted(() => { disposed = true })
     <div v-else :inert="saving" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
       <MihomoSyncInterval v-model="syncInterval" :inert="networkBusy" />
       <MihomoIPv6Settings v-model="content" :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId"
-        :default-config="defaultConfig" :dirty="dirty" :disabled="saving" @busy="networkBusy = $event" />
+        :default-config="defaultConfig" :dirty="dirty" :disabled="saving" @busy="networkBusy = $event" @validation="ipv6Validation = $event" />
       <div :inert="networkBusy" class="min-h-80 flex-1 p-4 md:p-5">
         <YamlEditor v-model="content" class="h-full min-h-0" placeholder="输入 Mihomo 基础 YAML 配置，例如 mixed-port、dns、tun。" />
       </div>

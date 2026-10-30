@@ -154,6 +154,20 @@ async function editor() {
 }
 
 describe('Mihomo settings editor', () => {
+  it('blocks saving an invalid range while keeping the unsaved input protected', async () => {
+    const wrapper = await editor()
+    const control = wrapper.getComponent({ name: 'MihomoIPv6Settings' })
+    control.vm.$emit('validation', { invalid: true, dirty: true })
+    await flushPromises()
+    expect(wrapper.getComponent(SettingsWorkspace).props()).toMatchObject({ dirty: true, saveDisabled: true, busy: false })
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(true)
+    expect(await wrapper.getComponent(SettingsPublishBar).props('save')()).toBeNull()
+    expect(customConfigApi.saveMihomo).not.toHaveBeenCalled()
+    control.vm.$emit('validation', { invalid: false, dirty: false })
+    await flushPromises()
+    expect(wrapper.getComponent(SettingsPublishBar).props('disabled')).toBe(false)
+  })
+
   it('saves a zero sync interval independently of the YAML and marks only that edit dirty', async () => {
     const wrapper = await editor()
     const input = wrapper.getComponent({ name: 'MihomoSyncInterval' })

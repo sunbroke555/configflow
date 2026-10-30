@@ -7,6 +7,7 @@ Mihomo draft and borrowed routes. Never adopt or delete unrelated IPv6 routes.
 import argparse
 import base64
 import json
+import ipaddress
 import subprocess
 import urllib.request
 import uuid
@@ -97,6 +98,10 @@ def main(browser_script=None):
         assert len(rows) == 1 and rows[0]['dst-address'] == RANGES[1]
         assert rows[0]['comment'] == 'cf-fakeip6:' + ROUTER_ID
         results.append('create-managed-route-and-read-back')
+        gateway = rows[0]['gateway']
+        address, separator, interface = gateway.partition('%')
+        assert separator and interface and ipaddress.IPv6Address(address).is_link_local, gateway
+        results.append('new-route-prefers-scoped-link-local-next-hop')
         repeated = plan()
         assert repeated['empty']
         apply(repeated)
@@ -106,6 +111,7 @@ def main(browser_script=None):
         apply(plan())
         rows = [row for row in ros('GET', '/ipv6/route') if row.get('dst-address') in RANGES]
         assert len(rows) == 1 and rows[0]['dst-address'] == RANGES[0]
+        assert rows[0]['gateway'] == gateway, 'Changing the range changed the proven next hop'
         results.append('change-range-replaces-only-owned-route')
         if browser_script:
             subprocess.run(['node', str(browser_script)], check=True)

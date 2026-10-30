@@ -161,7 +161,9 @@ def inspect(config, router, agent, host, driver):
         elif host.get('error'):
             plan['blockers'].append('无法读取 Mihomo 的 IPv6 地址：' + str(host['error']))
         lan = _lan(live, (agent or {}).get('host', ''))
-        gateway = _gateway(host, live, lan)
+        existing = [row for row in live['routes']
+                    if _network(row.get('dst-address')) == ipaddress.IPv6Network(setting['cidr'])]
+        gateway = _gateway(host, live, lan, existing)
         if not gateway:
             plan['blockers'].append('未确认 Mihomo 唯一、稳定的同网段 IPv6 下一跳，请先检查设备 IPv6 网络')
         target = ipaddress.IPv6Network(setting['cidr'])

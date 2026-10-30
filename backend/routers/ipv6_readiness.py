@@ -54,26 +54,38 @@ def _lan(snapshot, host):
     return next(iter(interfaces)) if len(interfaces) == 1 else None
 
 
-def _gateway(host, snapshot, lan):
-    """Prefer a stable on-link ULA; link-local needs the RouterOS interface zone."""
+def _gateway(host, snapshot, lan, existing_routes=()):
+    """Keep a proven existing next hop; prefer scoped LLA for a new route."""
     if not lan:
         return None
     networks = [_network(row.get('address')) for row in snapshot.get('addresses', [])
                 if enabled(row) and row.get('interface') == lan]
     ula, link = set(), set()
+    # Agent addresses belong only to its detected upstream interface (the
+    # interfaces inventory also contains other NICs, so never use it here).
     for row in host.get('addresses', []):
+        if row.get('interface') and row['interface'] != host.get('interface'):
+            continue
         try:
             address = ipaddress.IPv6Address(str(row['address']).split('/')[0])
         except (ValueError, KeyError, TypeError):
             continue
-        if row.get('temporary') or row.get('deprecated') or row.get('tentative') or row.get('dad_failed'):
+        if any(yes(row.get(key)) for key in ('temporary', 'deprecated', 'tentative', 'dad_failed', 'invalid')):
             continue
         if address.is_link_local:
             link.add(str(address) + '%' + lan)
         elif row.get('usable') is True and address in ipaddress.IPv6Network('fc00::/7') and any(
                 network and network.version == 6 and address in network for network in networks):
             ula.add(str(address) + '%' + lan)
-    candidates = ula if ula else link
+    # A valid existing ULA route should not need replacing solely because the
+    # creation preference changed. Its resolved ROS interface must still match.
+    existing = {candidate for candidate in link | ula for row in existing_routes
+                if row.get('routing-table', 'main') == 'main' and enabled(row) and yes(row.get('active'))
+                and not any(yes(row.get(key)) for key in ('blackhole', 'unreachable', 'prohibit', 'invalid', 'dynamic', 'connect'))
+                and _same_gateway(row, candidate)}
+    if len(existing) == 1:
+        return next(iter(existing))
+    candidates = link if link else ula
     return next(iter(candidates)) if len(candidates) == 1 else None
 
 
@@ -123,7 +135,10 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
         errors['dns'] = '无法读取 ROS DNS'
     checks = [check('read_' + key, key, 'unknown', message) for key, message in errors.items()]
     lan = _lan(snapshot, agent.get('host', ''))
-    gateway = _gateway(host, snapshot, lan)
+    fake = configuration.get('fake_ipv6_range') if configuration.get('fake_ipv6_enabled') else None
+    existing = [row for row in snapshot.get('routes', [])
+                if fake and _network(row.get('dst-address')) == _network(fake)]
+    gateway = _gateway(host, snapshot, lan, existing)
     defaults = [r for r in snapshot.get('routes', []) if r.get('dst-address') == '::/0'
                 and r.get('routing-table', 'main') == 'main' and enabled(r) and yes(r.get('active'))
                 and not any(yes(r.get(k)) for k in ('blackhole', 'unreachable', 'prohibit'))]
@@ -148,7 +163,6 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
                         '需要核对 DNS 来源，保留现有设置' if dns_details else '未发现需要自动更改 DNS 的依据', dns_details))
     checks.extend(policy_checks(snapshot, errors, agent, host, configuration, lan, policy_context))
     plan = None
-    fake = configuration.get('fake_ipv6_range') if configuration.get('fake_ipv6_enabled') else None
     if fake:
         target = ipaddress.IPv6Network(fake)
         rows = [r for r in snapshot.get('routes', []) if r.get('routing-table', 'main') == 'main'
@@ -162,7 +176,9 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 接收', 'error', '配置会返回 IPv6 Fake-IP，但尚未开启 TUN，现有路由不能代替接收能力'))
         elif overlaps_lan:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'error', 'IPv6 Fake-IP 与路由器现有地址网段重叠，请先调整网段'))
-        elif rows and gateway and len(rows) == 1 and enabled(rows[0]) and yes(rows[0].get('active')) and _same_gateway(rows[0], gateway) and not conflicts:
+        elif (rows and gateway and len(rows) == 1 and enabled(rows[0]) and yes(rows[0].get('active'))
+              and _same_gateway(rows[0], gateway) and not conflicts
+              and not any(yes(rows[0].get(key)) for key in ('blackhole', 'unreachable', 'prohibit', 'invalid', 'dynamic', 'connect'))):
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', f'{fake} 已指向这台 Mihomo，沿用现有路由'))
         elif rows or conflicts or overlaps_lan:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'error', '已有路由未能确认匹配，或 Fake-IP 与现有网段冲突；请核对，自动配置不会覆盖'))

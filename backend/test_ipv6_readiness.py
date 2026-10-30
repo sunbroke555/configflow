@@ -118,10 +118,10 @@ def test_invalid_ipv6_types_do_not_offer_preparation(raw):
     assert bridge.configuration({'mihomo': {'custom_config': raw}})[0]['errors']
 
 
-def test_read_only_plan_uses_exact_fake_network_and_stable_ula():
+def test_read_only_plan_uses_exact_fake_network_and_prefers_scoped_link_local():
     router = Router()
     result = inspect_router(router)
-    assert result['plan'] == {'dst-address': 'fc00::/64', 'gateway': 'fdda::3%lan4',
+    assert result['plan'] == {'dst-address': 'fc00::/64', 'gateway': 'fe80::3%lan4',
                               'routing-table': 'main', 'disabled': 'false', 'distance': '1'}
     assert router.writes == []
 
@@ -132,6 +132,34 @@ def test_link_local_next_hop_uses_router_interface_not_linux_interface():
     assert inspect_router(Router(), host)['plan']['gateway'] == 'fe80::3%lan4'
     host['addresses'][0]['dad_failed'] = True
     assert inspect_router(Router(), host)['plan'] is None
+
+
+def test_new_route_falls_back_to_unique_on_link_ula_without_link_local():
+    host = host_status()
+    host['addresses'] = [host['addresses'][0], {'address': '2001:db8::3', 'usable': True}]
+    assert inspect_router(Router(), host)['plan']['gateway'] == 'fdda::3%lan4'
+    host['addresses'] = [{'address': '2001:db8::3', 'usable': True}]
+    assert inspect_router(Router(), host)['plan'] is None
+
+
+@pytest.mark.parametrize('flag', ['temporary', 'deprecated', 'tentative', 'dad_failed', 'invalid'])
+def test_unready_link_local_is_excluded_before_ula_fallback(flag):
+    host = host_status()
+    host['addresses'][1][flag] = True
+    assert inspect_router(Router(), host)['plan']['gateway'] == 'fdda::3%lan4'
+
+
+def test_multiple_link_local_candidates_block_new_route_instead_of_falling_back():
+    host = host_status()
+    host['addresses'].append({'address': 'fe80::4', 'usable': False})
+    assert inspect_router(Router(), host)['plan'] is None
+
+
+def test_link_local_selection_ignores_other_interface_inventory():
+    host = host_status()
+    host['interfaces'] = [{'name': 'eth1', 'addresses': [{'address': 'fe80::99'}]}]
+    host['addresses'].append({'address': 'fe80::98', 'interface': 'eth1'})
+    assert inspect_router(Router(), host)['plan']['gateway'] == 'fe80::3%lan4'
 
 
 def test_existing_manual_route_is_reused_without_adopting_or_rewriting():
