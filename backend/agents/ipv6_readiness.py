@@ -82,6 +82,8 @@ def _agent(manager, agent_id, profile_id):
         raise MonitorError('PROFILE_CHANGED', 409, '设备绑定的配置空间已变化，请重新打开设置')
     if agent.get('service_type') != 'mihomo':
         raise MonitorError('WRONG_SERVICE', 400, 'IPv6 检查仅适用于 Mihomo Agent')
+    if agent.get('enabled') is False:
+        raise MonitorError('AGENT_DISABLED', 409, '这台设备已被禁用，请启用后重新检查')
     return agent
 
 

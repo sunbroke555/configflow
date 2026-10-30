@@ -504,6 +504,12 @@ export const agentApi = {
     api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/agents/gateway-forwarding', { timeout: 60000 }),
   persistGatewayForwarding: (agentId: string) =>
     api.post<{ success: boolean; message?: string; gateway: GatewayForwardingEntry }>('/agents/gateway-forwarding', { agent_id: agentId }, { timeout: 90000 }),
+  ipv6Readiness: (id: string, profileId: string) =>
+    api.get<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness`, { params: { profile_id: profileId }, ...profileOptions(profileId), timeout: 60000 }),
+  prepareIPv6: (id: string, data: import('@/types/mihomoIPv6').IPv6PrepareInput) =>
+    api.post<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/prepare`, data, { ...profileOptions(data.profile_id), timeout: 90000 }),
+  probeIPv6: (id: string, profileId: string) =>
+    api.post<import('@/types/mihomoIPv6').IPv6ProbeResult>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/probe`, { profile_id: profileId }, { ...profileOptions(profileId), timeout: 60000 }),
   delete: (id: string) => api.delete(`/agents/${id}`),
   restart: (id: string) => api.post(`/agents/${id}/restart`),
   getStatus: (id: string) => api.get(`/agents/${id}/status`),

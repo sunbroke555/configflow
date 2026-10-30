@@ -220,15 +220,26 @@ def test_api_requires_auth_profile_and_binding(environment):
     assert client.post(path + '/probe', headers=headers, json={'profile_id': 'other'}).status_code == 400
 
 
+def test_disabled_agent_is_rejected_before_network_calls(environment):
+    client, manager, agent, headers, path, router, calls, _ = environment
+    manager.update_agent(agent['id'], {'enabled': False})
+    response = client.get(path, headers=headers)
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'AGENT_DISABLED'
+    assert not calls and not router.writes
+
+
 @pytest.mark.parametrize('core, differing', [
     ({'ipv6': True, 'dns.ipv6': True, 'dns.fake-ip-range6': 'fc00::abcd/64'}, False),
     ({'ipv6': False, 'dns.ipv6': True, 'dns.fake-ip-range6': 'fc00::1/64'}, True),
     ({'ipv6': True, 'dns.ipv6': False, 'dns.fake-ip-range6': 'fc00::1/64'}, True),
     ({'ipv6': True, 'dns.ipv6': True, 'dns.fake-ip-range6': 'fc01::/64'}, True),
+    ({'tun.enable': False}, True),
 ])
 def test_readiness_compares_deployed_flags_and_normalized_fake_network(environment, monkeypatch, core, differing):
     client, _, _, headers, path, router, _, _ = environment
-    monkeypatch.setattr(bridge, '_request', lambda *_: {**host_status(), 'core': core})
+    deployed = {'ipv6': True, 'dns.ipv6': True, 'tun.enable': True, 'dns.fake-ip-range6': 'fc00::1/64', **core}
+    monkeypatch.setattr(bridge, '_request', lambda *_: {**host_status(), 'core': deployed})
     response = client.get(path, headers=headers)
     assert response.status_code == 200, response.get_json()
     checks = response.get_json()['checks']

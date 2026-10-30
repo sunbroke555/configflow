@@ -8,12 +8,15 @@ import { Button } from '@/components/ui/button'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
 import MihomoSyncInterval from './MihomoSyncInterval.vue'
+import MihomoIPv6Settings from './MihomoIPv6Settings.vue'
 import { isRefreshInterval } from '@/lib/subscriptionRefresh'
 
-const props = defineProps<{ open: boolean; profileId: string; contextLabel: string }>()
+const props = defineProps<{ open: boolean; profileId: string; contextLabel: string; preferredAgentId?: string }>()
 const emit = defineEmits<{ 'update:open': [value: boolean] }>()
 const content = ref('')
 const savedContent = ref('')
+const defaultConfig = ref('')
+const networkBusy = ref(false)
 const syncInterval = ref<number | string>(3600)
 const savedSyncInterval = ref(3600)
 const loading = ref(false)
@@ -30,10 +33,12 @@ async function load() {
   saving.value = false
   loadError.value = ''
   content.value = savedContent.value = ''
+  defaultConfig.value = ''
   try {
     const response = await customConfigApi.getMihomo(props.profileId)
     if (current(request)) {
       content.value = savedContent.value = response.data.config || ''
+      defaultConfig.value = response.data.default_config || ''
       syncInterval.value = savedSyncInterval.value = response.data.provider_update_interval ?? 3600
     }
   } catch (failure: any) {
@@ -44,7 +49,7 @@ async function load() {
 }
 
 async function save(close = true): Promise<PublishGuard | null> {
-  if (!props.open || disposed || loading.value || loadError.value || saving.value) return null
+  if (!props.open || disposed || loading.value || loadError.value || saving.value || networkBusy.value) return null
   const request = session
   const submitted = content.value
   const interval = syncInterval.value
@@ -77,7 +82,7 @@ onUnmounted(() => { disposed = true })
 </script>
 
 <template>
-  <SettingsWorkspace :open="open" title="Mihomo 基础配置" :dirty="dirty" :busy="saving"
+  <SettingsWorkspace :open="open" title="Mihomo 基础配置" :dirty="dirty" :busy="saving || networkBusy"
     :save-disabled="loading || Boolean(loadError)" save-label="保存草稿" back-label="返回 Mihomo 面板" size="wide"
     description="设置端口、DNS、TUN 等基础选项。生成时会合并此配置空间的节点、策略组和规则。请使用 YAML 格式；留空并保存可恢复默认基础配置。"
     @update:open="emit('update:open', $event)" @save="save()">
@@ -87,14 +92,16 @@ onUnmounted(() => { disposed = true })
       <p class="mb-3 break-words">{{ loadError }}</p>
       <Button variant="outline" class="min-h-11" @click="load">重新读取</Button>
     </div>
-    <div v-else :inert="saving" class="flex min-h-0 min-w-0 flex-1 flex-col">
-      <MihomoSyncInterval v-model="syncInterval" />
-      <div class="min-h-0 flex-1 p-4 md:p-5">
+    <div v-else :inert="saving" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto">
+      <MihomoSyncInterval v-model="syncInterval" :inert="networkBusy" />
+      <MihomoIPv6Settings v-model="content" :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId"
+        :default-config="defaultConfig" :dirty="dirty" :disabled="saving" @busy="networkBusy = $event" />
+      <div :inert="networkBusy" class="min-h-80 flex-1 p-4 md:p-5">
         <YamlEditor v-model="content" class="h-full min-h-0" placeholder="输入 Mihomo 基础 YAML 配置，例如 mixed-port、dns、tun。" />
       </div>
     </div>
     <template #footer="{ disabled }">
-      <SettingsPublishBar :open="open" :profile-id="profileId" service-type="mihomo" :disabled="disabled"
+      <SettingsPublishBar :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" service-type="mihomo" :disabled="disabled"
         :save="() => save(false)" @save-draft="save()" />
     </template>
   </SettingsWorkspace>
