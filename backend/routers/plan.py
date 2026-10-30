@@ -778,8 +778,14 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         # Only with DNS HA: the VIP alone does not show which pair answers it.
         dns_evidence['ha'] = desired['dns_ha']
     if router.get('type') == 'routeros' and not manage_return:
-        from backend.routers.ros_return_advisory import warnings_for
-        warnings.extend(warnings_for(desired, state, driver))
+        hint = (report.get('routes') or {}).get('forward_hint')
+        if hint and hint['status'] == 'drop':
+            # The same-port hint proved the drop and carries the fix: say it once.
+            warnings.append(hint['warning'])
+        else:
+            from backend.routers.ros_return_advisory import warnings_for
+            warnings.extend(warnings_for(desired, state, driver))
+            warnings.extend([hint['warning']] if hint else [])
     return {'stages': stages, 'checks': checks, 'blockers': blockers, 'warnings': warnings, 'script': script,
             'fingerprint': fingerprint(stages, evidence, dns_evidence,
                                        return_routing['safety'] if manage_return else None),

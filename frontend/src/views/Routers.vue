@@ -234,6 +234,19 @@
             </tbody>
           </table>
         </div>
+        <div v-if="ipv4ForwardHint" class="flex min-w-0 flex-col gap-2 border-t border-border px-5 py-4 max-md:px-4 max-sm:px-3" data-router-ipv4-forward-hint>
+          <p role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ ipv4ForwardHint.warning }}</p>
+          <div v-if="ipv4ForwardHint.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv4-forward-command>
+            <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+              <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+              <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv4 同口转发放行命令" @click="copyCommand(ipv4ForwardHint.fix_command)">
+                <Copy class="size-3.5" aria-hidden="true" />复制
+              </Button>
+            </div>
+            <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv4ForwardHint.fix_command }}</pre>
+            <p class="m-0 text-muted-foreground">只放行从这个 LAN 口进、又从同一口转出的连接，放在实际丢弃它们的规则之前；执行后重新生成差异报告确认。</p>
+          </div>
+        </div>
         <div v-if="ipv6FakeIP" class="min-w-0 border-t border-border" data-router-ipv6-fakeip>
           <div class="flex min-w-0 flex-col gap-2 px-5 py-4 max-md:px-4 max-sm:px-3">
             <div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -1083,6 +1096,8 @@ const busyId = ref('')
 const busyAction = ref<'probe' | 'report' | ''>('')
 const report = ref<any>(null)
 const reportSummary = computed(() => (report.value?.summary || {}) as ReportSummary)
+// RouterOS only: the forward chain drops same-port IPv4 traffic to Mihomo (or could not be read).
+const ipv4ForwardHint = computed(() => report.value?.routes?.forward_hint as { status: string; warning: string; fix_command: string } | undefined)
 const ipv6FakeIP = computed(() => report.value?.ipv6_fakeip as IPv6FakeIPReport | undefined)
 const ipv6Routes = computed(() => report.value?.ipv6_routes as IPv6RoutesReport | undefined)
 // A skipped item is left as it is: show it as unconfirmed, never as in sync.

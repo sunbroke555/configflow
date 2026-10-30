@@ -34,6 +34,24 @@ fake-ip 是 OxiDNS/Mihomo 用于分流的临时地址。已经通过这种方式
 
 静态规则集和策略规则集不能同时选同一项，移到一组会从另一组移除。取消勾选后必须**保存、预览并确认发布**，才会清理对应受管规则；单纯关掉窗口不会修改路由器。
 
+### IPv4 同口转发的防火墙提示（RouterOS）
+
+主路由把 fake-ip 网段和规则集 IPv4 网段交给同一 LAN 上的 Mihomo 时，设备的连接先到 ROS，再从同一个 LAN 口转给 Mihomo；Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv4 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包：新连接偶尔卡几秒（实验网 RouterOS 7.25 实测每次约 6.6 秒，有时 13 秒），长连接也会卡一次。
+
+ROS 会给设备发 ICMP 重定向，让设备改为直接连 Mihomo，但每个设备只发几个、随后暂停约 20 秒，同时打开多个新地址时大部分仍会卡；开启了转发的 Linux 设备还会忽略重定向。关闭 `send-redirects`、FastTrack 都不能解决。所以只要 forward 链会丢弃「从 LAN 口进、又从同一口出、状态为 invalid」的包，差异报告就在「代理路由」表格下方提示，并给出一条可复制的命令，例如：
+
+```
+/ip firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*7
+```
+
+执行后，同口转发的连接恢复到毫秒级。说明：
+
+- 只检查 RouterOS，且只在这台路由器有（或本次将发布）指向 Mihomo 的 IPv4 路由时检查；开启「自动配置回流」时回包经过 ROS，不会出现这个问题，也不检查。
+- `place-before` 指向 forward 链里**实际先处理这些包**的那条规则：按规则顺序模拟一个这样的包，跳过不可能匹配的规则，取第一条会处理它的规则。出厂防火墙就是 `drop invalid`；你改过注释、或在前面加了自己的丢弃规则或跳转，命令也会放在它前面。
+- 读不到防火墙或确定不了 Mihomo 所在的 LAN 口时，显示「未能确认」，不当作没有问题。
+- 只提示，ConfigFlow 不修改防火墙；路由照常发布，自动同步规则也不受影响。执行命令后重新生成差异报告，提示消失即可。
+- IPv4 与 IPv6 是两套防火墙，IPv6 的提示和命令见下文，两条都要执行。
+
 ### IPv6 规则集路由（RouterOS）
 
 Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备有 IPv6 后会直接用这些 IPv6 地址连接，如果主路由只把 IPv4 网段交给 Mihomo，这些连接会从 WAN 直连并超时。
@@ -68,7 +86,7 @@ Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备�
 /ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*B
 ```
 
-命令只放行从该 LAN 口进、又从同一口转出的连接，`place-before` 指向现有的 `drop invalid` 规则，同时覆盖 IPv6 Fake-IP 网段和规则集网段。防火墙由你管理，ConfigFlow 不会自动写入；路由照常发布。执行后重新生成差异报告，提示消失即可。
+命令只放行从该 LAN 口进、又从同一口转出的连接，`place-before` 指向 forward 链里实际先处理这些包的规则（出厂即 `drop invalid`，规则定位方式与 IPv4 相同），同时覆盖 IPv6 Fake-IP 网段和规则集网段。防火墙由你管理，ConfigFlow 不会自动写入；路由照常发布。执行后重新生成差异报告，提示消失即可。
 
 与 IPv4 静态路由相同，路由只看目的地址：如果 Mihomo 自己用 DIRECT 直连这些 IPv6 地址，连接会被主路由送回 Mihomo。规则集应走代理。
 

@@ -312,6 +312,11 @@ def _inspect_state(config, router, driver, content_loader=None):
                      'dns': item['desired_dns']}
             state.ipv6_dns_plan = ipv6_dns.inspect({**desired, 'ipv6_dns_scope': scope}, driver)
     report = build_report(desired, state)
+    from backend.routers import forward_hint
+    # Read-only: never part of a release operation, check or fingerprint.
+    hint = forward_hint.ipv4(router, desired, state, report, driver)
+    if hint:
+        report['routes']['forward_hint'] = hint
     if router.get('manage_return_routing') is True:
         report['return_routing'] = _return_routing(gateway_agent)
     else:
