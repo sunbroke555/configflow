@@ -18,163 +18,239 @@ const verification = (overrides: Partial<IPv6Verification> = {}): IPv6Verificati
 })
 const group = (id: string, input: Parameters<typeof buildMihomoIPv6Summary>[0]) => buildMihomoIPv6Summary(input).find(row => row.id === id)!
 
-describe('Mihomo IPv6 check summaries', () => {
-  it('shows exactly five groups without inventing node or client connectivity from a passing inspection', () => {
+describe('Mihomo IPv6 three outcomes', () => {
+  it('shows exactly three outcomes and does not turn a passing inspection into tested connectivity', () => {
     const groups = buildMihomoIPv6Summary({ readiness: readiness() })
-    expect(groups.map(row => row.label)).toEqual(['IPv6 网络', '重启恢复', 'DNS 与 ROS 配套', '节点实际连接', '客户端分流'])
-    expect(groups[0]).toMatchObject({ tone: 'success', status: '已通过', issues: [] })
-    expect(groups[1]).toMatchObject({ status: '恢复配置已就绪', tone: 'success' })
-    expect(groups[1]!.note).toContain('未实际重启设备')
-    expect(groups.slice(3).map(row => [row.status, row.tone])).toEqual([['待验证', 'neutral'], ['待验证', 'neutral']])
+    expect(groups.map(row => row.label)).toEqual(['IPv6 网络', 'IPv6 节点连接', '客户端分流'])
+    expect(groups[0]).toMatchObject({ tone: 'success', status: '已就绪', issues: [] })
+    expect(groups.slice(1).map(row => [row.status, row.tone])).toEqual([['待验证', 'neutral'], ['待验证', 'neutral']])
+    expect(groups[1]!.note).toContain('验证连接与分流')
+    expect(groups[2]!.note).toContain('验证连接与分流')
   })
 
-  it('uses the new full router snapshot instead of old success or a removed router', () => {
+  it('requires both a usable address and a default route before calling an inspection ready', () => {
+    const current = readiness({ checks: [check('host_address'), check('host_persistence')] })
+    expect(group('ipv6-network', { readiness: current })).toMatchObject({ tone: 'neutral', status: '待检查' })
+    expect(group('ipv6-network', { readiness: current }).note).toContain('打开「检查设备」，点击「重新检查」')
+  })
+
+  it('uses actual IPv6 traffic to show network availability even without a static inspection', () => {
+    expect(group('ipv6-network', { verification: verification() })).toMatchObject({ tone: 'success', status: '可用' })
+  })
+
+  it('does not turn ROS route/RA/firewall/NAT uncertainty into daily warnings', () => {
     const current = readiness()
-    current.routers[0]!.checks = [check('dns', 'warning', '需要核对 DNS')]
-    const result = group('dns-router', { readiness: current, verification: verification({ checks: [
-      ...runtimeChecks(), check('router_router_with_underscores_dns'), check('router_removed_wan'),
+    current.routers[0]!.checks = [check('wan', 'warning'), check('dns', 'warning'), check('firewall', 'unknown'),
+      check('dhcpv6_input', 'unknown'), check('nat', 'unknown'), check('fake4_return', 'unknown')]
+    const input = { readiness: current, verification: verification({ status: 'warning', scope: 'client_path', checks: [
+      ...runtimeChecks(), ...clientChecks(), check('router_ros_nat', 'unknown'),
+    ] }) }
+    const groups = buildMihomoIPv6Summary(input)
+    expect(groups.every(row => row.tone === 'success' && row.issues.length === 0)).toBe(true)
+  })
+
+  it('does not invent traffic success from successful static node and client paths', () => {
+    const groups = buildMihomoIPv6Summary({ verification: verification({ checks: [
+      check('router_ros_node_0_0'), check('router_ros_fake4_0'), check('router_ros_dhcpv6_input', 'unknown'),
     ] }) })
-    expect(result.tone).toBe('warning')
-    expect(result.checks.map(row => row.id)).toEqual(['router_router_with_underscores_dns'])
-    expect(result.checks[0]!.displayLabel).toBe('家里的 ROS · dns')
+    expect(groups.map(row => row.status)).toEqual(['待检查', '待验证', '待验证'])
+    expect(groups.every(row => !row.issues.length)).toBe(true)
+  })
+
+  it('shows a short actionable problem for definite router blockers without displaying the trace', () => {
+    const blocked = { ...check('router_ros_fake4_0', 'error', '按顺序发现阻断'), details: ['filter/forward #7 drop', 'raw/prerouting trace'] }
+    const result = group('client', { verification: verification({ checks: [...runtimeChecks(), blocked] }) })
+    expect(result).toMatchObject({ status: '未通过', tone: 'danger' })
+    expect(result.issues).toEqual(['客户端分流路由或相关规则存在问题，请到「上级路由」检查差异后再验证。'])
+    expect(result.issues.join()).not.toMatch(/filter|prerouting|展开/)
+  })
+
+
+  it('keeps actual traffic success while flagging contradictory static rule predictions', () => {
+    const report = verification({ status: 'error', scope: 'client_path', checks: [
+      ...runtimeChecks(), ...clientChecks(), check('router_ros_node_0_0', 'error'), check('router_ros_fake4_0', 'error'),
+    ] })
+    const groups = buildMihomoIPv6Summary({ verification: report })
+    expect(groups.every(row => row.tone === 'success')).toBe(true)
+    expect(groups[0]!.issues).toEqual(['本次连接已通过；路由器规则检查仍有差异，请到「上级路由」核对。'])
+    expect(groups[2]!.issues).toEqual(['本次连接已通过；分流路由检查仍有差异，请到「上级路由」核对。'])
+  })
+
+  it('does not let passing observations hide current host or runtime failures', () => {
+    const report = verification({ status: 'error', scope: 'client_path', checks: [
+      ...runtimeChecks(), ...clientChecks(), check('host_address', 'error'), check('client_http_ipv6', 'error'),
+      check('router_ros_node_0_0', 'error'), check('router_ros_fake4_0', 'error'),
+    ] })
+    const groups = buildMihomoIPv6Summary({ verification: report })
+    expect(groups[0]!.tone).toBe('danger')
+    expect(groups[2]!.tone).toBe('danger')
+    expect(groups.flatMap(row => row.issues).join()).not.toContain('本次连接已通过')
+  })
+
+  it('includes an explicit next action even when an unknown check already supplies an issue', () => {
+    const report = verification({ checks: [check('runtime_node_ipv6_transport', 'unknown', '尚未观察到对应 IPv6 连接')] })
+    const result = group('node', { verification: report })
+    expect(result).toMatchObject({ status: '待验证', tone: 'neutral' })
+    expect(result.issues).toEqual(['尚未观察到对应 IPv6 连接', '点击「验证连接与分流」开始测试。'])
+  })
+
+  it('uses the new router snapshot and discards errors for a removed router', () => {
+    const input = { readiness: readiness(), verification: verification({ checks: [
+      ...runtimeChecks(), check('router_removed_wan', 'error'),
+    ] }) }
+    expect(group('ipv6-network', input)).toMatchObject({ tone: 'success', issues: [] })
+    expect(group('ipv6-network', input).checks.some(row => row.id.includes('removed'))).toBe(false)
   })
 
   it('uses a newly completed verification snapshot instead of an older passing inspection', () => {
-    const current = readiness()
-    const report = verification({ checks: [check('host_default_route', 'error'), check('router_router_with_underscores_dns', 'error'), ...runtimeChecks()] })
-    const input = { readiness: current, verification: report, preferVerificationSnapshot: true }
+    const report = verification({ checks: [check('host_default_route', 'error'), check('router_ros_dns', 'error'), ...runtimeChecks()] })
+    const input = { readiness: readiness(), verification: report, preferVerificationSnapshot: true }
     expect(group('ipv6-network', input).tone).toBe('danger')
-    expect(group('dns-router', input).tone).toBe('danger')
-    expect(group('dns-router', input).checks.map(row => row.id)).toEqual(['router_router_with_underscores_dns'])
-    expect(group('restart', input).status).toBe('待检查')
+    expect(group('ipv6-network', input).issues).toHaveLength(2)
   })
 
-  it('does not overwrite partial failures of a newly failed run with an older inspection', () => {
-    const report = verification({ status: 'error', checks: [check('host_address', 'error'), check('verification_failed', 'error')] })
-    const input = { readiness: readiness(), verification: report, preferVerificationSnapshot: true }
+  it('does not overwrite the failures of a newly failed run with the older inspection', () => {
+    const input = { readiness: readiness(), preferVerificationSnapshot: true,
+      verification: verification({ status: 'error', checks: [check('host_address', 'error'), check('verification_failed', 'error')] }) }
     expect(group('ipv6-network', input).tone).toBe('danger')
     expect(group('node', input).tone).toBe('danger')
   })
 
-  it('retains the current inspection while a new run is pending or its snapshot has become stale', () => {
-    const current = readiness()
-    const input = { readiness: current, preferVerificationSnapshot: true, verification: verification({ status: 'running', checks: [] }) }
-    expect(group('ipv6-network', input).tone).toBe('success')
+  it('retains the current inspection while a new run is pending or its snapshot is stale', () => {
+    const input = { readiness: readiness(), preferVerificationSnapshot: true, verification: verification({ status: 'running', checks: [] }) }
+    expect(group('ipv6-network', input)).toMatchObject({ tone: 'success', status: '已就绪' })
     input.verification = verification({ config_revision: 6, checks: [check('host_address', 'error'), ...runtimeChecks()] })
-    expect(group('ipv6-network', input).tone).toBe('success')
+    expect(group('ipv6-network', input)).toMatchObject({ tone: 'success', status: '已就绪' })
     expect(group('node', input).tone).not.toBe('success')
   })
 
-  it('keeps static node and client rule analysis in ROS instead of claiming actual requests passed', () => {
-    const result = buildMihomoIPv6Summary({ verification: verification({ checks: [
-      check('router_ros_node_0_0'), check('router_ros_fake4_0'), check('router_ros_dhcpv6_input', 'unknown'),
-    ] }) })
-    expect(result[2]!.checks).toHaveLength(3)
-    expect(result[2]!.status).toBe('尚未全部验证')
-    expect(result[3]!.status).toBe('待验证')
-    expect(result[4]!.status).toBe('待验证')
+  it('keeps real restart problems concise but omits unconfirmed persistence details', () => {
+    const current = readiness({ checks: [check('host_address'), check('host_default_route'), check('host_persistence', 'warning')] })
+    const result = group('ipv6-network', { readiness: current })
+    expect(result).toMatchObject({ tone: 'warning', status: '需处理' })
+    expect(result.issues).toEqual(['开机恢复配置有缺项或冲突，请检查设备上的网络恢复设置。'])
+    current.checks[2]!.status = 'unknown'
+    expect(group('ipv6-network', { readiness: current })).toMatchObject({ tone: 'success', status: '已就绪', issues: [] })
   })
 
-  it('keeps DNS IPv6 off separate from using an IPv6 node and IPv4 client forwarding', () => {
+
+  it('keeps a working IPv6 connection available while reporting restart preparation separately', () => {
+    const input = { readiness: readiness({ checks: [check('host_persistence', 'warning')] }), verification: verification() }
+    const result = group('ipv6-network', input)
+    expect(result).toMatchObject({ status: '可用', tone: 'success' })
+    expect(result.issues[0]).toContain('开机恢复')
+    input.readiness.checks.push(check('host_address', 'error'))
+    expect(group('ipv6-network', input).tone).toBe('danger')
+  })
+
+  it('only suggests automatic preparation when that action is available', () => {
+    const current = readiness({ checks: [check('host_forwarding_ra', 'warning'), check('host_persistence', 'warning'), check('host_tun_recovery', 'warning')] })
+    expect(group('ipv6-network', { readiness: current }).issues.join()).not.toContain('补齐缺少的配置')
+    current.can_prepare = true
+    expect(group('ipv6-network', { readiness: current }).issues.every(issue => issue.includes('补齐缺少的配置'))).toBe(true)
+    expect(group('ipv6-network', { verification: verification({ checks: current.checks }) }).issues.join()).not.toContain('补齐缺少的配置')
+  })
+
+  it('keeps DNS IPv6 off independent from using IPv6 nodes and IPv4 client forwarding', () => {
     const input = { readiness: readiness(), verification: verification({ scope: 'client_path', checks: [...runtimeChecks(), ...clientChecks()] }) }
     expect(group('node', input)).toMatchObject({ status: '已通过', tone: 'success' })
     expect(group('client', input)).toMatchObject({ status: '已通过', tone: 'success' })
   })
 
-  it('requires both an actual proxy request and IPv6 transport evidence', () => {
-    expect(group('node', { verification: verification({ checks: [check('runtime_proxy_http')] }) }).tone).toBe('neutral')
+  it('requires both actual proxy HTTP and IPv6 transport evidence, not just a successful port probe', () => {
+    expect(group('node', { verification: verification({ checks: [check('runtime_proxy_http')] }) })).toMatchObject({ status: '待验证', tone: 'neutral' })
     expect(group('node', { verification: verification({ checks: [check('runtime_node_ipv6_transport')] }) }).tone).toBe('neutral')
+    expect(group('node', { readiness: readiness({ connectivity: { status: 'ok', message: '端口可达' } }) }).tone).not.toBe('success')
     expect(group('node', { verification: verification() }).tone).toBe('success')
   })
 
-  it('does not substitute host socket evidence for the client request', () => {
+  it('does not substitute host socket evidence for client IPv6 evidence', () => {
     const report = verification({ scope: 'client_path', checks: [...runtimeChecks(), ...clientChecks().filter(row => row.id !== 'client_ipv6_transport')] })
     expect(group('node', { verification: report }).tone).toBe('success')
-    expect(group('client', { verification: report })).toMatchObject({ status: '尚未全部验证', tone: 'neutral' })
+    expect(group('client', { verification: report })).toMatchObject({ status: '待验证', tone: 'neutral' })
+    expect(group('client', { verification: report }).note).toContain('验证连接与分流')
   })
 
-  it('shows an unconfigured test client as neutral without saying client forwarding is unnecessary', () => {
+  it('does not hide an additional IPv6 client failure behind passing IPv4 checks', () => {
+    const report = verification({ scope: 'client_path', checks: [...runtimeChecks(), ...clientChecks(), check('client_http_ipv6', 'error')] })
+    expect(group('client', { verification: report })).toMatchObject({ tone: 'danger', status: '未通过' })
+    expect(group('client', { verification: report }).issues).toContain('客户端访问检测网站失败，请检查客户端的网关和 DNS。')
+  })
+
+  it('tells an unconfigured client where to set up verification without showing success', () => {
     const result = group('client', { verification: verification({ checks: [...runtimeChecks(), check('client_not_configured', 'unknown')] }) })
     expect(result).toMatchObject({ status: '未配置检测客户端', tone: 'neutral', issues: [] })
-    expect(result.note).toBe('未配置检测客户端，本次只检查 Mihomo 主机。')
-    expect(result.status).not.toBe('无需检查')
+    expect(result.note).toContain('检查设备 → 验收设置')
+    expect(result.note).toContain('独立检测客户端')
+    expect(result.note).toContain('验证连接与分流')
   })
 
-  it('never hides a failed or conflicting client finding behind the unconfigured marker', () => {
-    const result = group('client', { verification: verification({ checks: [check('client_not_configured', 'unknown'), check('client_http_ipv4', 'error', '网站访问失败')] }) })
-    expect(result).toMatchObject({ tone: 'danger', issues: ['网站访问失败'] })
-    const malformed = group('client', { verification: verification({ checks: [check('client_not_configured', 'error', '客户端有错误')] }) })
-    expect(malformed.tone).toBe('danger')
+  it('never hides a client failure or a contradictory response behind the unconfigured marker', () => {
+    const failed = verification({ checks: [check('client_not_configured', 'unknown'), check('client_http_ipv4', 'error')] })
+    expect(group('client', { verification: failed }).tone).toBe('danger')
+    const contradictory = verification({ checks: [check('client_not_configured', 'unknown'), ...clientChecks()] })
+    expect(group('client', { verification: contradictory })).toMatchObject({ tone: 'neutral', status: '待验证' })
+    expect(group('client', { verification: contradictory }).issues[0]).toContain('不一致')
   })
 
-  it('marks only explicitly unused IPv6 Fake-IP as not needed and retains contradictory failures', () => {
-    const unused = '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由'
-    const report = verification({ checks: [check('router_ros_fake_ipv6', 'ok', unused), ...runtimeChecks()] })
-    expect(group('dns-router', { verification: report }).checks[0]).toMatchObject({ displayStatus: '无需检查', displayTone: 'neutral' })
-    report.checks[0]!.status = 'error'
-    expect(group('dns-router', { verification: report })).toMatchObject({ tone: 'danger' })
-    expect(group('dns-router', { verification: report }).checks[0]!.displayStatus).toBeUndefined()
-  })
-
-  it.each(['result_stale', 'target_changed', 'interrupted', 'verification_failed', 'runtime_config_stability'])('discards successful runtime evidence when %s invalidates the run', id => {
+  it.each(['result_stale', 'target_changed', 'interrupted', 'verification_failed', 'runtime_config_stability'])('rejects successful runtime evidence when %s invalidates the run', id => {
     const result = buildMihomoIPv6Summary({ readiness: readiness(), verification: verification({ checks: [
       ...runtimeChecks(), ...clientChecks(), check(id, id === 'verification_failed' ? 'error' : 'unknown'),
     ] }) })
     expect(result[0]!.tone).toBe('success')
-    expect(result[3]!.tone).not.toBe('success')
-    expect(result[4]!.tone).not.toBe('success')
+    expect(result[1]!.tone).not.toBe('success')
+    expect(result[2]!.tone).not.toBe('success')
     expect(result.flatMap(row => row.checks).some(row => row.id === 'runtime_proxy_http')).toBe(false)
+    expect(result[1]!.issues.join()).toContain('验证连接与分流')
   })
 
-  it('keeps a successful stability check from invalidating the run', () => {
-    const result = group('node', { verification: verification({ checks: [...runtimeChecks(), check('runtime_config_stability')] }) })
-    expect(result.tone).toBe('success')
+  it('does not reject a successful stability check', () => {
+    expect(group('node', { verification: verification({ checks: [...runtimeChecks(), check('runtime_config_stability')] }) }).tone).toBe('success')
   })
 
-  it('does not merge a different saved revision or a stale flag into current success', () => {
+  it('does not merge another saved revision or a stale flag into current success', () => {
     expect(group('node', { readiness: readiness(), verification: verification({ config_revision: 6 }) }).tone).not.toBe('success')
     const stale = { ...verification(), stale: true }
     expect(group('node', { verification: stale }).tone).not.toBe('success')
   })
 
-  it('explains missing deployment evidence plainly while retaining its technical detail', () => {
-    const report = verification({ checks: [check('runtime_deployed_config', 'unknown', '未提供本次发布内容的指纹')] })
-    const result = group('ipv6-network', { verification: report })
-    expect(result.issues).toEqual(['尚未确认 Mihomo 使用的是当前保存的配置，请发布后再验证。'])
-    expect(result.checks[0]!.message).toBe('未提供本次发布内容的指纹')
+  it.each(['runtime_deployed_config', 'runtime_expected_config'])('requires publishing when %s is missing', id => {
+    const input = { verification: verification({ checks: [...runtimeChecks(), ...clientChecks(), check(id, 'unknown', '未提供本次发布内容的指纹')] }) }
+    expect(group('ipv6-network', input)).toMatchObject({ status: '待发布', tone: 'neutral' })
+    expect(group('ipv6-network', input).issues[0]).toContain('保存并发布')
+    expect(group('node', input)).toMatchObject({ status: '待验证', tone: 'neutral' })
+    expect(group('node', input).note).toContain('保存并发布')
+    expect(group('client', input).tone).not.toBe('success')
   })
 
-  it('keeps unfamiliar errors and deduplicates repeated technical issues without dropping their evidence', () => {
-    const report = verification({ checks: [check('new_backend_check', 'error', '新检查失败'), check('router_ros_fake4_0', 'unknown'), check('router_ros_fake4_1', 'unknown')] })
-    expect(group('node', { verification: report })).toMatchObject({ tone: 'danger', issues: ['新检查失败'] })
-    const ros = group('dns-router', { verification: report })
-    expect(ros.issues).toHaveLength(1)
-    expect(ros.checks).toHaveLength(2)
+  it('keeps unfamiliar errors and deduplicates problems instead of rendering raw details', () => {
+    const report = verification({ checks: [check('new_backend_check', 'error', '新检查失败，请检查设备后重试。'),
+      check('router_ros_fake4_0', 'error'), check('router_ros_fake4_1', 'error')] })
+    expect(group('node', { verification: report })).toMatchObject({ tone: 'danger', issues: ['新检查失败，请检查设备后重试。'] })
+    expect(group('client', { verification: report }).issues).toHaveLength(1)
   })
 
-  it('does not turn a failed empty report or a successful port probe into a successful node test', () => {
+  it('does not turn failed/empty or unexplained warning reports into passing outcomes', () => {
     expect(group('node', { verification: verification({ status: 'error', checks: [] }) }).tone).toBe('danger')
-    expect(group('node', { readiness: readiness({ connectivity: { status: 'ok', message: '节点端口可达' } }) }).tone).not.toBe('success')
+    expect(group('node', { verification: verification({ status: 'warning' }) })).toMatchObject({ status: '待验证', tone: 'neutral' })
+    expect(group('node', { verification: verification({ status: 'warning' }) }).issues[0]).toContain('重新验证')
   })
 
-  it('does not show an unexplained top-level warning as all passing groups', () => {
-    const input = { readiness: readiness(), verification: verification({ status: 'warning' }) }
-    expect(group('node', input)).toMatchObject({ status: '尚未全部验证', tone: 'neutral' })
-    expect(group('node', input).issues[0]).toContain('未返回具体问题')
-  })
-
-  it('shows running state only for the scopes actually being verified', () => {
+  it('shows running state only for the scopes actually being tested', () => {
     const input = { readiness: readiness(), verification: verification({ status: 'running', checks: [] }) }
     expect(group('node', input)).toMatchObject({ status: '验证中', tone: 'progress' })
     expect(group('client', input).status).toBe('待验证')
     input.verification.scope = 'client_path'
-    expect(group('client', input).status).toBe('验证中')
+    expect(group('client', input)).toMatchObject({ status: '验证中', tone: 'progress' })
   })
 
-  it('retains the timestamp only for accepted runtime evidence', () => {
-    const report = verification({ checked_at: '2026-10-30T12:00:00Z' })
-    expect(group('node', { verification: report }).note).toContain('上次验证：')
-    report.config_revision = 6
-    expect(group('node', { readiness: readiness(), verification: report }).note).not.toContain('上次验证：')
+  it('does not claim network traffic success from partial running results', () => {
+    expect(group('ipv6-network', { verification: verification({ status: 'running', checks: runtimeChecks() }) }).tone).not.toBe('success')
+  })
+
+  it('gives a pending action without a dead expand-details instruction', () => {
+    const groups = buildMihomoIPv6Summary({ verification: verification({ checks: [check('runtime_evidence', 'unknown')] }) })
+    expect(groups[1]!.issues[0]).toContain('重新验证')
+    expect(groups.flatMap(row => [...row.issues, row.note || '']).join()).not.toContain('展开')
   })
 })

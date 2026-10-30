@@ -124,7 +124,7 @@ async function prepare() {
     const { data } = await agentApi.prepareIPv6(id, { profile_id: profileId, interface: previous.prepare_interface, check_token: previous.check_token })
     if (!current(generation, id) || props.dirty) return
     acceptResult(data, id)
-    actionMessage.value = data.message || '已完成补齐并重新检查；连接结果需单独验证。'
+    actionMessage.value = '补齐操作已完成，请查看检查结果。'
   } catch (failure) {
     if (current(generation)) {
       error.value = messageOf(failure)
@@ -174,7 +174,7 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
 
 <template>
   <div class="min-w-0 space-y-3" data-mihomo-ipv6-readiness>
-    <p class="m-0 text-xs leading-relaxed text-muted-foreground">检查已保存的基础配置和设备网络；点开每项可查看详细依据。</p>
+    <p class="m-0 text-xs leading-relaxed text-muted-foreground">检查已保存的配置；待验证的项目会提示下一步操作。</p>
     <p v-if="dirty" class="m-0 text-xs text-warning-accent" role="status">有未保存的修改，请先保存草稿，再检查设备 IPv6。</p>
     <div class="flex min-w-0 flex-wrap items-center gap-2">
       <Select v-if="candidates.length > 1 || (candidates.length && !selected)" :model-value="selectedId" :disabled="busy || disabled" @update:model-value="selectTarget">
@@ -196,7 +196,7 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
           <Button v-if="result.can_prepare" type="button" variant="outline" class="min-h-11" :disabled="!canPrepare" @click="prepare">补齐缺少的配置</Button>
         </template>
       </MihomoIPv6Verification>
-      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐只处理 Mihomo 主机参数及开机恢复；启用 IPv6 Fake-IP 时可能重新加载正在运行的 Mihomo。ROS 路由在「上级路由 → 差异报告」中统一预览和发布。</p>
+      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐仅处理 Mihomo 主机配置，必要时重新加载 Mihomo；ROS 路由到「上级路由」预览发布。</p>
     </template>
     <MihomoIPv6VerificationSettings v-if="selected" :open="open" :agent-id="selectedId" :profile-id="profileId" :disabled="busy || disabled" @saved="verificationVersion++" />
   </div>

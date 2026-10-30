@@ -17,54 +17,59 @@ const report = (extra: Partial<IPv6Verification> = {}): IPv6Verification => ({
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('IPv6 verification result', () => {
-  it('keeps an untested client path visibly incomplete alongside successful host evidence', () => {
-    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { verification: report({ checks: [
-      { id: 'runtime_proxy_http', label: '代理网站访问', status: 'ok', message: '访问成功。' },
-      { id: 'client_ros_path', label: '客户端 ROS 路径', status: 'unknown', message: '尚未取得本次 ROS 连接记录。' },
-    ] }) } })
-    expect(wrapper.get('[data-agent-status-row="客户端全链路验收"]').attributes('data-tone')).toBe('warning')
-    expect(wrapper.findAll('[data-ipv6-check-group]')).toHaveLength(5)
-    expect(wrapper.get('[data-ipv6-check-group="client"] [data-status-notice]').text()).toContain('尚未取得本次 ROS 连接记录')
+  it.each([false, true])('shows three direct results without raw rule details or another summary layer (compact=%s)', compact => {
+    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { compact, verification: report({
+      status: 'warning', checks: [...report().checks,
+        { id: 'router_ros_firewall', label: '防火墙路径检查', status: 'unknown', message: '静态规则未确认', details: ['raw/prerouting 未命中终止规则', 'protocol=tcp；dst-port=1080'] },
+      ],
+    }) } })
+    expect(wrapper.findAll('[data-ipv6-check-group]').map(row => row.attributes('data-ipv6-check-group'))).toEqual(['ipv6-network', 'node', 'client'])
+    expect(wrapper.findAll('[data-agent-status-row]')).toHaveLength(3)
+    expect(wrapper.findAll('[data-status-details], [data-ipv6-check-id], button')).toHaveLength(0)
+    expect(wrapper.text()).not.toMatch(/raw\/prerouting|protocol=tcp|防火墙路径检查|主机自检|客户端全链路验收|展开查看/)
+    expect(wrapper.findAll('[data-agent-status-row]').every(row => row.attributes('data-tone') === 'success')).toBe(true)
+    expect(wrapper.text()).toContain('验证时间')
     wrapper.unmount()
   })
 
-  it('does not mark an empty result as passed', () => {
-    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { verification: report({ checks: [] }) } })
-    expect(wrapper.get('[data-agent-status-row="客户端全链路验收"]').attributes('data-tone')).toBe('warning')
+  it('leaves empty results unverified and tells the user how to verify', () => {
+    const wrapper = mount(MihomoIPv6VerificationResult, { props: { verification: report({ checks: [] }) } })
+    expect(wrapper.findAll('[data-agent-status-row]').some(row => row.attributes('data-tone') === 'success')).toBe(false)
+    expect(wrapper.get('[data-ipv6-check-group="node"]').text()).toContain('验证连接与分流')
     wrapper.unmount()
   })
 
-  it('keeps successful details collapsed until the group is opened', async () => {
-    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { verification: report() } })
-    const node = wrapper.get('[data-ipv6-check-group="node"]')
-    expect(node.find('[data-status-notice]').exists()).toBe(false)
-    expect(node.get('[data-status-details]').isVisible()).toBe(false)
-    await node.get('button').trigger('click')
-    expect(node.get('[data-status-details]').isVisible()).toBe(true)
-    expect(node.text()).toContain('已通过代理访问检测网站。')
-    wrapper.unmount()
-  })
-
-  it('labels a host-only check separately from an unconfigured client', () => {
-    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { verification: report({ scope: 'mihomo_runtime', checks: [
+  it('guides an unconfigured client to verification settings without inventing a pass', () => {
+    const wrapper = mount(MihomoIPv6VerificationResult, { props: { verification: report({ scope: 'mihomo_runtime', checks: [
       ...report().checks.filter(check => !check.id.startsWith('client_')),
       { id: 'client_not_configured', label: '客户端全链路', status: 'unknown', message: '尚未配置独立检测客户端。' },
     ] }) } })
-    expect(wrapper.get('[data-agent-status-row="主机自检"]').attributes('data-tone')).toBe('success')
     const client = wrapper.get('[data-ipv6-check-group="client"]')
     expect(client.get('[data-agent-status-row]').attributes('data-tone')).toBe('neutral')
-    expect(client.get('button').text()).toContain('未配置')
+    expect(client.text()).toContain('验收设置')
+    expect(client.text()).toContain('验证连接与分流')
+    expect(wrapper.get('[data-ipv6-check-group="node"] [data-agent-status-row]').attributes('data-tone')).toBe('success')
     wrapper.unmount()
   })
 
-  it('keeps automatic publication results compact and reveals the same five groups', async () => {
-    const wrapper = mount(MihomoIPv6VerificationResult, { attachTo: document.body, props: { verification: report(), compact: true } })
-    const summary = wrapper.get('[data-agent-status-row="客户端全链路验收"]')
-    expect(summary.get('[data-status-details]').isVisible()).toBe(false)
-    await summary.get('button[aria-label="客户端全链路验收：已通过"]').trigger('click')
-    expect(summary.get('button[aria-label="客户端全链路验收：已通过"]').attributes('aria-expanded')).toBe('true')
-    expect(summary.get('[data-status-details]').isVisible()).toBe(true)
-    expect(wrapper.findAll('[data-ipv6-check-group]')).toHaveLength(5)
+  it('shows actual failures directly but never renders their protocol trace', () => {
+    const wrapper = mount(MihomoIPv6VerificationResult, { props: { verification: report({ status: 'error', checks: [
+      ...report().checks.filter(check => check.id !== 'client_http_ipv4'),
+      { id: 'client_http_ipv4', label: '客户端访问', status: 'error', message: '客户端访问检测网站失败，请检查客户端网络。', details: ['mangle/prerouting 第1条', 'src-address=192.0.2.100'] },
+    ] }) } })
+    const client = wrapper.get('[data-ipv6-check-group="client"]')
+    expect(client.get('[data-agent-status-row]').attributes('data-tone')).toBe('danger')
+    expect(client.get('[data-status-notice]').text()).toMatch(/失败|不通|未通过/)
+    expect(wrapper.text()).not.toMatch(/mangle\/prerouting|src-address=/)
+    wrapper.unmount()
+  })
+
+  it('explains a missing publication using the existing save-and-publish action', () => {
+    const wrapper = mount(MihomoIPv6VerificationResult, { props: { verification: report({ checks: [
+      { id: 'runtime_deployed_config', label: '已发布配置', status: 'unknown', message: '未提供文件指纹' },
+    ] }) } })
+    expect(wrapper.text()).toContain('保存并发布')
+    expect(wrapper.text()).not.toContain('未提供文件指纹')
     wrapper.unmount()
   })
 })
