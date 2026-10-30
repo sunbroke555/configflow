@@ -222,6 +222,46 @@ def test_peer_dns_and_nat_are_advisories_not_mutations():
     assert not router.writes
 
 
+def test_same_port_forward_hint_reuses_the_rows_already_read():
+    """#452's hint (drop invalid before a same-port accept) without another RouterOS read."""
+    router = Router()
+    router.rows['/ipv6/firewall/filter'] = [
+        {'.id': '*4', 'chain': 'forward', 'action': 'accept', 'connection-state': 'established,related,untracked'},
+        {'.id': '*5', 'chain': 'forward', 'action': 'drop', 'connection-state': 'invalid'}]
+    reads = []
+    original = router._list
+    router._list = lambda path: reads.append(path) or original(path)
+    result = inspect_router(router)
+    hint = next(c for c in result['checks'] if c['id'] == 'forward_hairpin')
+    assert hint['status'] == 'warning'
+    assert 'drop invalid' in hint['message']
+    assert hint['command'] == ('/ipv6 firewall filter add chain=forward action=accept in-interface=lan4 '
+                               'out-interface=lan4 comment="LAN to Mihomo via router" place-before=*5')
+    assert reads.count('/ipv6/firewall/filter') == 1 and reads.count('/interface') == 1
+    assert not router.writes
+    # A summary of readiness counts only router errors; the hint stays advisory.
+    assert result['status'] == 'warning'
+
+
+def test_same_port_forward_hint_is_silent_without_a_drop_and_unknown_when_unread():
+    router = Router()
+    assert not any(c['id'] == 'forward_hairpin' for c in inspect_router(router)['checks'])
+    router.fail_path = '/ipv6/firewall/filter'
+    hint = next(c for c in inspect_router(router)['checks'] if c['id'] == 'forward_hairpin')
+    assert hint['status'] == 'unknown' and 'command' not in hint
+
+
+def test_same_port_forward_hint_covers_rule_set_routes_without_fake_ip():
+    router = Router()
+    router.rows['/ipv6/firewall/filter'] = [{'.id': '*5', 'chain': 'forward', 'action': 'drop', 'connection-state': 'invalid'}]
+    redir = bridge.configuration({'mihomo': {'custom_config': YAML.replace('fake-ip\n', 'redir-host\n')}})[0]
+    result = ros.inspect(router, ROUTER, AGENT, host_status(), redir, '192.168.0.2')
+    assert next(c for c in result['checks'] if c['id'] == 'forward_hairpin')['command'].endswith('place-before=*5')
+    off = bridge.configuration({'mihomo': {'custom_config': YAML.replace('ipv6: true\ndns', 'ipv6: false\ndns')}})[0]
+    result = ros.inspect(router, ROUTER, AGENT, host_status(), off, '192.168.0.2')
+    assert not any(c['id'] == 'forward_hairpin' for c in result['checks'])
+
+
 def test_route_add_reads_back_and_owned_undo_preserves_others():
     router = Router()
     initial = deepcopy(router.rows[ros.ROUTES])
