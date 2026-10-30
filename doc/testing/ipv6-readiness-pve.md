@@ -2,6 +2,8 @@
 
 日期：2026-10-30。三轮验证使用工作区中的实现（workingtree，三轮开始时功能代码尚未提交），基础为 `upstream/main` 的 `b92d2749`；最终 smoke 和 controller 复测使用已提交的 `0d3e3bfc`。Agent 版本为 `1.8.50-go`，Mihomo 为 `v1.19.33`，RouterOS 为 `7.25`。
 
+本页前面的三轮及清理记录是首次验收历史。之后为持续预览重新建立了同编号的任务专属隔离环境，当前仍为测试页面保留。新增的发布后自动验收记录见文末；不要将首次清理记录当成当前资源状态。
+
 结论：隔离实验网内，三轮 Agent 实测、最终二进制的一轮 smoke，以及最终一轮真实 RouterOS/controller 联调均通过。客户端保持 IPv4 分流时，Mihomo 可以通过 IPv6 连接代理节点；另外验证了启用 IPv6 Fake-IP 后的客户端 IPv6 流量。尚未部署到生产路由器或生产 Mihomo。
 
 ## 环境与边界
@@ -126,3 +128,35 @@ rt -- python scripts/tests/ipv6_readiness_lab.py smoke
 本次真实环境覆盖原生 systemd 安装、单一以太网上联网卡、RA 地址/默认路由及 RouterOS 7.25。多出口、OpenRC、Docker、不同 RouterOS 版本、运营商 PD 变化、公网节点协议/认证和真实 OxiDNS 配置没有在此实验中完成实测。
 
 UI 的保存草稿、网络补齐、发布 Mihomo 配置是不同动作；配置正确、单个节点 TCP 可连接、实际客户端分流成功和重启恢复是不同证据。公网节点仍需在目标环境独立验证；此次没有修改或部署生产环境。
+
+## 发布后自动验收补充
+
+2026-10-30，在同一隔离拓扑重新运行真实 ConfigFlow 后端、Agent 注册与发布流程。代码为 `f214da29`，基于 `upstream/main b92d2749`；Agent 二进制 SHA-256 为 `f6ddd624604a132bf3d4f067877cca52e28c86f5c5bf6068b6638ede794aacd2`。预览保留在测试服务器 15820，后端为 15821。CT153 安装独立检测 Agent；系统 DNS 查询测试 Mihomo 的真实 53 端口，HTTP 请求不使用环境代理或人为指定解析结果。
+
+| 场景 | 实测结果 |
+| --- | --- |
+| 发布后仅自检 | 只发起发布，没有调用验收 POST、没有前端部署轮询，后台仍自动等待发布成功并保存结果；发布文件、当前开关、A/AAAA 行为、代理 HTTP 与 IPv6 节点连接分别通过 |
+| 配置客户端后发布 | IPv4 Fake-IP 请求的源地址/端口与 Mihomo 新连接、ROS 记录对应；实际节点远端为 IPv6，HTTP 成功 |
+| IPv6 Fake-IP | 打开 DNS IPv6 并通过原补齐入口准备路由；客户端 IPv4、IPv6 两次 HTTP 都成功，两族请求分别与 ROS/Mihomo/IPv6 节点证据对应 |
+| 关闭的测试端口 | DNS 与已发布文件仍通过，代理 HTTP 和客户端 HTTP 明确失败；没有把节点存在或部分检查通过当作整链成功 |
+| 恢复首选模式 | 最后恢复 `dns.ipv6: false` 并再次发布，自动客户端验收各实流项目通过；最后发布 ID 为 `abd462453af84b6392845d533061ed06` |
+
+实验 ROS 只有测试网段的直连路由，没有公网默认路由，也没有运营商 DHCPv6；因此总报告保持 warning，相关缺项没有被强行标绿。静态规则的候选回程判断仍与实际客户端成功结果分别展示。
+
+极简实验 ROS 的 `connection tracking=auto` 没有启用 IPv4 跟踪；最初客户端成功而 ROS 证据为空，正确显示未验证。为覆盖正向证据，仅在任务专属 VM151 将跟踪设为 `yes`，保留原值于测试记录。产品检查接口没有这个写操作，没有添加或修改防火墙/NAT 规则。观察器在请求期间收集限定目标端口、限定字段的新连接，避免同网段直返回程的短时记录在事后查询前过期。
+
+另一个实测修正是发布文件摘要：Agent 可能在发布时适配 YAML，传输包内原始 SHA 与最终落盘 SHA 不同。验收现在使用已确认成功的部署回执中的最终 `config_version`，源配置仍绑定这次发布的不可变快照。
+
+复现脚本为 `scripts/tests/ipv6_verification_lab.py`，仅能在测试服务器对归属检查通过的现有实验环境执行：
+
+```sh
+python scripts/tests/ipv6_verification_lab.py setup --agent-binary /tmp/configflow-ipv6-agent
+python scripts/tests/ipv6_verification_lab.py verify --publish
+python scripts/tests/ipv6_verification_lab.py verify --client --publish
+python scripts/tests/ipv6_verification_lab.py verify --client --fail
+python scripts/tests/ipv6_verification_lab.py verify --client --publish
+```
+
+脱敏结果位于测试服务器 `/tmp/configflow-ipv6-readiness/verification-*.json`，包括主机自检、客户端自动验收、Fake6 与关闭端口负向报告。首次三轮的重启恢复证据仍对应上文版本；本次新增验收没有再次重启整台容器，不能把两次证据混记。
+
+最终代码同步最新 upstream 后，后端全量 10,817 passed、122 skipped、9 subtests passed；前端全量 165 个文件、2,786 项通过；Go 全量、类型检查和生产构建通过。浏览器包含 25 个模拟交互场景，以及真实 15820 的桌面/手机只读验收：最终发布的四项客户端证据均通过、总 warning 如实保留，无页面错误、失败请求或配置写入。后两项截图与报告位于本机 `.ci-results/ipv6-real-ui/`，不随源码提交。
