@@ -416,8 +416,10 @@ def inspect(router: Dict[str, Any], gateway: str, driver) -> Dict[str, Any]:
     except RouterError as error:
         plan.update(status='blocked', message=str(error), blockers=[str(error)], ops=[], check={})
         for item in plan['items']:
-            if item['status'] not in ('ok', 'borrowed', 'synced'):
+            # The conflicting object keeps its own status; the rest wait for it.
+            if item['status'] not in ('borrowed', 'synced', 'conflict'):
                 item['status'] = 'blocked'
+                item['detail'] = (item['detail'].replace('发布时', '') + '；本次跳过，不写入').lstrip('；，')
     return plan
 
 

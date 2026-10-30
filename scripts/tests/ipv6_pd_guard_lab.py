@@ -8,7 +8,7 @@ the profile repository would keep it. Never point this at a production router.
     PD_LAB_REST=http://127.0.0.1:19161 PD_LAB_PASSWORD_FILE=~/.pdguard-rest.pw \
         python scripts/tests/ipv6_pd_guard_lab.py <scenario>...
 
-Scenarios: reset, manual, borrowed, drift, update, withdraw, conflict, clearhook, stale, install, poll, status.
+Scenarios: reset, manual, rawcheck, borrowed, drift, update, withdraw, conflict, clearhook, stale, install, poll, status.
 """
 import json
 import os
@@ -153,6 +153,13 @@ def main(args):
             print(json.dumps(execute(plan, ros, None), ensure_ascii=False, indent=1))
         elif name == 'withdraw':
             publish(False)
+        elif name == 'rawcheck':
+            # REST must store the multi-line source and the $"pd-valid" hook byte for byte.
+            script = next(row for row in rest('GET', '/system/script') if row['name'] == 'cf-pd-watch')
+            client = next(row for row in rest('GET', '/ipv6/dhcp-client') if row.get('disabled') == 'false')
+            print(json.dumps({'source_exact': script['source'] == pd.watch_source('lan4', 'ipv6pool'),
+                              'source_lines': script['source'].count('\n'),
+                              'hook_exact': client.get('script') == pd.HOOK}))
         elif name == 'poll':
             time.sleep(35)
         elif name == 'status':

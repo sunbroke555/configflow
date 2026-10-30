@@ -224,6 +224,9 @@ def test_hook_conflict_skips_only_this_stage(inspection):
     report, plan = preview(driver, ROUTER)
     section = report['ipv6_pd_guard']
     assert section['status'] == 'blocked' and '不能覆盖' in section['blockers'][0]
+    items = {item['role']: item for item in section['items']}
+    assert items['hook']['status'] == 'conflict'
+    assert items['script']['status'] == 'blocked' and items['script']['detail'] == '新建；本次跳过，不写入'
     assert not plan['blockers'] and stage(plan)['skipped'] and stage(plan)['ops'] == []
     assert any(item.startswith('IPv6 前缀变化保护本次跳过：') for item in plan['warnings'])
     result = execute(plan, driver, None)
