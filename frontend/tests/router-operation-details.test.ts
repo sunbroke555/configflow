@@ -115,6 +115,27 @@ describe('reviewable release operation details', () => {
     expect(JSON.stringify(groups)).not.toContain('ra-lifetime')
     expect(JSON.stringify(groups)).not.toContain('do-not-render')
   })
+  it('shows the cf-pd changes with the detected parameters, old and new fields, and owned removals', () => {
+    const install = operationDetails({ kind: 'ipv6_pd_guard_sync', summary: '更新 IPv6 前缀变化保护（lan4，地址池 ipv6pool）', enabled: true,
+      spec: { lan: 'lan4', pool: 'ipv6pool', client: '*0', client_interface: 'pppoe-out1', hold: 3600 },
+      changes: [
+        { role: 'scheduler', method: 'PUT', path: '/system/scheduler', values: { name: 'cf-pd-poll', interval: '30s' } },
+        { role: 'script', method: 'PATCH', path: '/system/script', id: '*S1', values: { source: ':local hold 3600\n:log info x' },
+          expected: { name: 'cf-pd-watch', source: ':local hold 1800\n:log info x', owner: 'admin' } },
+        { role: 'state', method: 'DELETE', path: '/ipv6/firewall/address-list', id: '*L1', expected: { list: 'cf-pd-last', address: '2001:db8::/64' } },
+      ] })
+    expect(install.map(group => group.title)).toEqual(['自动识别的参数', '新建', '修改', '删除'])
+    expect(install[0].rows.map(row => row.value)).toEqual(['lan4', 'ipv6pool', 'pppoe-out1', '3600'])
+    expect(install[1].rows[0]).toEqual({ label: '定时任务', value: 'name: cf-pd-poll\ninterval: 30s' })
+    expect(install[2].rows[0]).toEqual({ label: '脚本 · *S1', before: 'source:\n:local hold 1800\n:log info x', value: 'source:\n:local hold 3600\n:log info x' })
+    expect(install[3].rows[0].label).toBe('前缀记录 · *L1')
+    const withdraw = operationDetails({ kind: 'ipv6_pd_guard_sync', summary: '撤回', enabled: false, spec: null, changes: [
+      { role: 'hook', method: 'PATCH', path: '/ipv6/dhcp-client', id: '*0', values: { script: '' }, expected: { script: ':if (1) do={}', interface: 'pppoe-out1' } }] })
+    expect(withdraw.map(group => group.title)).toEqual(['修改'])
+    expect(withdraw[0].rows[0]).toEqual({ label: 'IPv6 DHCP 客户端 · *0', before: 'script: :if (1) do={}', value: 'script: 未设置' })
+    const record = operationDetails({ kind: 'ipv6_pd_guard_sync', summary: '记录', enabled: false, spec: null, changes: [] })
+    expect(record.map(group => group.title)).toEqual(['管理记录'])
+  })
   it('mounts detail rows only when expanded, searches every address and paginates large plans', async () => {
     const op = fixture(); op.previous = null
     op.spec = { sources: Array.from({ length: 120 }, (_, i) => `192.0.2.${i + 1}/32`), destinations: [], gateway: '192.0.2.3' }

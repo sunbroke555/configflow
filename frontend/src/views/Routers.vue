@@ -542,6 +542,48 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
       </SectionCard>
 
       <SectionCard
+        v-if="pdGuard"
+        data-router-ipv6-pd-guard
+        class="mt-4"
+        :padded="false"
+        title="IPv6 前缀变化保护"
+        :help="routerCopy.ipv6PdGuard.help"
+      >
+        <template #actions>
+          <StatusDot :tone="pdGuardStatus.tone" :label="pdGuardStatus.label" />
+        </template>
+        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] leading-relaxed max-md:px-4 max-sm:px-3">
+          <p v-if="pdGuard.lan" class="m-0">
+            监控 LAN：<span class="font-mono [overflow-wrap:anywhere]">{{ pdGuard.lan }}</span>
+            · 地址池 <span class="font-mono [overflow-wrap:anywhere]">{{ pdGuard.pool }}</span>
+            <template v-if="pdGuard.client"> · DHCP 客户端 <span class="font-mono [overflow-wrap:anywhere]">{{ pdGuard.client }}</span></template>
+          </p>
+          <p v-if="pdGuard.message" class="m-0">{{ pdGuard.message }}</p>
+          <p v-if="pdGuard.status === 'pending'" class="m-0 text-muted-foreground">在「预览发布」确认后才写入路由器。</p>
+          <p v-for="blocker in pdGuard.blockers" :key="blocker" role="alert" class="m-0 break-words text-warning-accent">{{ blocker }}</p>
+          <p v-for="warning in pdGuard.warnings" :key="warning" role="status" class="m-0 break-words text-warning-accent">{{ warning }}</p>
+          <p v-if="pdGuard.blockers.length" class="m-0 text-muted-foreground">其他路由、规则和 DNS 改动照常发布，只有这一项保留现状。</p>
+          <p v-if="pdGuard.rollback_script" class="m-0 text-muted-foreground">
+            路由器上还有手动安装留下的卸载脚本 <span class="font-mono">cf-pd-rollback</span>；ConfigFlow 不使用也不删除它。
+          </p>
+        </div>
+        <div v-if="pdGuard.items.length" class="cf-table-wrap">
+          <table class="cf-table min-w-[560px]">
+            <thead>
+              <tr><th>对象</th><th>说明</th><th>状态</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in pdGuard.items" :key="item.role">
+                <td class="whitespace-nowrap">{{ item.object }}</td>
+                <td class="min-w-[240px] whitespace-normal break-words text-[12px] text-muted-foreground">{{ item.detail || '—' }}</td>
+                <td><span :class="['chip', pdGuardItemInfo(item.status).chip]">{{ pdGuardItemInfo(item.status).label }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
+
+      <SectionCard
         v-if="report.routes.unmanaged_other.length || report.routes.extra.length || report.routes.retired_policy?.length"
         class="mt-4"
         :padded="false"
@@ -805,6 +847,20 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
                 <Textarea id="router-dns-guard-bypass" v-model="guardBypassText" :rows="3" class="font-mono" placeholder="每行一个，如 192.168.0.50 或 192.168.0.64/28" />
               </FormField>
             </template>
+            <div class="flex flex-col gap-1.5" data-router-ipv6-pd-guard-setting>
+              <div class="flex min-h-11 items-center justify-between gap-3">
+                <div class="flex min-w-0 items-center gap-1">
+                  <Label for="router-ipv6-pd-guard">IPv6 前缀变化保护</Label>
+                  <FieldHelp label="IPv6 前缀变化保护" :text="routerCopy.ipv6PdGuard.help" />
+                </div>
+                <Switch
+                  id="router-ipv6-pd-guard"
+                  :model-value="form.ipv6_pd_guard.enabled"
+                  @update:model-value="value => (form.ipv6_pd_guard.enabled = Boolean(value))"
+                />
+              </div>
+              <p class="m-0 text-xs leading-relaxed text-muted-foreground">{{ routerCopy.ipv6PdGuard.hint }}</p>
+            </div>
           </template>
         </form>
 
@@ -965,6 +1021,7 @@ interface RouterItem {
   ip_rule_sets?: string[]
   ros_policy_rule_sets?: string[]
   dns_guard?: DnsGuardSettings
+  ipv6_pd_guard?: { enabled: boolean }
   has_password: boolean
   last_probe?: { ok: boolean; version?: string; message?: string; at: string }
 }
@@ -981,6 +1038,23 @@ interface DnsGuardReport {
   status: 'disabled' | 'synced' | 'pending' | 'unknown'
   message: string
   items: { role: string; object: string; detail: string; status: 'synced' | 'pending'; paused: boolean }[]
+  blockers: string[]
+  warnings: string[]
+}
+
+type PdGuardStatus = 'disabled' | 'pending' | 'synced' | 'borrowed' | 'blocked'
+type PdGuardItemStatus = 'missing' | 'update' | 'conflict' | 'synced' | 'adopt' | 'borrowed' | 'remove' | 'blocked'
+interface PdGuardReport {
+  enabled: boolean
+  status: PdGuardStatus
+  message: string
+  lan: string
+  pool: string
+  client: string
+  hold: number
+  managed: boolean
+  rollback_script: boolean
+  items: { role: string; object: string; status: PdGuardItemStatus; detail: string }[]
   blockers: string[]
   warnings: string[]
 }
@@ -1029,6 +1103,24 @@ const guardOptions = [
   { key: 'block_dot', label: '拦截加密 DNS（853 端口）', copy: routerCopy.dnsGuardDot },
   { key: 'failover', label: 'OxiDNS 故障时自动暂停', copy: routerCopy.dnsGuardFailover }
 ] as const
+const PD_GUARD_STATUS: Record<PdGuardStatus, { label: string; tone: 'muted' | 'success' | 'warning' }> = {
+  disabled: { label: '未开启', tone: 'muted' },
+  pending: { label: '待发布', tone: 'warning' },
+  synced: { label: '已安装', tone: 'success' },
+  borrowed: { label: '已安装（沿用）', tone: 'success' },
+  blocked: { label: '需处理', tone: 'warning' }
+}
+const PD_GUARD_ITEM: Record<PdGuardItemStatus, { label: string; chip: string }> = {
+  missing: { label: '待安装', chip: 'chip-warn' },
+  update: { label: '待更新', chip: 'chip-warn' },
+  conflict: { label: '冲突', chip: 'chip-bad' },
+  synced: { label: '已同步', chip: 'chip-ok' },
+  adopt: { label: '一致，发布后接管', chip: 'chip-sky' },
+  borrowed: { label: '沿用', chip: 'chip-ok' },
+  remove: { label: '待撤回', chip: 'chip-warn' },
+  blocked: { label: '需处理', chip: 'chip-warn' }
+}
+const pdGuardItemInfo = (status: string) => PD_GUARD_ITEM[status as PdGuardItemStatus] || PD_GUARD_ITEM.blocked
 const DHCP_DNS_STATUS = {
   disabled: { label: '未关联', tone: 'muted' },
   synced: { label: '已同步', tone: 'success' },
@@ -1131,6 +1223,12 @@ async function copyIPv6DnsCommand() {
 }
 const dnsGuard = computed(() => report.value?.dns_guard as DnsGuardReport | undefined)
 const dnsGuardStatus = computed(() => DNS_GUARD_STATUS[dnsGuard.value?.status || 'disabled'])
+const pdGuard = computed(() => {
+  const value = report.value?.ipv6_pd_guard as PdGuardReport | undefined
+  // Nothing to show while the switch is off and ConfigFlow owns nothing.
+  return value && (value.enabled || value.status !== 'disabled') ? value : undefined
+})
+const pdGuardStatus = computed(() => PD_GUARD_STATUS[pdGuard.value?.status || 'disabled'] || PD_GUARD_STATUS.blocked)
 const reportRouter = ref<RouterItem | null>(null)
 const reportTime = ref('')
 const reportLoading = ref(false)
@@ -1170,7 +1268,8 @@ const emptyForm = () => ({
   dns_agent_id: NONE,
   ip_rule_sets: [] as string[],
   ros_policy_rule_sets: [] as string[],
-  dns_guard: guardDefaults()
+  dns_guard: guardDefaults(),
+  ipv6_pd_guard: { enabled: false }
 })
 const form = reactive(emptyForm())
 const guardBypassText = ref('')
@@ -1507,7 +1606,8 @@ const openEdit = async (router: RouterItem) => {
     dns_agent_id: router.dns_agent_id || NONE,
     ip_rule_sets: (router.ip_rule_sets || []).filter(id => router.type !== 'routeros' || !router.ros_policy_rule_sets?.includes(id)),
     ros_policy_rule_sets: [...(router.ros_policy_rule_sets || [])],
-    dns_guard: { ...guardDefaults(), ...router.dns_guard, bypass: [...(router.dns_guard?.bypass || [])] }
+    dns_guard: { ...guardDefaults(), ...router.dns_guard, bypass: [...(router.dns_guard?.bypass || [])] },
+    ipv6_pd_guard: { enabled: router.ipv6_pd_guard?.enabled === true }
   })
   guardBypassText.value = (router.dns_guard?.bypass || []).join('\n')
   keepPolicyOption.value = !!router.ros_policy_rule_sets?.length
@@ -1537,7 +1637,7 @@ const clearInspection = (routerId?: string) => {
 const submit = async () => {
   if (saving.value) return
   saving.value = true
-  const { dns_guard: guard, ...fields } = form
+  const { dns_guard: guard, ipv6_pd_guard: pdGuardSetting, ...fields } = form
   const payload = {
     ...fields,
     // Setup drafts link the DNS Agent later; only RouterOS can keep the guard on.
@@ -1545,6 +1645,7 @@ const submit = async () => {
       ...guard, enabled: form.type === 'routeros' && guard.enabled,
       bypass: guardBypassText.value.split(/[\s,，]+/).map(item => item.trim()).filter(Boolean)
     } }),
+    ...(props.setupDraftSession ? {} : { ipv6_pd_guard: { enabled: form.type === 'routeros' && pdGuardSetting.enabled } }),
     ros_policy_rule_sets: showPolicyOption.value ? [...form.ros_policy_rule_sets] : [],
     manage_return_routing: form.manage_return_routing === true,
     proxy_gateway_agent_id: form.proxy_gateway_agent_id === NONE ? '' : form.proxy_gateway_agent_id,
