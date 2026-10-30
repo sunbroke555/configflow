@@ -276,3 +276,13 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 - 完整运行（另一项测试结束、VM151 恢复实验基线后）：没有 `drop invalid` 时不提示；临时追加带 `cf-fwhint` 标记的出厂 forward 规则后，两张卡片给出同一条命令，`place-before` 指向新加的 `drop invalid`，预览警告只出现一次；经 `/rest/execute` 原样执行这条命令，RouterOS 接受，新规则正好位于 `drop invalid` 之前，重新生成报告后提示消失。随后撤掉出厂规则，只加一条限定探测地址 `fc00::c0fe` 的 `drop invalid`，避免影响共用 VM151 的其他测试。CT153 经 ROS 同口连到 CT152 上该地址的 TCP 服务，每个新连接耗时 6.59–6.60 秒；同一条放行命令加在它之前后，降到 1–2 毫秒。结束后删除全部临时规则、地址列表、CT152 上的测试地址和服务，防火墙、接口列表与 IPv6 路由和开始前一致；没有改动 `/ip firewall` 和 `/ip settings`。
 - 下一跳与重定向：现有 `fc00::/64` 路由的下一跳是 ULA `fdda:150::cf:15ff:fe00:52%ether2`，由 2026-10-30「真实 controller 与 RouterOS 验证」的旧补齐流程（注释 `cf-ipv6-readiness:…`）在优先 LLA 之前创建，现由 Fake-IP 发布按「沿用已有路由」保留；当前发布不再调用该补齐函数，新路由经 `_gateway()` 优先 LLA（本页 IPv6 规则集路由实验新建的路由均为 `fe80::cf:15ff:fe00:52%ether2`）。另一项补测确认 7.25 只对 LLA 下一跳发重定向且有限速，不能消除卡顿，提示不按下一跳类型取舍。
 - 观察：RouterOS 7.25 刚添加带 `connection-state` 的规则时，REST 会把它标为 `invalid=true`，不到 1 秒后恢复。检查会跳过无效规则，因此刚改完防火墙立即生成的报告可能暂时没有提示，稍后重新生成即可。
+
+## IPv4 同口转发防火墙提示（2026-10-31）
+
+`scripts/tests/ipv4_forward_hint_lab.py` 在测试服务器上运行，用本分支后端和预览数据的私有副本对 VM151 生成差异报告，不发布路由。实验路由器设为普通静态路由（不开自动配置回流、不选规则集），现有 `198.18.0.0/16` 路由经 ether2 指向 CT152（192.0.2.3）。只加 forward 链的出厂规则和 LAN/WAN 接口列表（标记 `cf-fw4hint`），不加 input 链规则，避免影响共用 VM151 的其他测试；CT153 保持原有 sysctl（开启转发，会忽略重定向）。
+
+- 没有 IPv4 filter 规则时不提示；CT153 经 ROS 同口连到 CT152 上 `198.18.240.0/20` 的 TCP 服务，5 个顺序连接加 10 个并发连接均为 1–6 毫秒。
+- 加上出厂 forward 规则（`drop invalid` 为 `*12`）后，「代理路由」给出 `/ip firewall filter add chain=forward action=accept in-interface=ether2 out-interface=ether2 comment="LAN to Mihomo via router" place-before=*12`，预览警告只出现一次且不阻止发布，旧的「建议开启自动配置回流」提示不再重复出现。把 `*12` 的注释改成别的文字后，命令仍指向 `*12`。
+- 同样的 15 个连接全部卡住：12 个约 6.6 秒，3 个约 13.4 秒。
+- 经 `/rest/execute` 原样执行这条命令，RouterOS 接受，新规则正好位于 `*12` 之前；重新生成报告后提示消失，15 个连接恢复到 1–8 毫秒。
+- 结束后删除全部标记规则、接收命令新增的规则、接口列表及成员，停止 CT152 上的测试服务并撤掉测试地址；`/ip firewall`（filter、nat、mangle、raw、address-list）、接口列表与成员、静态路由、`/ip settings` 及 CT152/CT153 上相关状态与开始前逐项一致。fasttrack 留下的动态 dummy 规则 `*C` 在开始前已存在，未变化。
