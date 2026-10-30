@@ -129,10 +129,11 @@ onUnmounted(() => {
 
 <template>
   <div v-if="lines.length" class="min-w-0 space-y-2 text-xs leading-relaxed" role="status" aria-live="polite" data-upstream-router-pending>
-    <div v-for="line in lines" :key="line.key" class="flex min-w-0 items-start gap-2" :data-upstream-router="line.key || undefined" :data-state="line.state">
-      <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning-accent" aria-hidden="true" />
-      <div class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
-        <div class="min-w-0 flex-[1_1_14rem] [overflow-wrap:anywhere]">
+    <div v-for="line in lines" :key="line.key" class="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5"
+      :data-upstream-router="line.key || undefined" :data-state="line.state">
+      <div class="flex min-w-0 flex-[1_1_14rem] items-start gap-2 [overflow-wrap:anywhere]">
+        <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning-accent" aria-hidden="true" />
+        <div class="min-w-0">
           <p class="m-0 text-foreground">
             <template v-if="line.state === 'pending'">上级路由「{{ line.name }}」有 <span class="num">{{ line.count }}</span> 项待发布</template>
             <template v-else-if="line.state === 'blocked'">上级路由「{{ line.name }}」有改动暂时无法发布</template>
@@ -143,10 +144,11 @@ onUnmounted(() => {
             <template v-if="line.profile">配置空间「{{ line.profile }}」<template v-if="line.detail"> · </template></template>{{ line.detail }}
           </p>
         </div>
-        <Button as-child variant="outline" size="sm" class="shrink-0 pointer-coarse:min-h-11">
-          <a :href="hrefOf(line.to)" @click="go($event, line.to)">{{ line.action }}</a>
-        </Button>
       </div>
+      <!-- 换行到下一行时与文字对齐（图标 16px + 间距 8px）。 -->
+      <Button as-child variant="outline" size="sm" class="ml-6 shrink-0 pointer-coarse:min-h-11">
+        <a :href="hrefOf(line.to)" @click="go($event, line.to)">{{ line.action }}</a>
+      </Button>
     </div>
   </div>
 </template>

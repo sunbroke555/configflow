@@ -36,6 +36,8 @@ logger = get_logger(__name__)
 
 def _change_word(ops: List[Dict[str, Any]]) -> str:
     kinds = {str(op.get('kind') or '') for op in ops}
+    if kinds == {'route_comment'}:  # an existing hand-made route is tagged, not changed
+        return '待接管'
     if kinds and all(kind == 'add' or kind.endswith('_add') for kind in kinds):
         return '待添加'
     if kinds and all(kind == 'delete' or kind.endswith(('_delete', '_remove')) for kind in kinds):

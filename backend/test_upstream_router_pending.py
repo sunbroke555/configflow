@@ -55,6 +55,7 @@ def test_pending_counts_the_preview_changes_and_words_ipv6_fakeip_like_the_repor
     ({'enabled': True}, 'ipv6_dns', ['ipv6_dns_update'], '待关闭'),
     ({}, 'routes', ['route_delete', 'policy_route_delete'], '待移除'),
     ({}, 'routes', ['route_add', 'route_delete'], '待更新'),
+    ({}, 'routes', ['route_comment'], '待接管'),
     ({}, 'return_cleanup', ['return_routing_remove'], '待移除'),
 ])
 def test_item_status_words(section, key, ops, word):
