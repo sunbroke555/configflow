@@ -293,6 +293,7 @@ func CapabilitiesHandler(cfg *Config) http.HandlerFunc {
 			result["mihomo_resources"] = mihomoGeoAssetNames(filepath.Dir(cfg.ConfigPath))
 			result["config_directory"] = filepath.Dir(cfg.ConfigPath)
 			result["aio_forwarding_protocols"] = []int{1}
+			result["ipv6_readiness_protocols"] = []int{1}
 		}
 		if cfg.ServiceType == "oxidns" {
 			result["oxidns_ha_protocols"] = []int{oxidnsHAProtocol}

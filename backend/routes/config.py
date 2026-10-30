@@ -302,7 +302,10 @@ def handle_custom_mihomo_config():
     if request.method == 'GET':
         # 获取自定义配置（从嵌套结构中读取）
         mihomo_config = config_data['mihomo'].get('custom_config', '')
+        from backend.converters.mihomo import _default_mihomo_template
+        import yaml
         return jsonify({'config': mihomo_config,
+                        'default_config': yaml.safe_dump(_default_mihomo_template(), allow_unicode=True, sort_keys=False),
                         'provider_update_interval': config_data['mihomo'].get('provider_update_interval', 3600)})
 
     elif request.method == 'POST':
@@ -321,7 +324,12 @@ def handle_custom_mihomo_config():
             if custom_config and custom_config.strip():
                 try:
                     import yaml as _yaml
-                    _yaml.safe_load(custom_config)
+                    document = _yaml.safe_load(custom_config)
+                    from backend.converters.mihomo import validate_ipv6_flags, CustomConfigYAMLError
+                    try:
+                        validate_ipv6_flags(document)
+                    except CustomConfigYAMLError as error:
+                        return jsonify(success=False, message=str(error)), 400
                 except _yaml.YAMLError as e:
                     return jsonify({
                         'success': False,

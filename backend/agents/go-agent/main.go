@@ -243,6 +243,7 @@ func runAgent() int {
 	StartHeartbeatLoop(cfg)
 	routes.ReapplyReturnRouting(toRoutesConfig(cfg))
 	routes.ReapplyLinuxGateway(toRoutesConfig(cfg))
+	routes.ReapplyIPv6Readiness(toRoutesConfig(cfg))
 	routes.ReapplyOxiDNSHA(toRoutesConfig(cfg))
 	routes.StartDNSWatchdog(toRoutesConfig(cfg))
 

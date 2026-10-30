@@ -48,6 +48,7 @@ def register_blueprints(app):
     from backend.routes import profiles
     from backend.routes import linux_gateway
     from backend.routes import linux_gateway_agents
+    from backend.routes import ipv6_readiness
     from backend.routes import gateway_installations
     from backend.routes import docker_ha_installation
     from backend.routes import gateway_onboarding

@@ -24,6 +24,17 @@ class CustomConfigYAMLError(Exception):
     """
 
 
+def validate_ipv6_flags(document):
+    """Do not let a visual boolean become a misspelled/quoted YAML string."""
+    if not isinstance(document, dict):
+        return
+    if 'ipv6' in document and type(document['ipv6']) is not bool:
+        raise CustomConfigYAMLError('ipv6 必须为 true 或 false，不能是字符串或拼写错误的值')
+    dns = document.get('dns')
+    if isinstance(dns, dict) and 'ipv6' in dns and type(dns['ipv6']) is not bool:
+        raise CustomConfigYAMLError('dns 下的 ipv6 必须为 true 或 false，不能是字符串或拼写错误的值')
+
+
 def _default_mihomo_template() -> dict:
     """首次初始化时的内嵌默认模板。
 
@@ -359,6 +370,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                 f'mihomo.custom_config 不是 mapping，得到 {type(mihomo_config).__name__}'
             )
 
+    validate_ipv6_flags(mihomo_config)
     normalize_find_process_mode(mihomo_config)
 
     # 仅 Agent 推送场景同步 MosDNS 自定义 Hosts（内网域名映射）

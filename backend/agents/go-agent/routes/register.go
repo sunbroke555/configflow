@@ -22,6 +22,11 @@ func RegisterRoutes(mux *http.ServeMux, cfg *Config) {
 	mux.HandleFunc("/api/dns/active", AuthMiddleware(cfg, DNSActiveHandler(cfg)))
 	mux.HandleFunc("/api/dns/peer", AuthMiddleware(cfg, DNSPeerHandler(cfg)))
 	mux.HandleFunc("/api/return-routing", AuthMiddleware(cfg, ReturnRoutingHandler(cfg)))
+	if cfg.ServiceType == "mihomo" {
+		mux.HandleFunc("/api/ipv6-readiness", AuthMiddleware(cfg, IPv6ReadinessHandler(cfg, "status")))
+		mux.HandleFunc("/api/ipv6-readiness/prepare", AuthMiddleware(cfg, IPv6ReadinessHandler(cfg, "prepare")))
+		mux.HandleFunc("/api/ipv6-readiness/probe", AuthMiddleware(cfg, IPv6ReadinessHandler(cfg, "probe")))
+	}
 	// DNS 高可用只属于 OxiDNS Agent；其他类型不注册，请求得到 404。
 	if cfg.ServiceType == "oxidns" {
 		mux.HandleFunc("/api/oxidns-ha", AuthMiddleware(cfg, OxiDNSHAHandler(cfg)))
