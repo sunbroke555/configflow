@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import FieldHelp from '@/components/common/FieldHelp.vue'
 import { optionHelp } from '@/lib/optionCopy'
-import { readMihomoIPv6, setMihomoIPv6, type MihomoIPv6Field } from '@/lib/mihomoIPv6'
+import { readMihomoIPv6, setMihomoIPv6WithDetails, type MihomoIPv6Field } from '@/lib/mihomoIPv6'
 import MihomoIPv6Readiness from './MihomoIPv6Readiness.vue'
 
 const content = defineModel<string>({ required: true })
@@ -15,17 +15,20 @@ const emit = defineEmits<{ busy: [value: boolean] }>()
 const checksOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
+const changeNotice = ref('')
 const id = useId()
 const state = computed(() => readMihomoIPv6(content.value, props.defaultConfig))
 const applyHint = '开关与 YAML 同步，保存并发布后生效。'
 const fields: Array<{ key: MihomoIPv6Field; label: string; help: string }> = [
   { key: 'core', label: 'Mihomo 使用 IPv6', help: optionHelp('需要 Mihomo 通过 IPv6 连接节点或访问网站时开启。', '设备本身需有可用的 IPv6 网络。客户端仍可使用 IPv4 分流，不必同时开启「DNS 返回 IPv6 地址」。') },
-  { key: 'dns', label: 'DNS 返回 IPv6 地址', help: optionHelp('希望 DNS 给手机、电脑返回 IPv6 地址时开启；客户端只走 IPv4 分流时可关闭。', '开启还需 IPv6 路由可用；若用 OxiDNS，注意「优先 IPv4」可能压下答案。关闭仍可用 IPv6 节点，需「Mihomo 使用 IPv6」开启且设备网络可用。') },
+  { key: 'dns', label: 'DNS 返回 IPv6 地址', help: optionHelp('希望 DNS 给手机、电脑返回 IPv6 地址时开启；客户端只走 IPv4 分流时可关闭。', 'Fake-IP 模式下会补上缺失的 IPv6 Fake-IP 网段，已有网段沿用。保存后到「上级路由」查看差异并发布对应路由；TUN 需已开启。若用 OxiDNS，注意「优先 IPv4」可能压下答案。') },
 ]
 function change(field: MihomoIPv6Field, value: boolean) {
   if (props.disabled || busy.value) return
   try {
-    content.value = setMihomoIPv6(content.value, field, value, props.defaultConfig)
+    const changed = setMihomoIPv6WithDetails(content.value, field, value, props.defaultConfig)
+    content.value = changed.content
+    changeNotice.value = changed.notice
     error.value = ''
   } catch (failure) {
     error.value = failure instanceof Error ? failure.message : '无法修改，请在 YAML 中调整。'
@@ -38,7 +41,7 @@ function setChecksOpen(value: boolean) {
 function guardDismiss(event: Event) {
   if (busy.value) event.preventDefault()
 }
-watch(() => [props.open, props.profileId, props.preferredAgentId], () => { checksOpen.value = false; error.value = '' })
+watch(() => [props.open, props.profileId, props.preferredAgentId], () => { checksOpen.value = false; error.value = ''; changeNotice.value = '' })
 watch(busy, value => emit('busy', value))
 </script>
 
@@ -64,6 +67,7 @@ watch(busy, value => emit('busy', value))
           </div>
         </div>
       </div>
+      <p v-if="changeNotice" class="mb-0 mt-2 break-words text-xs text-muted-foreground" role="status">{{ changeNotice }}</p>
       <p v-if="state.error || error" class="mb-0 mt-2 break-words text-xs text-warning-accent" role="alert">{{ error || state.error }}</p>
     </div>
     <DialogContent v-if="checksOpen" class="flex min-h-0 max-w-2xl flex-col gap-0 overflow-hidden p-0 max-sm:p-0" :show-close-button="!busy" :aria-describedby="undefined" data-mihomo-ipv6-dialog @escape-key-down="guardDismiss" @interact-outside="guardDismiss">

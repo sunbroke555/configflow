@@ -223,6 +223,10 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
         ros_address_lists.invalidate(driver)
         state = _verify('routes', checks, driver, None)
         _verify('nat_bypass', checks, driver, None, state)  # nothing written in between
+        if checks.get('ipv6_fakeip') is not None:
+            # IPv6 is never written by remote-rule sync, but outside edits during
+            # this IPv4 delta must fail readback and compensate our own writes.
+            _verify('ipv6_fakeip', checks, driver, None)
         ensure_current(force=True)
     except (RouterError, RuntimeError) as error:
         try:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'yaml'
-import { readMihomoIPv6, setMihomoIPv6 } from '@/lib/mihomoIPv6'
+import { DEFAULT_MIHOMO_FAKE_IPV6_RANGE, readMihomoIPv6, setMihomoIPv6, setMihomoIPv6WithDetails } from '@/lib/mihomoIPv6'
 
 describe('Mihomo IPv6 YAML controls', () => {
   it('shows manually written values independently without changing the document', () => {
@@ -89,5 +89,111 @@ describe('Mihomo IPv6 YAML controls', () => {
     const source = 'base: &base\n  dns:\n    ipv6: false\n    nameserver: [223.5.5.5]\n<<: *base\n'
     expect(readMihomoIPv6(source).dns).toMatchObject({ value: false, editable: false })
     expect(() => setMihomoIPv6(source, 'dns', true)).toThrow('合并')
+  })
+})
+
+
+describe('Mihomo IPv6 Fake-IP range auto-fill', () => {
+  const fakeIP = 'ipv6: true\ndns:\n  enable: true\n  ipv6: false # keep DNS note\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver: [223.5.5.5]\ntun:\n  enable: false\n'
+
+  it('adds the missing range only when DNS IPv6 is enabled and leaves other settings intact', () => {
+    const edit = setMihomoIPv6WithDetails(fakeIP, 'dns', true)
+    expect(edit.addedFakeIPv6Range).toBe(true)
+    expect(edit.notice).toContain('上级路由')
+    expect(edit.notice).toContain('查看差异并发布路由')
+    expect(edit.content).toContain('ipv6: true # keep DNS note')
+    expect(parse(edit.content)).toEqual({ ...parse(fakeIP), dns: { ...parse(fakeIP).dns,
+      ipv6: true, 'fake-ip-range6': DEFAULT_MIHOMO_FAKE_IPV6_RANGE } })
+    expect(parse(edit.content).tun.enable).toBe(false)
+    const repeated = setMihomoIPv6WithDetails(edit.content, 'dns', true)
+    expect(repeated.addedFakeIPv6Range).toBe(false)
+    expect(repeated.notice).toBe('')
+    expect(repeated.content).toBe(edit.content)
+  })
+
+  it('fills the range when enabling the core activates previously configured DNS IPv6', () => {
+    const source = fakeIP.replace('ipv6: true', 'ipv6: false').replace('  ipv6: false', '  ipv6: true')
+    const edit = setMihomoIPv6WithDetails(source, 'core', true)
+    expect(edit.addedFakeIPv6Range).toBe(true)
+    expect(parse(edit.content)).toMatchObject({ ipv6: true, dns: { ipv6: true, 'fake-ip-range6': DEFAULT_MIHOMO_FAKE_IPV6_RANGE } })
+  })
+
+  it('uses the actual default template for a new empty draft', () => {
+    const template = fakeIP.replace('ipv6: true\n', '')
+    const edit = setMihomoIPv6WithDetails('', 'dns', true, template)
+    expect(edit.addedFakeIPv6Range).toBe(true)
+    expect(parse(edit.content)).toEqual({ ...parse(template), dns: { ...parse(template).dns,
+      ipv6: true, 'fake-ip-range6': DEFAULT_MIHOMO_FAKE_IPV6_RANGE } })
+  })
+
+  it.each([
+    ['DNS off', fakeIP.replace('enable: true', 'enable: false'), 'dns'],
+    ['DNS not explicitly enabled', fakeIP.replace('  enable: true\n', ''), 'dns'],
+    ['redir-host mode', fakeIP.replace('enhanced-mode: fake-ip', 'enhanced-mode: redir-host'), 'dns'],
+    ['mode omitted', fakeIP.replace('  enhanced-mode: fake-ip\n', ''), 'dns'],
+    ['core disabled', fakeIP.replace('ipv6: true', 'ipv6: false'), 'dns'],
+    ['only IPv6 node support requested', fakeIP, 'core'],
+  ] as const)('does not change the setup for %s', (_name, source, field) => {
+    const edit = setMihomoIPv6WithDetails(source, field, true)
+    expect(edit.addedFakeIPv6Range).toBe(false)
+    expect(parse(edit.content).dns['fake-ip-range6']).toBeUndefined()
+    const expected = parse(source)
+    if (field === 'core') expected.ipv6 = true
+    else expected.dns.ipv6 = true
+    expect(parse(edit.content)).toEqual(expected)
+  })
+
+  it('preserves an existing custom range and leaves it in place when either switch is disabled', () => {
+    const source = fakeIP.replace('  fake-ip-range:', '  fake-ip-range6: fd12:3456:789a::1/64 # custom subnet\n  fake-ip-range:')
+    const enabled = setMihomoIPv6WithDetails(source, 'dns', true)
+    expect(enabled.addedFakeIPv6Range).toBe(false)
+    expect(enabled.content).toContain('fake-ip-range6: fd12:3456:789a::1/64 # custom subnet')
+    for (const field of ['core', 'dns'] as const) {
+      const edit = setMihomoIPv6WithDetails(enabled.content, field, false)
+      expect(parse(edit.content).dns['fake-ip-range6']).toBe('fd12:3456:789a::1/64')
+      expect(edit.addedFakeIPv6Range).toBe(false)
+      expect(edit.notice).toBe('')
+    }
+  })
+
+  it.each(['null', '""', 'false', '123'])('does not overwrite an explicitly malformed range (%s)', value => {
+    const source = fakeIP.replace('  fake-ip-range:', `  fake-ip-range6: ${value}\n  fake-ip-range:`)
+    const edit = setMihomoIPv6WithDetails(source, 'dns', true)
+    expect(edit.addedFakeIPv6Range).toBe(false)
+    expect(edit.notice).toContain('未自动覆盖')
+    expect(parse(edit.content).dns['fake-ip-range6']).toEqual(parse(source).dns['fake-ip-range6'])
+  })
+
+  it('keeps inherited custom ranges and aliases rather than masking them with defaults', () => {
+    const source = 'dns-base: &base\n  fake-ip-range6: fd12:3456::1/64\nrange: &range fd99::1/64\nipv6: true\ndns:\n  <<: *base\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\n'
+    const inherited = setMihomoIPv6WithDetails(source, 'dns', true)
+    expect(inherited.addedFakeIPv6Range).toBe(false)
+    expect(inherited.content).toContain('<<: *base')
+    expect(inherited.content.match(/fake-ip-range6:/g)).toHaveLength(1)
+    const aliased = setMihomoIPv6WithDetails(source.replace('  <<: *base', '  fake-ip-range6: *range'), 'dns', true)
+    expect(aliased.addedFakeIPv6Range).toBe(false)
+    expect(aliased.content).toContain('fake-ip-range6: *range')
+  })
+
+  it.each([
+    'base: &base\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\ndns: *base\nipv6: false\n',
+    'ipv6: false\ndns: &dns\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\nother: *dns\n',
+    'base: &base\n  dns:\n    enable: true\n    ipv6: true\n    enhanced-mode: fake-ip\n<<: *base\nipv6: false\n',
+  ])('changes only the core when the missing range belongs to shared or inherited DNS', source => {
+    const edit = setMihomoIPv6WithDetails(source, 'core', true)
+    expect(edit.addedFakeIPv6Range).toBe(false)
+    expect(edit.notice).toContain('未自动补充')
+    expect(edit.notice).toContain('fake-ip-range6')
+    expect(edit.content).not.toContain('fake-ip-range6:')
+    expect(edit.content).toContain('ipv6: true')
+  })
+
+  it('can add a local range next to inherited DNS options without modifying the source anchor', () => {
+    const source = 'base: &base\n  enable: true\n  enhanced-mode: fake-ip\ndns:\n  <<: *base\n  ipv6: false\n'
+    const edit = setMihomoIPv6WithDetails(source, 'dns', true)
+    expect(edit.addedFakeIPv6Range).toBe(true)
+    expect(edit.content).toContain('<<: *base')
+    expect(parse(edit.content).base).toEqual(parse(source).base)
+    expect(parse(edit.content).dns['fake-ip-range6']).toBe(DEFAULT_MIHOMO_FAKE_IPV6_RANGE)
   })
 })

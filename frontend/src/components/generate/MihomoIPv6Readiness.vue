@@ -196,7 +196,7 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
           <Button v-if="result.can_prepare" type="button" variant="outline" class="min-h-11" :disabled="!canPrepare" @click="prepare">补齐缺少的配置</Button>
         </template>
       </MihomoIPv6Verification>
-      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐会保存缺少的主机参数和路由，并登记开机恢复。启用 IPv6 Fake-IP 时，可能重新加载正在运行的 Mihomo。修改 YAML 仍需单独保存并发布。</p>
+      <p v-if="result.can_prepare" class="m-0 text-xs leading-relaxed text-muted-foreground">补齐只处理 Mihomo 主机参数及开机恢复；启用 IPv6 Fake-IP 时可能重新加载正在运行的 Mihomo。ROS 路由在「上级路由 → 差异报告」中统一预览和发布。</p>
     </template>
     <MihomoIPv6VerificationSettings v-if="selected" :open="open" :agent-id="selectedId" :profile-id="profileId" :disabled="busy || disabled" @saved="verificationVersion++" />
   </div>

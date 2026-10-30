@@ -234,6 +234,34 @@
             </tbody>
           </table>
         </div>
+        <div v-if="ipv6FakeIP" class="min-w-0 border-t border-border" data-router-ipv6-fakeip>
+          <div class="flex min-w-0 flex-col gap-2 px-5 py-4 max-md:px-4 max-sm:px-3">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <h3 class="m-0 min-w-0 text-[13px] font-semibold">IPv6 Fake-IP 分流路由</h3>
+              <span :class="['chip', ipv6FakeIPStatusInfo(ipv6FakeIP.status).chip]">{{ ipv6FakeIPStatusInfo(ipv6FakeIP.status).label }}</span>
+            </div>
+            <p class="m-0 text-[12.5px] leading-relaxed text-muted-foreground">根据已保存的 Mihomo 配置，把对应 IPv6 网段交给 Mihomo；改动随上方「预览发布」一起应用。</p>
+            <p v-for="blocker in ipv6FakeIP.blockers || []" :key="blocker" role="alert" class="m-0 text-[12.5px] leading-relaxed text-destructive-accent [overflow-wrap:anywhere]">{{ blocker }}</p>
+            <p v-for="warning in ipv6FakeIP.warnings || []" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <p v-if="!ipv6FakeIP.items.length" class="m-0 text-[12.5px] text-muted-foreground">{{ !ipv6FakeIP.enabled ? '当前保存的配置未启用 IPv6 Fake-IP。' : '暂无可确认的 IPv6 Fake-IP 路由，请查看上方提示。' }}</p>
+          </div>
+          <div v-if="ipv6FakeIP.items.length" class="cf-table-wrap">
+            <table class="cf-table cf-mobile-records w-full table-fixed" aria-label="IPv6 Fake-IP 分流路由" role="table">
+              <thead role="rowgroup"><tr role="row"><th role="columnheader">网段</th><th role="columnheader">下一跳</th><th role="columnheader">状态</th><th role="columnheader">说明</th></tr></thead>
+              <tbody role="rowgroup">
+                <tr v-for="(item, index) in ipv6FakeIP.items" :key="`${item.cidr}-${index}`" role="row">
+                  <td role="cell" data-label="网段" class="min-w-0 font-mono text-[12px] whitespace-normal [overflow-wrap:anywhere]">{{ item.cidr || '未确定' }}</td>
+                  <td role="cell" data-label="下一跳" class="min-w-0 font-mono text-[12px] whitespace-normal [overflow-wrap:anywhere]">{{ item.gateway || '未确定' }}</td>
+                  <td role="cell" data-label="状态"><span :class="['chip', ipv6FakeIPStatusInfo(item.status).chip]">{{ ipv6FakeIPStatusInfo(item.status).label }}</span></td>
+                  <td role="cell" data-label="说明" class="cf-record-wide min-w-0 text-[12px] whitespace-normal text-muted-foreground [overflow-wrap:anywhere]">
+                    <p class="m-0">{{ item.detail || '—' }}</p>
+                    <p v-if="item.status === 'borrowed'" class="mt-1 mb-0">本次仅沿用，不接管；关闭 IPv6 Fake-IP 后不会自动撤销这条路由。</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </SectionCard>
 
       <SectionCard
@@ -762,6 +790,14 @@ type RouterType = 'ikuai' | 'routeros'
 type Status = 'synced' | 'adoptable' | 'conflict' | 'missing' | 'extra' | 'not_required' | 'unknown' | 'pending'
 type ReportSummary = Partial<Record<Status, number>>
 type DhcpDnsStatus = 'disabled' | 'synced' | 'pending' | 'unknown'
+type IPv6FakeIPStatus = 'synced' | 'missing' | 'pending' | 'conflict' | 'unknown' | 'disabled' | 'borrowed'
+interface IPv6FakeIPReport {
+  enabled: boolean
+  status: IPv6FakeIPStatus
+  items: { cidr: string; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
+  warnings: string[]
+  blockers: string[]
+}
 
 interface DhcpDnsReport {
   status: DhcpDnsStatus
@@ -831,6 +867,18 @@ const STATUS: Record<Status, { label: string; chip: string }> = {
   pending: { label: '待更新', chip: 'chip-warn' }
 }
 const statusInfo = (status: string) => STATUS[status as Status] || STATUS.unknown
+// IPv6 routes have their own ownership/status meanings; do not reuse NAT's
+// not_required label or describe borrowed routes as ConfigFlow-managed.
+const IPV6_FAKEIP_STATUS: Record<IPv6FakeIPStatus, { label: string; chip: string }> = {
+  synced: { label: '已同步', chip: 'chip-ok' },
+  missing: { label: '待添加', chip: 'chip-warn' },
+  pending: { label: '待更新', chip: 'chip-warn' },
+  conflict: { label: '冲突', chip: 'chip-bad' },
+  unknown: { label: '待确认', chip: 'chip-warn' },
+  disabled: { label: '未启用', chip: '' },
+  borrowed: { label: '沿用已有路由', chip: '' },
+}
+const ipv6FakeIPStatusInfo = (status: string) => IPV6_FAKEIP_STATUS[status as IPv6FakeIPStatus] || IPV6_FAKEIP_STATUS.unknown
 const disabledNatRuleLabel = (rule: { comment?: string; rule_id: string }) => rule.comment || rule.rule_id
 const DNS_GUARD_STATUS = {
   disabled: { label: '未开启', tone: 'muted' },
@@ -896,6 +944,7 @@ const busyId = ref('')
 const busyAction = ref<'probe' | 'report' | ''>('')
 const report = ref<any>(null)
 const reportSummary = computed(() => (report.value?.summary || {}) as ReportSummary)
+const ipv6FakeIP = computed(() => report.value?.ipv6_fakeip as IPv6FakeIPReport | undefined)
 const dhcpDns = computed(() => report.value?.dhcp_dns as DhcpDnsReport | undefined)
 const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'disabled'])
 const dnsGuard = computed(() => report.value?.dns_guard as DnsGuardReport | undefined)

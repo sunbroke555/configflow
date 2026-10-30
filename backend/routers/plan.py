@@ -45,6 +45,7 @@ STAGE_TITLES = {
     'nat_bypass': '主路由 NAT 免转换',
     'dhcp_dns': 'DHCP DNS',
     'dns_guard': 'DNS 劫持',
+    'ipv6_fakeip': 'IPv6 Fake-IP 分流路由',
     'return_cleanup': '移除 mihomo 回流规则',
 }
 
@@ -672,6 +673,12 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
          'note': ('仅更新所选 mihomo 网关所在的唯一 DHCP 网段；替换原 DNS 列表，客户端续租或重新连接后生效。'
                   if manage_dns else '未选择 DHCP DNS 服务器：本次保留现有 DNS 配置。')},
     ]
+    ipv6 = state.ipv6_fakeip_plan
+    if ipv6 is not None:
+        blockers.extend(ipv6['blockers'])
+        warnings.extend(ipv6['warnings'])
+        stages.insert(2, {'key': 'ipv6_fakeip', 'title': STAGE_TITLES['ipv6_fakeip'], 'manual': manual,
+                          'ops': ipv6['ops'], 'note': '仅管理本功能已核实归属的 IPv6 Fake-IP 路由；已有其他路由沿用并保留原归属。'})
     if guard is not None:
         stages.append({
             'key': 'dns_guard', 'title': STAGE_TITLES['dns_guard'], 'manual': manual, 'ops': guard_ops,
@@ -690,6 +697,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         'nat_not_required': [{'cidr': item['cidr'], 'gateway': gateway}
                              for item in nat_items if item['status'] == 'not_required'],
     }
+    if ipv6 is not None:
+        checks['ipv6_fakeip'] = ipv6['check']
     if listed.get('check') is not None:
         checks['nat_list'] = listed['check']
     if policy:
@@ -718,6 +727,8 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
         evidence['nat_list'] = listed['evidence']
     if ros_policy is not None:
         evidence = {'nat': evidence, 'ros_policy': ros_policy.get('evidence'), 'request': ros_policy.get('request')}
+    if ipv6 is not None:
+        evidence = {'nat': evidence, 'ipv6_fakeip': ipv6['evidence'], 'ipv6_check': ipv6['check']}
     dns_evidence = ({'agent_id': router['dns_agent_id'], 'target_dns': dns['target_dns'], 'gateway': gateway,
                      'state': as_dict(state.dhcp_dns)} if manage_dns else None)
     if dns_evidence is not None and desired.get('dns_ha'):

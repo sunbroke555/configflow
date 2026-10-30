@@ -134,6 +134,10 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
             state: Optional[RouterState] = None) -> Optional[RouterState]:
     """Read back one stage. ``state`` reuses a read made with no write since;
     routes and NAT return the state they checked."""
+    if stage == 'ipv6_fakeip':
+        from backend.routers.ipv6_fakeip import verify
+        verify(driver, checks['ipv6_fakeip'])
+        return
     if stage == 'dns_guard':
         from backend.routers.dns_guard import verify
         verify(driver, checks['dns_guard'])
@@ -297,6 +301,9 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                     raise ReleaseError('未启用的发布阶段包含写入操作，请重新预览')
                 continue
             if not stage['ops']:
+                if current == 'ipv6_fakeip':
+                    _verify(current, plan['checks'], driver, agent)
+                    record({'stage': current, 'summary': '回读确认 IPv6 Fake-IP 路由与计划一致', 'status': 'verified'})
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:
                     unchanged = _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认来源策略路由与计划一致', 'status': 'verified'})
@@ -327,6 +334,8 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 # immediately before advertising it, including unchanged routes.
                 # Both checks share one read: nothing is written in between.
                 state = _verify('routes', plan['checks'], driver, agent)
+                if plan['checks'].get('ipv6_fakeip') is not None:
+                    _verify('ipv6_fakeip', plan['checks'], driver, agent)
                 _verify('nat_bypass', plan['checks'], driver, agent, state)
                 dhcp = driver.read_dhcp_dns()
                 checked_dns_target(plan['checks']['dhcp_dns'], dhcp)
@@ -338,6 +347,8 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 # Hijacked clients receive fake-ip answers at once; the proxy
                 # routes and their NAT protection must already be in place.
                 state = _verify('routes', plan['checks'], driver, agent)
+                if plan['checks'].get('ipv6_fakeip') is not None:
+                    _verify('ipv6_fakeip', plan['checks'], driver, agent)
                 _verify('nat_bypass', plan['checks'], driver, agent, state)
 
             def finished(op, undo, ok=True):

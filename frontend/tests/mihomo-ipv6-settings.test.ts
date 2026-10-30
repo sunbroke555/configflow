@@ -29,6 +29,17 @@ describe('Mihomo IPv6 settings controls', () => {
     expect(controls.map(control => control.props('modelValue'))).toEqual([false, true])
   })
 
+  it('fills a missing IPv6 Fake-IP range in the draft and directs route publication to the upstream report', async () => {
+    const wrapper = mount('ipv6: true\ndns:\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\ntun:\n  enable: true\n')
+    wrapper.findAllComponents(Switch)[1].vm.$emit('update:modelValue', true)
+    await wrapper.vm.$nextTick()
+    const changed = wrapper.emitted('update:modelValue')?.[0][0] as string
+    expect(parse(changed).dns).toMatchObject({ ipv6: true, 'fake-ip-range6': 'fc00::1/64' })
+    expect(wrapper.get('[role="status"]').text()).toContain('上级路由')
+    expect(wrapper.get('[role="status"]').text()).toContain('查看差异并发布路由')
+    expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
+  })
+
   it('does not write merely because a missing field has a default', () => {
     const wrapper = mount('mixed-port: 7890\n')
     expect(wrapper.findAllComponents(Switch).map(control => control.props('modelValue'))).toEqual([true, false])

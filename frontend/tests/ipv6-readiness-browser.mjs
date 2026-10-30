@@ -35,7 +35,7 @@ import MihomoSettings from './src/components/generate/MihomoSettings.vue'
 const open = ref(true)
 </script><template><button style="padding:16px" @click="open = true">打开设置</button><MihomoSettings v-model:open="open" profile-id="bound" preferred-agent-id="gw" context-label="家庭配置 · 客厅 Mihomo 网关（IPv4 分流，IPv6 节点出口）" /></template>`)
 
-const initialYAML = '# 保留用户注释\nipv6: true\nmixed-port: 7890\ndns:\n  enable: true\n  ipv6: false # 单独控制 AAAA 答案\n  listen: 0.0.0.0:1053\n  fake-ip-range: 198.18.0.1/16\ntun:\n  enable: true\n  auto-route: true\n'
+const initialYAML = '# 保留用户注释\nipv6: true\nmixed-port: 7890\ndns:\n  enable: true\n  ipv6: false # 单独控制 AAAA 答案\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\ntun:\n  enable: true\n  auto-route: true\n'
 const target = { id: 'gw', name: '客厅 Mihomo 网关（保持 IPv4 分流）', service_type: 'mihomo', profile_id: 'bound', status: 'online', enabled: true }
 function readiness(prepared = false) {
   return { success: true, agent_id: 'gw', profile_id: 'bound', config_revision: 7, host: {},
@@ -227,6 +227,7 @@ try {
       await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).waitFor()
       assert.equal(await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).getAttribute('aria-checked'), 'true')
       assert.ok(yaml.includes('# 保留用户注释') && yaml.includes('# 单独控制 AAAA 答案'))
+      assert.ok(yaml.includes('fake-ip-range6: fc00::1/64'), 'Enabling DNS IPv6 fills the missing range in the draft')
       report.scenarios.push({ width, theme, state: 'prepare-probe-edit-save-reopen', writes })
     }
     if (width === 375) {
