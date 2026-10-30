@@ -267,3 +267,11 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 通过的场景：发布前客户端（CT153）发往 Telegram IPv6 的包到不了 Mihomo；差异报告给出 `fe80::…%ether2` 下一跳；规则集变化后旧预览被拒绝且无写入；5 条路由一次批量写入并回读；发布后 CT153 发往 `2001:b28:f23d::1` 的包到达 CT152；重复预览为空；自动同步一次增删各 4 条并回读；注入回读失败时设备上全部回滚、管理记录改指新 ID，手动确认空发布后恢复同步；Agent 离线时只跳过本项；关闭 Mihomo IPv6 后一次撤回 5 条。
 
 观察：ping 探测后 CT153 缓存了直达 Mihomo 的路由（ROS 发出了 ICMPv6 重定向），因此每次探测前清空客户端路由缓存。TCP 场景下同口转发会被出厂 `drop invalid` 丢弃，见上游路由文档中的防火墙提示。
+
+## IPv6 同口转发防火墙提示（2026-10-31）
+
+`scripts/tests/ipv6_forward_hint_lab.py` 在测试服务器上运行，用本分支后端和预览数据的私有副本对 VM151 生成差异报告，不发布路由。
+
+- 只读核对：VM151 上已有另一项测试套用的出厂 IPv6 forward 规则（`defconf: drop invalid` 为 `*36`）。「IPv6 Fake-IP 分流路由」和「IPv6 规则集路由」都给出同一条命令 `/ipv6 firewall filter add chain=forward action=accept in-interface=ether2 out-interface=ether2 comment="LAN to Mihomo via router" place-before=*36`，预览警告只出现一次；前后防火墙、接口列表与 IPv6 路由一致。
+- 完整运行（另一项测试结束、VM151 恢复实验基线后）：没有 `drop invalid` 时不提示；临时追加带 `cf-fwhint` 标记的出厂 forward 规则后，两张卡片给出同一条命令，`place-before` 指向新加的 `drop invalid`，预览警告只出现一次；经 `/rest/execute` 原样执行这条命令，RouterOS 接受，新规则正好位于 `drop invalid` 之前，重新生成报告后提示消失。随后撤掉出厂规则，只加一条限定探测地址 `fc00::c0fe` 的 `drop invalid`，避免影响共用 VM151 的其他测试。CT153 经 ROS 同口连到 CT152 上该地址的 TCP 服务，每个新连接耗时 6.59–6.60 秒；同一条放行命令加在它之前后，降到 1–2 毫秒。结束后删除全部临时规则、地址列表、CT152 上的测试地址和服务，防火墙、接口列表与 IPv6 路由和开始前一致；没有改动 `/ip firewall` 和 `/ip settings`。
+- 观察：RouterOS 7.25 刚添加带 `connection-state` 的规则时，REST 会把它标为 `invalid=true`，不到 1 秒后恢复。检查会跳过无效规则，因此刚改完防火墙立即生成的报告可能暂时没有提示，稍后重新生成即可。
