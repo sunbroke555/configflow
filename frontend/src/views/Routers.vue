@@ -424,6 +424,17 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
           </p>
           <p v-for="blocker in ipv6Dns.blockers" :key="blocker" role="alert" class="m-0 break-words text-warning-accent">{{ blocker }}</p>
           <p v-for="warning in ipv6Dns.warnings" :key="warning" role="status" class="m-0 break-words text-warning-accent">{{ warning }}</p>
+          <p v-if="ipv6Dns.blockers.length" class="m-0 text-muted-foreground">其他路由、规则和 DHCP DNS 照常发布，只有这一项保留现状。</p>
+          <div v-if="ipv6Dns.fix_command" class="min-w-0 space-y-1.5" data-router-ipv6-dns-command>
+            <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+              <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+              <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 通告命令" @click="copyIPv6DnsCommand">
+                <Copy class="size-3.5" aria-hidden="true" />复制
+              </Button>
+            </div>
+            <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6Dns.fix_command }}</pre>
+            <p class="m-0 text-muted-foreground">为 {{ ipv6Dns.interface }} 单独建立不下发 DNS 的通告，其余参数照抄当前 all 条目；all 保持不变，其他接口不受影响。执行后重新生成差异报告确认。</p>
+          </div>
         </div>
       </SectionCard>
 
@@ -747,6 +758,7 @@ import { RouterLink, matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import {
   Activity,
   CircleX,
+  Copy,
   GitCompare,
   Loader2,
   Pencil,
@@ -787,6 +799,7 @@ import { setupApi } from '@/api/setup'
 import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { routerCopy } from '@/lib/routerCopy'
+import { copyText } from '@/lib/clipboard'
 import { routerForwardingWarning, type GatewayForwardingEntry, type RouterForwardingWarning } from '@/lib/gatewayForwarding'
 import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 
@@ -841,6 +854,7 @@ interface IPv6DnsReport {
   }[]
   blockers: string[]
   warnings: string[]
+  fix_command?: string
 }
 
 interface DhcpDnsReport {
@@ -1010,6 +1024,14 @@ const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'd
 const ipv6Dns = computed(() => report.value?.ipv6_dns as IPv6DnsReport | undefined)
 const ipv6DnsStatus = computed(() => IPV6_DNS_STATUS[ipv6Dns.value?.status || 'unknown'] || IPV6_DNS_STATUS.unknown)
 const ipv6DnsMessage = computed(() => ipv6Dns.value?.message || IPV6_DNS_MESSAGE[ipv6Dns.value?.status || 'unknown'])
+async function copyIPv6DnsCommand() {
+  try {
+    await copyText(ipv6Dns.value?.fix_command || '')
+    notify.success('命令已复制。')
+  } catch {
+    notify.error('复制失败，请手动选择命令。')
+  }
+}
 const dnsGuard = computed(() => report.value?.dns_guard as DnsGuardReport | undefined)
 const dnsGuardStatus = computed(() => DNS_GUARD_STATUS[dnsGuard.value?.status || 'disabled'])
 const reportRouter = ref<RouterItem | null>(null)

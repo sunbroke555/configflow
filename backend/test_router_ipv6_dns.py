@@ -86,6 +86,27 @@ def test_shared_all_dns_announcement_blocks_without_an_active_lan_override(adver
     plan = ipv6_dns.inspect(DESIRED, driver)
     assert plan['status'] == 'blocked' and 'all' in plan['blockers'][0]
     assert not plan['ops'] and not session.writes
+    assert ipv6_dns.report(plan)['fix_command'] == plan['fix_command']
+    if disabled_explicit:
+        # Adding a second LAN row would only create a duplicate to sort out.
+        assert plan['fix_command'] == ''
+    else:
+        assert plan['fix_command'] == (
+            '/ipv6 nd add interface=bridge advertise-dns=no advertise-mac-address=yes '
+            'dns-servers=2001:db8::53 hop-limit=64 managed-address-configuration=no mtu=1500 '
+            'other-configuration=yes ra-interval=3m20s-10m ra-lifetime=30m ra-preference=high '
+            'reachable-time=unspecified retransmit-interval=unspecified')
+
+
+def test_override_command_quotes_values_and_skips_status_fields():
+    rows = [nd_row(interface='all', default='true', **{'dns-servers': '', 'mtu': 'a "b" $c'})]
+    session, driver = device(rows)
+    session.rows[ipv6_dns.IPV4_ADDRESSES][0]['interface'] = 'lan bridge'
+    command = ipv6_dns.inspect(DESIRED, driver)['fix_command']
+    assert command.startswith('/ipv6 nd add interface="lan bridge" advertise-dns=no ')
+    assert 'mtu="a \\"b\\" \\$c"' in command
+    assert 'default=' not in command and 'comment=' not in command and 'disabled=' not in command
+    assert 'dns-servers' not in command and 'invalid=' not in command
 
 
 @pytest.mark.parametrize('shared_advertise', ['yes', 'self'])

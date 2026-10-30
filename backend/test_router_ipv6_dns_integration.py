@@ -134,14 +134,23 @@ def test_preview_fingerprint_binds_selected_dns_lan_and_full_nd_configuration(in
     assert preview(inspection)[2]['fingerprint'] != first['fingerprint']
 
 
-def test_unproven_global_nd_entry_blocks_publication_and_marks_report(inspection):
+def test_unproven_global_nd_entry_skips_only_ipv6_dns_and_marks_report(inspection):
     session, driver, _ = inspection
     session.rows[ND][0]['interface'] = 'all'
+    before = copy.deepcopy(session.rows[ND])
     _, report, plan = preview(inspection)
-    assert report['ipv6_dns']['status'] == 'blocked'
+    assert report['ipv6_dns']['status'] == 'blocked' and report['ipv6_dns']['fix_command']
     assert report['summary']['blocked'] == 1 and not report['in_sync']
-    assert plan['blockers'] and not release.execute(plan, driver, None)['ok']
-    assert session.writes == []
+    assert not plan['blockers'], plan['blockers']
+    assert any(item.startswith('IPv6 DNS 下发本次跳过') for item in plan['warnings'])
+    stage = next(stage for stage in plan['stages'] if stage['key'] == 'ipv6_dns')
+    assert stage['skipped'] and not stage['ops']
+    result = release.execute(plan, driver, None)
+    assert result['ok'], result
+    assert [path for _, path, _ in session.writes] == [DHCP_NETWORKS]
+    assert session.rows[ND] == before
+    assert {'stage': 'ipv6_dns', 'status': 'warning'}.items() <= next(
+        entry for entry in result['log'] if entry['stage'] == 'ipv6_dns').items()
 
 
 def test_failed_nd_write_restores_preceding_dhcp_change(inspection):
@@ -214,8 +223,7 @@ def test_synced_ipv6_stage_is_read_back_even_when_no_write_is_planned(inspection
     assert calls == [plan['checks']['ipv6_dns']] and session.writes == []
 
 
-@pytest.mark.parametrize('pending', [{'blockers': ['LAN 无法确认'], 'ops': []},
-                                    {'blockers': [], 'ops': [{'kind': 'ipv6_dns_update'}]}])
+@pytest.mark.parametrize('pending', [{'blockers': [], 'ops': [{'kind': 'ipv6_dns_update'}]}])
 def test_auto_sync_pauses_before_writes_when_ra_dns_needs_attention(environment, monkeypatch, pending):
     _, driver = environment
     initial = publish(environment)
@@ -229,6 +237,18 @@ def test_auto_sync_pauses_before_writes_when_ra_dns_needs_attention(environment,
     result = rule_sync.sync('default', 'ros', lambda *_: 'IP-CIDR,8.8.8.0/24')
     assert result['status'] == 'paused' and 'IPv6 DNS 下发' in result['message']
     assert saves == [] and driver.writes == []
+
+
+def test_auto_sync_does_not_pause_for_ra_dns_it_would_skip(environment, monkeypatch):
+    _, driver = environment
+    initial = publish(environment)
+    desired = initial['baseline']['desired']
+    monkeypatch.setattr(api, '_inspect', lambda *_args, **_kwargs: (
+        None, desired, RouterState(ipv6_dns_plan={'blockers': ['LAN 无法确认'], 'ops': []}), {'return_routing': {}}))
+    monkeypatch.setattr('backend.routers.plan.build_plan', lambda *_: {
+        'checks': {'routes': desired['proxy_cidrs']}})
+    result = rule_sync.sync('default', 'ros', lambda *_: 'IP-CIDR,8.8.8.0/24')
+    assert 'IPv6 DNS 下发' not in (result.get('message') or '')
 
 
 def test_auto_sync_rechecks_ra_dns_and_rolls_back_ip_delta_on_drift(environment, monkeypatch):

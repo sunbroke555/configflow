@@ -308,7 +308,9 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 if current == 'ipv6_fakeip':
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 IPv6 Fake-IP 路由与计划一致', 'status': 'verified'})
-                if current == 'ipv6_dns':
+                if current == 'ipv6_dns' and stage.get('skipped'):
+                    record({'stage': current, 'summary': 'IPv6 DNS 下发未能确认可安全修改的 LAN，本次保留现状', 'status': 'warning'})
+                elif current == 'ipv6_dns':
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 OxiDNS DHCP 与同一局域网的 IPv6 DNS 通告一致', 'status': 'verified'})
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:

@@ -683,12 +683,16 @@ def build_plan(router: Dict[str, Any], desired: Dict[str, Any], state: RouterSta
                           'ops': ipv6['ops'], 'note': '仅管理本功能已核实归属的 IPv6 Fake-IP 路由；已有其他路由沿用并保留原归属。'})
     ipv6_dns = state.ipv6_dns_plan
     if ipv6_dns is not None:
-        blockers.extend(ipv6_dns['blockers'])
+        # Leaving RA DNS as it is was the behaviour before this stage existed:
+        # an unclear ND setup skips only this stage, never the whole release.
+        skipped = bool(ipv6_dns['blockers'])
+        warnings.extend('IPv6 DNS 下发本次跳过：' + item for item in ipv6_dns['blockers'])
         warnings.extend(ipv6_dns['warnings'])
-        if ipv6_dns['enabled'] and (not manage_dns or dns['status'] not in {'synced', 'pending'}):
+        if ipv6_dns['ops'] and (not manage_dns or dns['status'] not in {'synced', 'pending'}):
             blockers.append('IPv6 DNS 下发缺少已确认的 OxiDNS DHCP 目标，请重新预览')
         stages.append({'key': 'ipv6_dns', 'title': STAGE_TITLES['ipv6_dns'], 'manual': manual,
-                       'enabled': ipv6_dns['enabled'], 'ops': ipv6_dns['ops'],
+                       'enabled': ipv6_dns['enabled'], 'ops': [] if skipped else ipv6_dns['ops'],
+                       'skipped': skipped,
                        'note': '先确认 DHCP 已下发所选 OxiDNS，再关闭同一局域网的 IPv6 DNS 通告；保留地址和默认网关通告。'})
     if guard is not None:
         stages.append({

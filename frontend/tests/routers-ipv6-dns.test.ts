@@ -100,6 +100,23 @@ describe('RouterOS IPv6 DNS checklist', () => {
     expect(routerApi.apply).not.toHaveBeenCalled()
   })
 
+  it('offers a copyable dedicated-LAN command for a shared all advertisement', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    const command = '/ipv6 nd add interface=bridge-lan advertise-dns=no ra-lifetime=30m'
+    const wrapper = await openReport(ipv6Dns({ status: 'blocked', fix_command: command,
+      blockers: ['该 LAN 使用共享的 all 通告下发 DNS；直接关闭会影响其他接口，请先为该 LAN 单独设置 IPv6 通告'] }))
+    const section = wrapper.get('[data-router-ipv6-dns]')
+    expect(section.text()).toContain('照常发布')
+    expect(section.get('[data-router-ipv6-dns-command] pre').text()).toBe(command)
+    await section.get('[aria-label="复制 IPv6 通告命令"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(command)
+    const pending = await openReport(ipv6Dns())
+    expect(pending.find('[data-router-ipv6-dns-command]').exists()).toBe(false)
+    expect(pending.get('[data-router-ipv6-dns]').text()).not.toContain('照常发布')
+  })
+
   it('does not treat an unlinked or absent IPv6 DNS report as checked', async () => {
     const disabled = await openReport(ipv6Dns({ enabled: false, status: 'disabled', interface: '', target_dns: '', items: [] }))
     const section = disabled.get('[data-router-ipv6-dns]')

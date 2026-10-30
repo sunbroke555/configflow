@@ -5,6 +5,7 @@ shared ``interface=all`` row is not safe to edit on behalf of one LAN.
 """
 import copy
 import ipaddress
+import re
 
 from backend.routers.base import RouterError
 from backend.routers.dhcp_dns import _client_ipv4, checked_dns_target, verify_dns
@@ -12,6 +13,9 @@ from backend.routers.ipv6_readiness import _lan
 
 ND = '/ipv6/nd'
 IPV4_ADDRESSES = '/ip/address'
+# Status flags and the fields a dedicated LAN row sets itself; every other
+# setting is copied from the shared all row so only DNS advertising changes.
+NOT_COPIED = {'interface', 'advertise-dns', 'disabled', 'comment', 'dynamic', 'invalid', 'default', 'running'}
 
 
 def _flag(row, key):
@@ -121,10 +125,30 @@ def _constraints(rows, interface):
         raise RouterError('该 LAN 使用共享的 all 通告下发 DNS；直接关闭会影响其他接口，请先为该 LAN 单独设置 IPv6 通告')
 
 
+def _cli(value):
+    value = ','.join(value) if isinstance(value, list) else str(value)
+    value = {'true': 'yes', 'false': 'no'}.get(value, value)
+    if re.fullmatch(r'[A-Za-z0-9_.:/,%+-]+', value):
+        return value
+    return '"' + re.sub(r'(["\\$])', r'\\\1', value) + '"'
+
+
+def _override_command(rows, interface):
+    """A copyable RouterOS command giving the LAN its own RA row without DNS."""
+    shared = [row for row in rows if row['interface'] == 'all']
+    if (any(row['interface'] == interface for row in rows) or len(shared) != 1
+            or _flag(shared[0], 'disabled') or shared[0]['advertise-dns'] == 'no'):
+        return ''
+    values = [f'{key}={_cli(value)}' for key, value in sorted(shared[0].items())
+              if not key.startswith('.') and key not in NOT_COPIED
+              and re.fullmatch(r'[a-z0-9-]+', key) and value not in ('', None, [])]
+    return ' '.join([f'/ipv6 nd add interface={_cli(interface)} advertise-dns=no', *values])
+
+
 def inspect(desired, driver):
     plan = {'enabled': bool(desired.get('dns_agent_id')), 'status': 'disabled', 'interface': '',
             'target_dns': desired.get('dns_server') or '', 'items': [], 'blockers': [], 'warnings': [],
-            'ops': [], 'check': {}, 'evidence': {},
+            'ops': [], 'check': {}, 'evidence': {}, 'fix_command': '',
             'message': '未关联 OxiDNS，本次保留现有 IPv6 DNS 下发设置。'}
     if not plan['enabled']:
         return plan
@@ -146,6 +170,7 @@ def inspect(desired, driver):
                 'detail': ('发布时关闭该 LAN 的 IPv6 DNS 下发，保留 IPv6 地址和默认网关通告。'
                            if pending else ('该 LAN 使用专用通告，本次保留这条共享设置。' if overridden
                                             else '此条目未下发 IPv6 DNS，无需调整。'))})
+        plan['fix_command'] = _override_command(rows, interface)
         _constraints(rows, interface)
         pending = [row for row in rows if row['interface'] == interface
                    and not _flag(row, 'disabled') and row['advertise-dns'] != 'no']
@@ -174,7 +199,7 @@ def inspect(desired, driver):
 
 def report(plan):
     return {key: copy.deepcopy(plan[key]) for key in (
-        'enabled', 'status', 'interface', 'target_dns', 'message', 'items', 'blockers', 'warnings')}
+        'enabled', 'status', 'interface', 'target_dns', 'message', 'items', 'blockers', 'warnings', 'fix_command')}
 
 
 def apply(driver, op):
