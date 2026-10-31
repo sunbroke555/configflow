@@ -615,9 +615,10 @@ class _Mentions:
                 self.index.setdefault(word, []).append(position)
 
     def positions(self, tag):
+        """Positions of the values referencing tag, as a tuple the index cannot leak through."""
         if isinstance(tag, str) and _WORD.fullmatch(tag):
-            return self.index.get(tag, [])
-        return [position for position, value in enumerate(self.values) if _references(value, tag)]
+            return tuple(self.index.get(tag, ()))
+        return tuple(position for position, value in enumerate(self.values) if _references(value, tag))
 
 
 def _new_name(preferred, occupied):

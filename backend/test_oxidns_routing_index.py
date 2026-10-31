@@ -10,7 +10,11 @@ from backend.converters.oxidns import _items, _routing_groups, ruleset_parts
 
 
 def _rescanning_catalog(config):
-    """The catalog as first written: every rule rescans all active rules."""
+    """The catalog as first written: every rule rescans all active rules.
+
+    This baseline calls _routing_groups without items, so it relies on that
+    items=None path staying the original scan of every active rule.
+    """
     records, atoms = {}, {}
     for item in _items(config):
         identity = item.get('id')
@@ -129,5 +133,5 @@ def test_mentions_match_references(seed):
     values = [_random_value(rng) for _ in range(rng.randrange(0, 8))]
     mentions = _Mentions(values)
     for tag in _TAGS:
-        assert mentions.positions(tag) == [position for position, value in enumerate(values)
-                                           if _references(value, tag)], tag
+        assert mentions.positions(tag) == tuple(position for position, value in enumerate(values)
+                                                if _references(value, tag)), tag
