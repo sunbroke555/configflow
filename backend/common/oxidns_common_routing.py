@@ -11,6 +11,7 @@ by hand.
 """
 from copy import deepcopy
 from fnmatch import fnmatchcase
+from functools import cache
 from pathlib import PurePosixPath
 import re
 
@@ -107,18 +108,26 @@ def _atom(part, key, value):
 def _catalog(config):
     """Each rule's exact inline expression or generated resource path."""
     records, atoms = {}, {}
-    for item in _items(config):
+    items = _items(config)
+    # Selecting one id routes every active item of that id and kind, so each
+    # rule is built from exactly those items instead of rescanning all rules.
+    same = {}
+    for item in items:
+        identity = item.get('id')
+        if isinstance(identity, str):
+            same.setdefault((identity, _suffix(item)), []).append(item)
+    for item in items:
         identity = item.get('id')
         if not isinstance(identity, str) or identity in records:
             continue
-        suffix = 'rulesets' if item.get('itemType') == 'ruleset' else 'rules'
+        suffix = _suffix(item)
         settings = {key: [] for key in SELECTORS}
         settings.update(aggregate_rules=False)
         settings['direct_' + suffix] = [identity]
         try:
             # Legacy shape: documents written before content-aware IP parts still
             # reference the IP file of a classical set without IP lines.
-            groups = _routing_groups(config, settings, legacy=True)
+            groups = _routing_groups(config, settings, legacy=True, items=same[identity, suffix])
         except (OxidnsSettingsError, KeyError, TypeError, ValueError):
             continue
         parts = set()
@@ -186,15 +195,19 @@ def _route_of(values, identity):
                  if identity in values[f'{route}_rules'] or identity in values[f'{route}_rulesets']), None)
 
 
-def _owned_group(document, plugins, args, entry, tag):
-    """A generated provider that only this one sequence_main entry uses."""
+def _owned_group(mentions, entry, tag):
+    """A generated provider that only this one sequence_main entry uses.
+
+    mentions() returns the _Mentions of the sequence_main entries, of the top
+    level and of the plugins, built once per document.
+    """
     if not GROUP_TAG_RE.fullmatch(tag) or set(entry) != {'matches', 'exec'}:
         return False
-    if sum(1 for item in args if _references(item, tag)) != 1 or \
-            _references({key: value for key, value in document.items() if key != 'plugins'}, tag):
+    args, top, plugins = mentions()
+    if len(args.positions(tag)) != 1 or top.positions(tag):
         return False
-    return not any(_references(plugin, tag) for name, plugin in plugins.items()
-                   if name not in ('sequence_main', 'rules_reload', tag))
+    return not any(plugins.values[position]['tag'] not in ('sequence_main', 'rules_reload', tag)
+                   for position in plugins.positions(tag))
 
 
 def _unique_atoms(part, provider, atoms):
@@ -214,10 +227,11 @@ def _analyze(document, settings, config):
     existed: when claiming action entries breaks recognition and no helper is in
     use, those entries are read as custom matches, exactly as before.
     """
-    state = _recognize(document, settings, config, claim=True)
+    catalog = cache(lambda: _catalog(config))
+    state = _recognize(document, settings, config, claim=True, catalog=catalog)
     args = state.get('main', {}).get('args', [])
     if state.get('claimed') and not any(_HELPER_EXEC.match(entry['exec']) for entry in args):
-        legacy = _recognize(document, settings, config, claim=False)
+        legacy = _recognize(document, settings, config, claim=False, catalog=catalog)
         caps = state['capabilities']
         if not caps['direct_rules']['editable'] or (
                 not caps['custom_matches']['editable'] and legacy['capabilities']['custom_matches']['editable']):
@@ -249,7 +263,7 @@ def _observed_legacy_groups(config, values, assigned, atoms, aggregate):
     return expected
 
 
-def _recognize(document, settings, config, claim):
+def _recognize(document, settings, config, claim, catalog=None):
     values = {key: [] for key in SELECTORS}
     values.update(aggregate_rules=None, default_forward=None, custom_matches=[], custom_match_position=None,
                   rule_actions={}, rule_dns_follow=_stored_follow(settings, config))
@@ -267,7 +281,12 @@ def _recognize(document, settings, config, claim):
         caps['default_forward'] = _cap()
     else:
         return state
-    records, atoms = _catalog(config)
+    records, atoms = catalog() if catalog else _catalog(config)
+
+    @cache
+    def mentions():
+        top = {key: value for key, value in document.items() if key != 'plugins'}
+        return _Mentions(args), _Mentions([top]), _Mentions(plugins.values())
     groups = {'domain': [], 'ip': []}
     dynamic = []
     middle_end = len(args) - 1
@@ -288,7 +307,7 @@ def _recognize(document, settings, config, claim):
                 route = parse_exec(entry['exec'], part, plugins)
             if route is not None and route not in LIST_ROUTES:
                 # A user's own match (or one reusing a generated provider) stays a custom match.
-                if claim and _owned_group(document, plugins, args, entry, parsed[2]) and \
+                if claim and _owned_group(mentions, entry, parsed[2]) and \
                         (isinstance(route, Invalid) or _unique_atoms(part, provider, atoms)):
                     claimed = True
                 else:
@@ -564,6 +583,44 @@ def _references(value, tag):
     return False
 
 
+_WORD = re.compile(r'[\w.\-]+')
+
+
+def _words(value, found=None):
+    """Every maximal run of tag characters in the strings _references reads."""
+    found = set() if found is None else found
+    if isinstance(value, str):
+        found.update(_WORD.findall(value))
+    elif isinstance(value, dict):
+        for item in value.values():
+            _words(item, found)
+    elif isinstance(value, list):
+        for item in value:
+            _words(item, found)
+    return found
+
+
+class _Mentions:
+    """Which of several values reference a tag, exactly as _references decides.
+
+    A tag made only of tag characters is referenced where it equals a whole run
+    of them, so each value is scanned once for all tags. Other tags are searched.
+    """
+
+    def __init__(self, values):
+        self.values = list(values)
+        self.index = {}
+        for position, value in enumerate(self.values):
+            for word in _words(value):
+                self.index.setdefault(word, []).append(position)
+
+    def positions(self, tag):
+        """Positions of the values referencing tag, as a tuple the index cannot leak through."""
+        if isinstance(tag, str) and _WORD.fullmatch(tag):
+            return tuple(self.index.get(tag, ()))
+        return tuple(position for position, value in enumerate(self.values) if _references(value, tag))
+
+
 def _new_name(preferred, occupied):
     result, index = preferred, 2
     while result in occupied:
@@ -621,12 +678,15 @@ def reload_references(existing, old_tags, new_tags, plugins):
     return references
 
 
-def resource_downloads(document, settings, config, base_url=''):
-    """Download descriptors for actual provider references, without core validation."""
+def resource_downloads(document, settings, config, base_url='', records=None):
+    """Download descriptors for actual provider references, without core validation.
+
+    records, when given, are the _catalog(config) records the caller already built.
+    """
     referenced = {relative_resource(path) for path in resource_references(document)}
     effective = _base(config, base_url)
     desired = []
-    for record in _catalog(config)[0].values():
+    for record in (_catalog(config)[0] if records is None else records).values():
         if record['suffix'] != 'rulesets':
             continue
         for part in sorted(record['parts']):
@@ -772,7 +832,9 @@ def refresh_rule_helpers(document):
         _own_helpers(document, [route_key(action) for action in actions.values()], actions)
 
 
-def _sync_updates(document, settings, config, old_groups, new_groups, base_url, before_config=None):
+def _sync_updates(document, settings, config, old_groups, new_groups, base_url, records, before_records=None):
+    """records are the _catalog records of config, before_records those of the rule
+    space the document was written for."""
     plugins = _plugins(document)
     download = plugins.get('rules_download')
     reload = plugins.get('rules_reload')
@@ -793,13 +855,11 @@ def _sync_updates(document, settings, config, old_groups, new_groups, base_url, 
     if reload is not None:
         reload['args'] = reload_references(reload['args'], old_tags, new_tags, plugins)
     # Downloads of rulesets that left the catalog (deleted or disabled) are owned too.
-    records = list(_catalog(config)[0].values())
-    if before_config is not None:
-        records.extend(_catalog(before_config)[0].values())
+    known = [*records.values(), *(before_records.values() if before_records is not None else ())]
     known_paths = {_rule_path(record['item'], part).removeprefix('./')
-                   for record in records if record['suffix'] == 'rulesets'
+                   for record in known if record['suffix'] == 'rulesets'
                    for part in record['parts']}
-    desired = resource_downloads(document, settings, config, base_url)
+    desired = resource_downloads(document, settings, config, base_url, records)
     def path(entry):
         if not isinstance(entry, dict) or not isinstance(entry.get('dir'), str) or not isinstance(entry.get('filename'), str):
             return None
@@ -1044,9 +1104,9 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
                                                    values['default_forward'], probe)
         return result, deepcopy(settings)
     known = _known(config)
-    active = {identity: record for identity, record in
-              (_catalog(config)[0] if rebuild else current['records']).items()
-              if convertible(record['item'])}
+    # current was read against before_config when rebuilding.
+    records = _catalog(config)[0] if rebuild else current['records']
+    active = {identity: record for identity, record in records.items() if convertible(record['item'])}
     _validate_selections(values, changes, known)
     _take_over(values, current, changes, known, notices)
     parked, follow = _settle(values, settings, changes, current, known, active, policy_dns_routes(config))
@@ -1067,13 +1127,15 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
             values['aggregate_rules'] = True
         expected = _routing_groups(config, values)
         old = [group for entries in current['groups'].values() for group in entries]
+        outside = _Mentions([{key: value for key, value in document.items() if key != 'plugins'},
+                             values['custom_matches']])
+        inside = _Mentions(result['plugins'])
         external = {group['tag'] for group in old if
                     set(group['provider']) - {'tag', 'type', 'args'} or
                     document.get('include') or
-                    _references({key: value for key, value in document.items() if key != 'plugins'}, group['tag']) or
-                    _references(values['custom_matches'], group['tag']) or
-                    any(_references(plugin, group['tag']) for plugin in result['plugins']
-                        if plugin.get('tag') not in ('sequence_main', 'rules_reload', group['tag']))}
+                    outside.positions(group['tag']) or
+                    any(inside.values[position].get('tag') not in ('sequence_main', 'rules_reload', group['tag'])
+                        for position in inside.positions(group['tag']))}
         result['plugins'], groups = place_routing_groups(result['plugins'], old, expected, external)
         for key in SELECTORS:
             previous = result_settings.get(key)
@@ -1125,5 +1187,6 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
     if routing_changed:
         _own_helpers(result, [group['route'] for part in ('domain', 'ip') for group in groups[part]],
                      values['rule_actions'], domain + ip)
-        _sync_updates(result, result_settings, config, current['groups'], groups, base_url, before_config)
+        _sync_updates(result, result_settings, config, current['groups'], groups, base_url, records,
+                      current['records'] if rebuild else None)
     return result, result_settings

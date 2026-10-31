@@ -39,18 +39,19 @@ def _base(config, base_url):
 
 
 def _items(config):
-    rules, sets = split_rules_and_rulesets(config)
     if config.get('rule_configs'):
         return [item for item in config['rule_configs']
                 if item.get('enabled', True) and item.get('library_enabled', True)]
+    rules, sets = split_rules_and_rulesets(config)
     return [dict(item, itemType='rule') for item in rules] + [dict(item, itemType='ruleset') for item in sets]
 
 
-def _selected(config, settings):
+def _selected(config, settings, items=None):
     # A rule DNS action always wins over the selector lists, which in native
-    # mode keep a union catalog of every rule ever routed.
+    # mode keep a union catalog of every rule ever routed. items, when given,
+    # are the only candidates instead of every active rule of config.
     actions = settings.get('rule_actions') or {}
-    for item in _items(config):
+    for item in _items(config) if items is None else items:
         suffix = 'rulesets' if item.get('itemType') == 'ruleset' else 'rules'
         identity = item.get('id')
         if isinstance(identity, str) and identity in actions:
@@ -212,14 +213,15 @@ def ruleset_parts(item, config):
     return [part for part in _ruleset_parts(item.get('behavior', 'domain')) if part == 'domain']
 
 
-def _routing_groups(config, settings, *, legacy=False):
+def _routing_groups(config, settings, *, legacy=False, items=None):
     """Managed domain groups, or historical IP shapes for safe native recognition.
 
     ``legacy=True`` predates content-aware IP parts; ``content-aware`` keeps
     the intermediate format. Neither legacy shape is used for new routing.
+    items limits the candidate rules as in _selected.
     """
     groups = {'domain': [], 'ip': []}
-    for item, route in _selected(config, settings):
+    for item, route in _selected(config, settings, items):
         if item.get('itemType') == 'ruleset':
             parts = (_ruleset_parts(item.get('behavior', 'domain')) if legacy
                      else ruleset_parts(item, config))
