@@ -158,6 +158,7 @@
         <div
           v-for="(item, cfIndex) in displayList"
           :key="item.uniqueId"
+          class="cf-cv-row max-md:[--cf-cv-row-h:67px]"
           data-reorder-item
           :data-id="item.uniqueId"
         >
@@ -403,7 +404,7 @@
             ? 'col-span-full h-0 border-0 border-b border-border'
             : item.isGroup && !reorder.active.value
             ? 'col-span-full flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-0 border-b border-border px-1 pt-3 pb-2'
-            : 'relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border/35 bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
+            : 'cf-cv-row [--cf-cv-row-h:192px] relative flex flex-col gap-3 overflow-hidden rounded-[18px] border border-border/35 bg-card/90 shadow-surface p-4 transition-all duration-300 hover:border-border-strong max-sm:gap-2 max-sm:p-3',
           !item.isGroup && !item.enabled && 'dark:opacity-60'
         ]"
       >

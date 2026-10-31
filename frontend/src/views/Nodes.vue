@@ -276,7 +276,7 @@
         :aria-busy="testingKeys.has(latencyKey(node)) || undefined"
         :data-reorder-item="node.readonly ? undefined : ''"
         :class="cn(
-          'node-tile group relative overflow-hidden rounded-[14px] border bg-card/90 px-[13px] pt-3 pb-2.5 transition-[transform,border-color,opacity] duration-300 ease-(--ease-flow) hover:-translate-y-0.5 hover:border-border-strong',
+          'node-tile cf-cv-row [--cf-cv-row-h:85px] max-md:[--cf-cv-row-h:101px] group relative overflow-hidden rounded-[14px] border bg-card/90 px-[13px] pt-3 pb-2.5 transition-[transform,border-color,opacity] duration-300 ease-(--ease-flow) hover:-translate-y-0.5 hover:border-border-strong',
           selectedNodeIds.has(node.id) ? 'border-primary-accent/55' : 'border-border',
           !node.enabled && 'opacity-55',
           flashKeys.has(latencyKey(node)) && 'is-flash'

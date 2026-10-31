@@ -231,4 +231,21 @@ describe('named rule group boundaries', () => {
       expect(JSON.parse(localStorage.getItem('cf-rules-collapsed:default')!)).toEqual(['group_rule-e1', 'group_rule-d1'])
     } finally { vi.useRealTimers() }
   })
+
+  it('skips offscreen list rows and rule cards, but not full-width card segment heads or dividers', async () => {
+    network.state.rules = [rule('e1', 'E2E'), rule('e2', 'E2E'), rule('u1')]
+    const wrapper = await render()
+    const items = () => wrapper.findAll('#sortable-rules > [data-reorder-item]')
+    expect(items()).toHaveLength(4)
+    expect(items().every(item => item.classes('cf-cv-row'))).toBe(true)
+    await wrapper.get('button[aria-label="卡片视图"]').trigger('click')
+    await flushPromises()
+    // Segment heads and end dividers span the whole row with their own height; keep them rendered.
+    const segments = items().filter(item => item.classes('col-span-full'))
+    const cards = items().filter(item => !item.classes('col-span-full'))
+    expect(segments).toHaveLength(2)
+    expect(segments.some(item => item.classes('cf-cv-row'))).toBe(false)
+    expect(cards).toHaveLength(3)
+    expect(cards.every(item => item.classes('cf-cv-row'))).toBe(true)
+  })
 })

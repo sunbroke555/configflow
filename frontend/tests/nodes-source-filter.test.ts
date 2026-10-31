@@ -177,6 +177,13 @@ it('表格中的订阅预览节点保持只读，不能编辑、删除或选中'
   expect(row.text()).toContain('测试订阅')
 })
 
+it('离屏跳过渲染覆盖全部节点磁贴，包括不能排序的订阅节点', async () => {
+  await render('card')
+  const tiles = wrapper!.findAll('[data-tile]')
+  expect(tiles.map(tile => tile.attributes('data-name'))).toContain('日本 订阅预览')
+  expect(tiles.every(tile => tile.classes('cf-cv-row'))).toBe(true)
+})
+
 it('保存测速设置后刷新显示的测速历史', async () => {
   vi.mocked(nodeApi.latency).mockResolvedValueOnce({ data: { results: { [storedKey('manual-hk')]: { latency: 123 } } } } as any)
   await render('card')
