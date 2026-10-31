@@ -263,7 +263,6 @@
               item.isGroupMember && !item.isLastInGroup ? 'border-transparent' : item.isLastInGroup ? 'border-border' : 'border-border/40',
               item.isGroupMember && 'in-group',
               !item.enabled && 'opacity-55',
-              simScanKey === item.uniqueId && 'is-scan',
               (simMatchKey === item.uniqueId || recentKeys.has(item.uniqueId)) && 'is-match'
             ]"
           >
@@ -829,6 +828,7 @@ import { isOxidnsRule } from '@/lib/oxidns'
 import type { ProxyGroup, RuleDnsSnapshot, RuleDnsState, RuleDnsValue } from '@/types'
 import api from '@/api'
 import { getActiveProfileId } from '@/profileContext'
+import { systemReducesMotion } from '@/stores/preferences'
 import { isAxiosError } from 'axios'
 
 const errorMessage = (error: unknown, fallback: string) =>
@@ -857,7 +857,6 @@ const rulesContainer = ref<HTMLElement | null>(null)
 const simQuery = ref('')
 const simRunning = ref(false)
 const simResult = ref<any>(null)
-const simScanKey = ref('')
 const simMatchKey = ref('')
 const simVia = ref<{ label: string; hint: string } | null>(null)
 /** 命中项的 DNS 处理，与列表 chip 同源 */
@@ -906,7 +905,43 @@ const simSamples = computed(() => {
   return [...seen]
 })
 
-const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
+/*
+ * 扫描高亮直接改行的 class，不写响应式状态：每一步都改响应式会让整个列表重渲染，
+ * 规则多时扫描一遍要卡十几秒。最终命中结果仍写回响应式状态。
+ */
+let scanRow: HTMLElement | null = null
+let scanTimer = 0
+let finishScan: (() => void) | undefined
+
+const markScanRow = (row: HTMLElement | null) => {
+  scanRow?.classList.remove('is-scan')
+  scanRow = row
+  row?.classList.add('is-scan')
+}
+
+/** 逐行扫描到 stop（含），总时长控制在 1.6s 内，行多时每帧跳过几行；stopScan() 随时结束并清掉高亮 */
+const scanRows = (rows: HTMLElement[], stop: number) => new Promise<void>(resolve => {
+  const stride = Math.max(1, Math.ceil((stop + 1) * 16 / 1600))
+  const step = Math.max(16, Math.min(90, 1600 / Math.max(1, Math.ceil((stop + 1) / stride))))
+  let i = 0
+  finishScan = () => {
+    window.clearTimeout(scanTimer)
+    finishScan = undefined
+    markScanRow(null)
+    resolve()
+  }
+  const next = () => {
+    if (i > stop || i >= rows.length) {
+      finishScan?.()
+      return
+    }
+    markScanRow(rows[i])
+    i += stride
+    scanTimer = window.setTimeout(next, step)
+  }
+  next()
+})
+const stopScan = () => finishScan?.()
 
 /** 仅展示手动策略组的默认项；自动策略组的实际出口由目标设备决定。 */
 const resolveVia = async (policy: string) => {
@@ -952,21 +987,16 @@ const simulate = async (sample?: string) => {
       await nextTick()
     }
 
-    // 逐行扫描到命中行（未命中则扫完全部），总时长控制在 1.6s 内；行多时每帧跳过几行
+    // 逐行扫描到命中行（未命中则扫完全部）；系统要求减少动效时直接显示结果
     const rows = Array.from(rulesContainer.value?.querySelectorAll<HTMLElement>('[data-rule-key]') || [])
     const stop = matchKey ? rows.findIndex(r => r.dataset.ruleKey === matchKey) : rows.length - 1
-    const stride = Math.max(1, Math.ceil((stop + 1) * 16 / 1600))
-    const step = Math.max(16, Math.min(90, 1600 / Math.max(1, Math.ceil((stop + 1) / stride))))
-    for (let i = 0; i <= stop && i < rows.length; i += stride) {
-      simScanKey.value = rows[i].dataset.ruleKey || ''
-      await wait(step)
-    }
-    simScanKey.value = ''
+    if (!systemReducesMotion()) await scanRows(rows, stop)
     simMatchKey.value = matchKey
     simResult.value = { ...data, query }
 
+    // 扫描中离开页面时行已卸载，不再滚动
     const row = rows[stop]
-    if (matchKey && row) {
+    if (matchKey && row?.isConnected) {
       const rect = row.getBoundingClientRect()
       if (rect.top < 80 || rect.bottom > window.innerHeight) {
         window.scrollTo({ top: window.scrollY + rect.top - window.innerHeight / 2, behavior: 'smooth' })
@@ -978,7 +1008,7 @@ const simulate = async (sample?: string) => {
     else notify.error(error.response?.data?.message || error.message || '查询失败')
   } finally {
     simRunning.value = false
-    simScanKey.value = ''
+    stopScan()
   }
 }
 
@@ -1666,6 +1696,7 @@ const performDuplicateScan = async () => {
 
 onUnmounted(() => {
   window.clearTimeout(recentTimer)
+  stopScan()
   duplicateViewActive = false
   ++duplicateScanSequence
   duplicateController?.abort()
