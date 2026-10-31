@@ -430,6 +430,19 @@ describe('mihomo connection summary', () => {
     expect(state.notes).toBe(notes)
   })
 
+  it('lets a pending read finish when live refresh is paused', async () => {
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValueOnce(snapshot([]))
+    const { state } = await render()
+    let finish!: (value: unknown) => void
+    let signal: AbortSignal | undefined
+    vi.mocked(mihomoPanelApi.connections).mockImplementationOnce((_id: string, options: any) => { signal = options.signal; return new Promise(resolve => { finish = resolve }) as any })
+    void state.load()
+    state.live = false; await flushPromises()
+    expect(signal?.aborted).toBe(false)
+    finish(snapshot([connection('a', 'a.example', '192.0.2.1')])); await flushPromises()
+    expect(state.snapshot.connections.map((row: any) => row.id)).toEqual(['a'])
+  })
+
   it('puts counters on the first row and trend metrics on the second', async () => {
     vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([]))
     const { state } = await render()

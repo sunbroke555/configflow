@@ -120,6 +120,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
 import MihomoProxySettings from './MihomoProxySettings.vue'
+import { useTabActive } from '@/components/ui/tabs'
 import { mihomoPanelApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { formatBytes, relativeTime } from '@/lib/format'
@@ -128,7 +129,9 @@ import {
   orderedGroups, panelError, saveProxySettings, type MihomoProvider, type MihomoProxy, type ProxyPanelSettings
 } from '@/types/mihomo'
 
-const props = defineProps<{ agentId: string; active: boolean; reloadToken: number }>()
+const props = defineProps<{ agentId: string; reloadToken: number }>()
+// 所在标签是否为当前标签：由 Tabs 注入，切换标签不经过 props，隐藏的面板不会整组件重新渲染
+const active = useTabActive()
 
 const proxies = ref<Record<string, MihomoProxy>>({})
 const providers = ref<MihomoProvider[]>([])
@@ -441,8 +444,8 @@ function resetTests() {
 }
 // 切走后面板保持挂载：隐藏期间的刷新只做标记，切回时再读取
 let stale = false
-watch(() => props.reloadToken, () => { resetTests(); stale = !props.active; if (props.active) void load() })
-watch(() => props.active, active => { if (active && stale) { stale = false; void load() } })
+watch(() => props.reloadToken, () => { resetTests(); stale = !active.value; if (active.value) void load() })
+watch(active, shown => { if (shown && stale) { stale = false; void load() } })
 watch(() => props.agentId, () => {
   resetTests(); epoch++; proxies.value = {}; providers.value = []; coreProxyNames.value.clear(); nodeProviders.value.clear()
   void load()

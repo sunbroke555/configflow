@@ -65,6 +65,8 @@ const place = () => {
     thumb.value = { left: '0px', width: '0px', opacity: '0' }
     return
   }
+  // 所在面板被隐藏（如切到保持挂载的其他标签）时量到的宽度是 0：保留原位置，免得切回时滑块从 0 宽重新滑出
+  if (!el.offsetWidth) return
   thumb.value = { left: `${el.offsetLeft}px`, width: `${el.offsetWidth}px`, opacity: '1' }
 }
 

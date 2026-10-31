@@ -222,6 +222,7 @@ import MihomoConnectionDetail from './MihomoConnectionDetail.vue'
 import DeviceNoteDialog from './DeviceNoteDialog.vue'
 import ConnectionRuleDialog from './ConnectionRuleDialog.vue'
 import { connectionRuleValues, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
+import { useTabActive } from '@/components/ui/tabs'
 import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { formatBytes } from '@/lib/format'
@@ -244,7 +245,9 @@ const CLOSED_LIMIT = 500
 /** 趋势图保留的采样数：2 秒一次，约 2 分钟 */
 const TREND_POINTS = 60
 
-const props = defineProps<{ agentId: string; active: boolean }>()
+const props = withDefaults(defineProps<{ agentId: string; active?: boolean }>(), { active: true })
+// 所在标签是否为当前标签：由 Tabs 注入，切换标签不经过 props，隐藏的面板不会整表重新渲染
+const active = useTabActive(() => props.active)
 const panelElement = ref<HTMLElement | null>(null)
 const { width: measuredWidth } = useElementSize(panelElement)
 // 切到其他标签时面板隐藏、宽度读成 0：沿用上次的宽度，免得隐藏和切回时各把整张表按另一套列重排一次
@@ -547,7 +550,7 @@ function recordClosed(current: MihomoConnection[]) {
 function schedule() {
   if (timer) clearTimeout(timer)
   timer = null
-  if (disposed || !props.active || !live.value) return
+  if (disposed || !active.value || !live.value) return
   timer = setTimeout(async () => {
     if (document.visibilityState === 'visible') await load()
     schedule()
@@ -597,14 +600,16 @@ async function closeAll() {
   }
 }
 
-watch(() => [props.active, live.value], ([active, polling]) => {
-  // 暂停后再恢复时旧样本已过时，不能拿来算速率；切走后面板保持挂载，未返回的读取也不再更新隐藏的列表
-  if (!active || !polling) { previous = null; controller?.abort() }
+watch(() => [active.value, live.value], ([shown, polling]) => {
+  // 暂停后再恢复时旧样本已过时，不能拿来算速率
+  if (!shown || !polling) previous = null
   else load()
+  // 切走后面板保持挂载，未返回的读取不再更新隐藏的列表；暂停实时刷新时仍让它读完
+  if (!shown) controller?.abort()
   schedule()
 })
 onMounted(async () => {
-  if (props.active) await load()
+  if (active.value) await load()
   schedule()
 })
 onUnmounted(() => {
@@ -613,7 +618,7 @@ onUnmounted(() => {
   controller?.abort()
 })
 watch(() => props.agentId, () => { expanded.value = new Set(); memberLimits.value = new Map(); notesEpoch++; notes.value = {}; notesError.value = ''; noteIP.value = ''; ruleAction.value = null; void loadNotes() })
-watch(() => props.active, active => { if (active) void loadNotes() })
+watch(active, shown => { if (shown) void loadNotes() })
 onMounted(loadNotes)
 onUnmounted(() => { notesEpoch++ })
 </script>

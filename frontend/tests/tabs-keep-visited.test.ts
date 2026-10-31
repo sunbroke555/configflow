@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import { defineComponent, h, onMounted, onUnmounted, ref } from 'vue'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { defineComponent, h, onMounted, onUnmounted, ref, watchEffect, type Component } from 'vue'
+import { Tabs, TabsContent, TabsList, TabsTrigger, useTabActive } from '@/components/ui/tabs'
 
 const mounts: string[] = []
 const unmounts: string[] = []
@@ -14,13 +14,13 @@ const Panel = defineComponent({
   }
 })
 
-function render(keepVisited: boolean) {
+function render(keepVisited: boolean, panel: Component = Panel) {
   mounts.length = 0
   unmounts.length = 0
   const tab = ref('a')
   const wrapper = mount(defineComponent(() => () => h(Tabs, { keepVisited, modelValue: tab.value, 'onUpdate:modelValue': (value: any) => { tab.value = value } }, () => [
     h(TabsList, () => ['a', 'b', 'c'].map(value => h(TabsTrigger, { value }, () => value))),
-    ...['a', 'b', 'c'].map(value => h(TabsContent, { value }, () => h(Panel, { name: value })))
+    ...['a', 'b', 'c'].map(value => h(TabsContent, { value }, () => h(panel, { name: value })))
   ])))
   return { wrapper, show: async (value: string) => { tab.value = value; await flushPromises() } }
 }
@@ -42,6 +42,30 @@ describe('Tabs keep-visited', () => {
     expect(panels[2]!.text()).toBe('')
     wrapper.unmount()
     expect(unmounts.sort()).toEqual(['a', 'b'])
+  })
+
+  it('tells content whether its tab is shown without re-rendering hidden panels', async () => {
+    const shown: Record<string, boolean> = {}
+    const renders: Record<string, number> = {}
+    const Probe = defineComponent({
+      props: { name: { type: String, required: true } },
+      setup(props) {
+        const active = useTabActive()
+        watchEffect(() => { shown[props.name] = active.value })
+        return () => { renders[props.name] = (renders[props.name] || 0) + 1; return h('p', props.name) }
+      }
+    })
+    const { wrapper, show } = render(true, Probe)
+    await show('b')
+    expect(shown).toEqual({ a: false, b: true })
+    await show('a')
+    await show('b')
+    expect(shown).toEqual({ a: false, b: true })
+    expect(renders).toEqual({ a: 1, b: 1 })
+    wrapper.unmount()
+    // 不在标签里时取传入的默认值
+    const Alone = defineComponent(() => { const active = useTabActive(() => false); return () => h('p', String(active.value)) })
+    expect(mount(Alone).text()).toBe('false')
   })
 
   it('still unmounts hidden tabs by default', async () => {

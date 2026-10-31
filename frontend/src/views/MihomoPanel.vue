@@ -73,10 +73,10 @@
           <TabsTrigger value="rules" class="min-h-11 px-4">规则</TabsTrigger>
           <TabsTrigger value="logs" class="min-h-11 px-4">日志</TabsTrigger>
         </TabsList>
-        <TabsContent value="proxies"><MihomoProxies :key="agentId" :agent-id="agentId" :active="tab === 'proxies'" :reload-token="reloadToken" /></TabsContent>
-        <TabsContent value="connections"><MihomoConnections :key="agentId" :agent-id="agentId" :active="tab === 'connections'" /></TabsContent>
-        <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :active="tab === 'rules'" :reload-token="reloadToken" /></TabsContent>
-        <TabsContent value="logs"><MihomoLogs :key="agentId" :agent-id="agentId" :active="tab === 'logs'" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="proxies"><MihomoProxies :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="connections"><MihomoConnections :key="agentId" :agent-id="agentId" /></TabsContent>
+        <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="logs"><MihomoLogs :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
       </Tabs>
     </template>
     <MihomoSettings v-if="settingsEditor" :open="true" :profile-id="settingsEditor.profileId" :preferred-agent-id="settingsEditor.agentId" :context-label="settingsEditor.label"

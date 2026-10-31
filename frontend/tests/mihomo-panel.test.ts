@@ -56,6 +56,7 @@ vi.mock('@/api', () => {
       getLogs: vi.fn().mockResolvedValue({ data: { success: true, logs: 'Mihomo log entry' } })
     },
     mihomoPanelApi: {
+      groupDelay: vi.fn(),
       version: ok({ version: 'v1.19.0' }),
       configs: ok({ mode: 'Rule' }),
       proxies: ok({ proxies: {
@@ -112,7 +113,7 @@ describe('mihomo panel view', () => {
     await flushPromises()
     expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['策略', '连接', '规则', '日志'])
     expect(wrapper.get('[role="tab"][data-state="active"]').text()).toBe('日志')
-    expect(wrapper.getComponent(MihomoLogs).props()).toMatchObject({ agentId: 'gw', active: true })
+    expect(wrapper.getComponent(MihomoLogs).props('agentId')).toBe('gw')
     expect(wrapper.text()).toContain('Mihomo log entry')
     wrapper.unmount()
   })
@@ -152,8 +153,9 @@ describe('mihomo panel view', () => {
     expect(proxies).toHaveBeenCalledTimes(1)
     expect(rules).toHaveBeenCalledTimes(1)
     expect(connections).toHaveBeenCalledTimes(1)
-    expect(wrapper.getComponent(MihomoProxies).props('active')).toBe(false)
-    expect(wrapper.getComponent(MihomoConnections).props('active')).toBe(false)
+    // 是否为当前标签由 Tabs 注入，不经过 props
+    const shown = (component: any) => wrapper.getComponent(component).vm.$.setupState.active
+    expect([MihomoProxies, MihomoConnections, MihomoRules].map(shown)).toEqual([false, false, true])
     expect(wrapper.get('[role="tabpanel"][data-state="inactive"]').classes()).toContain('data-[state=inactive]:hidden')
     // 刷新只读取当前标签，隐藏的「策略」切回时再读
     await wrapper.get('button[aria-label="刷新面板"]').trigger('click')
@@ -174,6 +176,39 @@ describe('mihomo panel view', () => {
     wrapper.unmount()
   })
 
+  it('keeps a batch speed test running while its tab is hidden until the panel is refreshed', async () => {
+    routeState.route = reactive({ query: { agent: 'gw' } })
+    vi.mocked(agentApi.summaries).mockResolvedValue({ data: [
+      { id: 'gw', name: 'Gateway', service_type: 'mihomo', status: 'online' }
+    ] } as any)
+    routeState.replace.mockImplementation(({ query }) => { routeState.route.query = query })
+    const pending: Array<(value: unknown) => void> = []
+    vi.mocked(mihomoPanelApi.groupDelay).mockReset().mockImplementation(() => new Promise(resolve => pending.push(resolve)) as any)
+    const wrapper = mount(MihomoPanel)
+    await flushPromises()
+    const show = async (tab: string) => { routeState.route.query = { ...routeState.route.query, tab }; await flushPromises() }
+    await wrapper.findAll('button').find(button => button.text().includes('全部分组测速'))!.trigger('click')
+    await flushPromises()
+    expect(pending).toHaveLength(1)
+    // 切走后测速继续，结果写回隐藏的策略页，切回可见
+    await show('rules')
+    pending.shift()!({ data: { data: { HK: 123 } } })
+    await flushPromises()
+    expect(pending).toHaveLength(1)
+    await show('proxies')
+    expect(wrapper.text()).toContain('123 ms')
+    expect(wrapper.text()).toContain('正在测速')
+    // 刷新面板仍立即停止测速并清空结果
+    await wrapper.get('button[aria-label="刷新面板"]').trigger('click')
+    await flushPromises()
+    pending.shift()!({ data: { data: { Proxy: 99 } } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('123 ms')
+    expect(wrapper.text()).not.toContain('正在测速')
+    expect(mihomoPanelApi.groupDelay).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('lists connections with the outbound chain', async () => {
     const wrapper = mount(MihomoConnections, { props: { agentId: 'gw', active: true } })
     await flushPromises()
@@ -183,7 +218,7 @@ describe('mihomo panel view', () => {
   })
 
   it('lists rules and rule providers', async () => {
-    const wrapper = mount(MihomoRules, { props: { agentId: 'gw', active: true, reloadToken: 0 } })
+    const wrapper = mount(MihomoRules, { props: { agentId: 'gw', reloadToken: 0 } })
     await flushPromises()
     expect(wrapper.text()).toContain('2 / 2 条')
     expect(wrapper.text()).toContain('ads')

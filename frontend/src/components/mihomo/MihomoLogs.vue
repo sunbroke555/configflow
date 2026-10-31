@@ -54,10 +54,13 @@ import Toolbar from '@/components/common/Toolbar.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import AgentLogLines from '@/components/agents/AgentLogLines.vue'
+import { useTabActive } from '@/components/ui/tabs'
 import { agentApi, type AgentLogSource } from '@/api'
 import { panelError } from '@/types/mihomo'
 
-const props = defineProps<{ agentId: string; active: boolean; reloadToken: number }>()
+const props = withDefaults(defineProps<{ agentId: string; active?: boolean; reloadToken: number }>(), { active: true })
+// 所在标签是否为当前标签：由 Tabs 注入，切换标签不经过 props，隐藏的面板不会整组件重新渲染
+const active = useTabActive(() => props.active)
 const MAX_LINES = 500
 const REFRESH_MS = 3000
 const sources = ref<AgentLogSource[]>([])
@@ -114,7 +117,7 @@ function stop() {
 }
 
 function canRead() {
-  return !disposed && props.active && visible.value && !!props.agentId
+  return !disposed && active.value && visible.value && !!props.agentId
 }
 
 function schedule() {
@@ -193,7 +196,7 @@ async function toggleFollow() {
 }
 
 function visibilityChanged() { visible.value = document.visibilityState !== 'hidden' }
-watch([() => props.agentId, () => props.active, visible, paused], ([id], previous) => {
+watch([() => props.agentId, active, visible, paused], ([id], previous) => {
   stop()
   if (!previous || id !== previous[0]) {
     sources.value = []

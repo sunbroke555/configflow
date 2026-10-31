@@ -12,7 +12,7 @@
         </TabsTrigger>
       </TabsList>
       <TabsContent value="tasks" class="mt-0 min-w-0">
-        <ScheduledTasks :active="tab === 'tasks'" />
+        <ScheduledTasks />
       </TabsContent>
       <TabsContent value="general" class="mt-0 min-w-0">
     <!-- ===== 服务配置 / 配置管理 ===== -->
