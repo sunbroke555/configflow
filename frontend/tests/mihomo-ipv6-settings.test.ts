@@ -28,7 +28,9 @@ afterEach(() => wrappers.splice(0).forEach(wrapper => wrapper.unmount()))
 describe('Mihomo IPv6 mode selector', () => {
   it('offers the three modes and reflects handwritten YAML in both directions', async () => {
     const wrapper = mount()
-    expect(selector(wrapper).props('options').map((option: { label: string }) => option.label)).toEqual(['关闭', '仅节点使用 IPv6', '客户端也走 IPv6'])
+    expect(selector(wrapper).props('options').map((option: { label: string }) => option.label)).toEqual(['关闭', 'Mihomo 用 IPv6，客户端走 IPv4', '客户端也走 IPv6'])
+    // The long middle option may wrap on a phone instead of widening the page.
+    expect(selector(wrapper).props('wrap')).toBe(true)
     expect(selector(wrapper).props('modelValue')).toBe('nodes')
     const changed = await choose(wrapper, 'clients')
     expect(parse(changed)).toEqual({ ipv6: true, dns: { ipv6: true } })
@@ -39,9 +41,12 @@ describe('Mihomo IPv6 mode selector', () => {
     expect(wrapper.get('[data-ipv6-mode-description]').text()).toContain('Mihomo 不使用 IPv6')
   })
 
-  it('mentions in the node-only description that rule-set IPv6 networks still reach the upstream router', () => {
+  it('gives the full mode name in the description and says the upstream routes stay published', () => {
     const wrapper = mount()
-    expect(wrapper.get('[data-ipv6-mode-description]').text()).toContain('客户端有 IPv6 时，规则集里的 IPv6 网段也会发布到上级路由')
+    const text = wrapper.get('[data-ipv6-mode-description]').text()
+    expect(text).toContain('Mihomo 用 IPv6，客户端走 IPv4 分流')
+    expect(text).toContain('IPv6 Fake-IP 网段和规则集里的 IPv6 网段照常发布到上游路由')
+    expect(text).toContain('切换模式不用再改路由器')
   })
 
   it('shows a custom combination with its reason and only rewrites it when a mode is chosen', async () => {
@@ -69,10 +74,10 @@ describe('Mihomo IPv6 mode selector', () => {
   it('retires a mode notice once the YAML is edited by hand', async () => {
     const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fd00::1/64\n'
     const wrapper = mount(source)
-    const changed = await choose(wrapper, 'nodes')
+    const changed = await choose(wrapper, 'off')
     await wrapper.setProps({ modelValue: changed })
     expect(wrapper.get('[role="status"]').text()).toBe('已关闭 IPv6 Fake-IP，网段保留供再次开启。')
-    await wrapper.setProps({ modelValue: changed.replace('ipv6: true', 'ipv6: false') })
+    await wrapper.setProps({ modelValue: changed.replace('fd00::1/64', 'fd00::2/64') })
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 
@@ -84,7 +89,21 @@ describe('Mihomo IPv6 mode selector', () => {
     expect(wrapper.text()).toContain('YAML 未填写 ipv6（默认开启）、dns.ipv6（默认关闭）')
   })
 
-  it('shows the range only for client IPv6 with Fake-IP and reflects handwritten YAML', async () => {
+  it('fills and shows the range for 「Mihomo 用 IPv6，客户端走 IPv4」 with Fake-IP', async () => {
+    const wrapper = mount('ipv6: false\ndns:\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\ntun:\n  enable: true\n')
+    expect(wrapper.findComponent(Input).exists()).toBe(false)
+    const changed = await choose(wrapper, 'nodes')
+    expect(parse(changed)).toMatchObject({ ipv6: true, dns: { ipv6: false, 'fake-ip-range6': 'fc00::1/64' } })
+    expect(wrapper.get('[role="status"]').text()).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
+    await wrapper.setProps({ modelValue: changed })
+    expect(wrapper.getComponent(Input).props('modelValue')).toBe('fc00::1/64')
+    // Validation guards the range in this mode as well.
+    wrapper.getComponent(Input).vm.$emit('update:modelValue', '2001:db8::1/64')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('validation')?.at(-1)).toEqual([{ invalid: true, dirty: true }])
+  })
+
+  it('shows the range in both IPv6 modes with Fake-IP and reflects handwritten YAML', async () => {
     const source = 'ipv6: true\ndns:\n  enable: true\n  ipv6: true\n  enhanced-mode: fake-ip\n  fake-ip-range6: fd12:3456::1/64 # custom\n'
     const wrapper = mount(source)
     expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd12:3456::1/64')
@@ -92,6 +111,8 @@ describe('Mihomo IPv6 mode selector', () => {
     await wrapper.setProps({ modelValue: source.replace('fd12:3456', 'fd56:789a') })
     expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd56:789a::1/64')
     await wrapper.setProps({ modelValue: source.replace('  ipv6: true', '  ipv6: false') })
+    expect(wrapper.getComponent(Input).props('modelValue')).toBe('fd12:3456::1/64')
+    await wrapper.setProps({ modelValue: source.replace('ipv6: true\ndns', 'ipv6: false\ndns') })
     expect(wrapper.findComponent(Input).exists()).toBe(false)
     await wrapper.setProps({ modelValue: source.replace('fake-ip\n', 'redir-host\n') })
     expect(wrapper.findComponent(Input).exists()).toBe(false)

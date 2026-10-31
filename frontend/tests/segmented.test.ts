@@ -20,6 +20,17 @@ describe('Segmented', () => {
     expect(wrapper.findAll('[data-segment]').map(item => item.attributes('disabled') !== undefined)).toEqual([false, true, false])
   })
 
+  it('lets only the longest option wrap when asked, keeping the others on one line', () => {
+    const wrapper = mount(Segmented, { props: { modelValue: 'b', label: '模式', wrap: true,
+      options: [{ value: 'a', label: '关闭' }, { value: 'b', label: 'Mihomo 用 IPv6，客户端走 IPv4' }, { value: 'c', label: '客户端也走 IPv6' }] } })
+    wrappers.push(wrapper)
+    const segments = wrapper.findAll('[data-segment]')
+    expect(segments.map(item => item.attributes('data-wrap') !== undefined)).toEqual([false, true, false])
+    expect(segments[1].classes()).toEqual(expect.arrayContaining(['whitespace-normal', 'h-auto', 'min-w-0']))
+    expect(segments[0].classes()).toEqual(expect.arrayContaining(['whitespace-nowrap', 'shrink-0']))
+    expect(render('a').find('[data-wrap]').exists()).toBe(false)
+  })
+
   it('selects nothing and hides the thumb for a value outside the options', async () => {
     // jsdom has no layout; give every segment a width so the thumb is measurable.
     const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!

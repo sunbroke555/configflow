@@ -52,6 +52,15 @@ ROS 会给设备发 ICMP 重定向，让设备改为直接连 Mihomo，但每个
 - 只提示，ConfigFlow 不修改防火墙；路由照常发布，自动同步规则也不受影响。执行命令后重新生成差异报告，提示消失即可。
 - IPv4 与 IPv6 是两套防火墙，IPv6 的提示和命令见下文，两条都要执行。
 
+### IPv6 Fake-IP 分流路由（RouterOS）
+
+和 IPv4 的 fake-ip 网段一样，只要 Mihomo 使用 IPv6（顶层 `ipv6` 为 `true`）、DNS 是 Fake-IP 模式且填写了 `fake-ip-range6`，差异报告就显示「IPv6 Fake-IP 分流路由」，把这个网段（如 `fc00::/64`）交给 Mihomo，不看 `dns.ipv6`。所以 Mihomo 设置的两个 IPv6 模式发布的是同一条路由，在两者之间切换不用再改路由器；DNS IPv6 关闭时客户端拿不到这个网段的地址，属于正常情况。
+
+- 只有「客户端也走 IPv6」（`dns.ipv6: true`）要求 Mihomo 开启 TUN，未开启时阻止发布；另一个模式照常发布。
+- 下一跳的选择和沿用已有路由与下文 IPv6 规则集路由相同；但无法唯一确定下一跳、已有路由冲突或网段与 ROS 地址重叠时，这一项会阻止整次发布，不像规则集路由那样只跳过。
+- 「IPv6 模式」改为「关闭」、DNS 不再使用 Fake-IP 或删除网段后，保存并经差异报告**预览发布**，才撤回 ConfigFlow 添加的路由。
+- 自动规则同步不发布这项改动：首次出现、网段或下一跳变化时暂停同步，需要手动预览发布一次。
+
 ### IPv6 规则集路由（RouterOS）
 
 Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备有 IPv6 后会直接用这些 IPv6 地址连接，如果主路由只把 IPv4 网段交给 Mihomo，这些连接会从 WAN 直连并超时。
@@ -59,7 +68,7 @@ Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备�
 满足以下条件时，差异报告在 Fake-IP 下方显示「IPv6 规则集路由」：
 
 - 路由器类型是 RouterOS。iKuai 只发布 IPv4 网段，规则集中的 IPv6 网段不会处理，差异报告会提示数量。
-- Mihomo 使用 IPv6：基础 YAML 顶层 `ipv6` 为 `true`，未填写时按 Mihomo 默认开启；Mihomo 设置的「IPv6 模式」选「仅节点使用 IPv6」或「客户端也走 IPv6」时都满足。
+- Mihomo 使用 IPv6：基础 YAML 顶层 `ipv6` 为 `true`，未填写时按 Mihomo 默认开启；Mihomo 设置的「IPv6 模式」选「Mihomo 用 IPv6，客户端走 IPv4 分流」或「客户端也走 IPv6」时都满足。
 - Mihomo 开启了 TUN（`tun.enable: true`）。主路由转来的 IPv6 连接只能由 TUN 接收。
 - 「使用静态路由的 IP 规则集」中有公网 IPv6 网段。链路本地、ULA 等非公网网段不处理；「使用策略路由的 IP 规则集」只处理 IPv4。
 

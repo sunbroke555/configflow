@@ -14,7 +14,7 @@ import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
 import { copyText } from '@/lib/clipboard'
 import { notify } from '@/lib/feedback'
 import {
-  firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, stepVisible, upstreamStep, verifyStep,
+  firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, upstreamStep, verifyStep,
   type IPv6Step, type IPv6StepContext, type IPv6StepId, type OxiDNSLink, type UpstreamPendingStatus,
 } from '@/lib/mihomoIPv6Steps'
 import type { IPv6Verification, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
@@ -67,14 +67,13 @@ const steps = computed(() => {
   const all: Record<IPv6StepId, IPv6Step | null> = {
     host: hostStep(context.value),
     publish: publishStep(context.value),
-    upstream: upstreamStep(upstream.value, !!props.dirty),
+    upstream: upstreamStep(upstream.value, !!props.dirty, props.mode),
     firewall: firewallStep(context.value),
     oxidns: oxidnsStep(oxidns.value),
     verify: verifyStep(context.value, groups.value, verifier.value?.verification?.status === 'running'),
   }
   return stepOrder(props.mode, oxidns.value.length > 0).map(id => all[id]).filter((item): item is IPv6Step => !!item)
 })
-const visible = (item: IPv6Step) => stepVisible(props.mode, item.id, upstream.value)
 // Shown once above the list instead of repeating the same reason on every step.
 const notice = computed(() => {
   if (phase.value === 'loading') return { text: '正在读取设备…', tone: 'muted' }
@@ -259,7 +258,7 @@ onUnmounted(() => { disposed = true; session++ })
     </Select>
     <p v-if="notice" class="m-0 break-words text-xs leading-relaxed" :class="notice.tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ notice.text }}</p>
     <ol class="m-0 min-w-0 list-none divide-y divide-border/70 p-0">
-      <li v-for="item in steps" v-show="visible(item)" :key="item.id" class="min-w-0" :data-ipv6-step="item.id">
+      <li v-for="item in steps" :key="item.id" class="min-w-0" :data-ipv6-step="item.id">
         <AgentStatusRow :label="item.label" :status="item.status" :tone="item.tone">
           <template v-if="item.issues.length || item.note || item.commands?.length" #notice>
             <p v-for="issue in item.issues" :key="issue" class="m-0 [overflow-wrap:anywhere]" :role="item.tone === 'danger' ? 'alert' : undefined">{{ issue }}</p>
@@ -277,8 +276,8 @@ onUnmounted(() => { disposed = true; session++ })
           </template>
         </AgentStatusRow>
         <template v-if="item.id === 'upstream' && selectedId">
-          <!-- Kept mounted, and hidden, so it reports pending work even while this row is hidden;
-               its own lines appear in the publish bar and the device check, not twice on one screen. -->
+          <!-- Mounted but hidden: this row shows only its status; its own lines appear in the
+               publish bar and the device check, not twice on one screen. -->
           <div class="hidden" data-ipv6-step-upstream-reminder>
             <UpstreamRouterPending :agent-id="selectedId" :refresh-key="upstreamKey" compact @status="followUpstream" />
           </div>

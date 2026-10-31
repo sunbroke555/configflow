@@ -81,10 +81,12 @@ export function publishStep(context: IPv6StepContext): IPv6Step {
   return step('publish', '已发布', 'success')
 }
 
-export function upstreamStep(status: UpstreamPendingStatus | null, dirty: boolean): IPv6Step {
+export function upstreamStep(status: UpstreamPendingStatus | null, dirty: boolean, mode: Exclude<MihomoIPv6Mode, 'off'> = 'clients'): IPv6Step {
   if (dirty) return step('upstream', '保存后核对', 'neutral', [], '上级路由按已保存的配置核对，请先保存草稿。')
   if (!status) return step('upstream', '检查中', 'progress')
   if (status.state === 'none') {
+    // Clients that stay on IPv4 need no router; Mihomo reaches its nodes by itself.
+    if (mode === 'nodes') return step('upstream', '未关联上级路由', 'neutral', [], '没有路由器把代理网关设为这台 Mihomo，无需发布。')
     return step('upstream', '未关联上级路由', 'warning', ['没有路由器把代理网关设为这台 Mihomo；客户端的 IPv6 流量需要上级路由转给它。'])
   }
   if (status.state === 'synced') return step('upstream', '已同步', 'success')
@@ -94,8 +96,9 @@ export function upstreamStep(status: UpstreamPendingStatus | null, dirty: boolea
 
 /**
  * Router firewall and NAT for client IPv6, from the device check alone: #444's
- * client Fake-IP path (NAT, forward drops) and #452's same-port forward hint,
- * which the check evaluates on the rows it already read from the router.
+ * client Fake-IP path (NAT, forward drops; only while clients receive IPv6
+ * Fake-IP) and #452's same-port forward hint, which the check evaluates on the
+ * rows it already read from the router, in both IPv6 modes.
  */
 export function firewallStep(context: IPv6StepContext): IPv6Step {
   const readiness = context.readiness
@@ -154,15 +157,10 @@ export function verifyStep(context: IPv6StepContext, groups: IPv6SummaryGroup[] 
 }
 
 /**
- * Steps of a mode, in order. In `nodes` the upstream step appears only while
- * the routers have work for this Mihomo (IPv6 rule-set routes, or Fake-IP
- * routes still to withdraw); it stays rendered so it can report that.
+ * Steps of a mode, in order. Both IPv6 modes publish routes upstream (IPv6
+ * Fake-IP, rule-set IPv6 networks) and share the same-port forward hint; only
+ * clients that receive IPv6 addresses need OxiDNS to answer AAAA.
  */
 export function stepOrder(mode: Exclude<MihomoIPv6Mode, 'off'>, hasOxiDNS: boolean): IPv6StepId[] {
-  if (mode === 'nodes') return ['host', 'publish', 'upstream', 'verify']
-  return ['host', 'publish', 'upstream', 'firewall', ...(hasOxiDNS ? ['oxidns' as const] : []), 'verify']
-}
-
-export function stepVisible(mode: Exclude<MihomoIPv6Mode, 'off'>, id: IPv6StepId, upstream: UpstreamPendingStatus | null): boolean {
-  return mode === 'clients' || id !== 'upstream' || upstream?.state === 'pending'
+  return ['host', 'publish', 'upstream', 'firewall', ...(mode === 'clients' && hasOxiDNS ? ['oxidns' as const] : []), 'verify']
 }

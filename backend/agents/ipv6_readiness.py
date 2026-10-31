@@ -74,15 +74,18 @@ def configuration(config):
                 errors.append('IPv6 Fake-IP 应使用 ULA 网段，不能覆盖公网或链路本地地址')
             fake = str(network)
         tun = document.get('tun') or {}
+        # The upstream route follows Mihomo's IPv6 Fake-IP range in both IPv6
+        # modes (see ipv6_fakeip.settings); clients use it only with dns.ipv6.
+        route = (document.get('ipv6', True) is True and dns.get('enable') is True
+                 and dns.get('enhanced-mode') == 'fake-ip' and bool(fake))
         result = {'ipv6': document.get('ipv6', True), 'dns_ipv6': dns.get('ipv6', False),
                   'ipv6_explicit': 'ipv6' in document, 'dns_ipv6_explicit': 'ipv6' in dns,
                   'fake_ipv6_range': fake, 'tun_enabled': isinstance(tun, dict) and tun.get('enable') is True,
-                  'fake_ipv6_enabled': document.get('ipv6', True) is True and dns.get('enable') is True
-                  and dns.get('ipv6') is True and dns.get('enhanced-mode') == 'fake-ip' and bool(fake),
+                  'fake_ipv6_route': route, 'fake_ipv6_enabled': route and dns.get('ipv6') is True,
                   'errors': errors, 'source': 'saved_draft'}
         return result, document
     except (yaml.YAMLError, ValueError, TypeError, AttributeError):
-        return {'ipv6': None, 'dns_ipv6': None, 'fake_ipv6_range': None, 'fake_ipv6_enabled': False,
+        return {'ipv6': None, 'dns_ipv6': None, 'fake_ipv6_range': None, 'fake_ipv6_route': False, 'fake_ipv6_enabled': False,
                 'tun_enabled': False, 'errors': ['无法解析 IPv6 设置，请检查基础 YAML 的类型与 IPv6 Fake-IP 网段'],
                 'source': 'saved_draft'}, {}
 

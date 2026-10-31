@@ -123,12 +123,54 @@ def test_disabled_feature_withdraws_only_owned_route_without_online_host():
     router, _ = publish(driver)
     other = row(**{'.id': '*51', 'dst-address': 'fc01::/64', 'comment': 'cf-ipv6-readiness:legacy'})
     session.rows[fake6.ROUTES].append(other)
-    disabled = {'mihomo': {'custom_config': CONFIG['mihomo']['custom_config'].replace('  ipv6: true', '  ipv6: false')}}
+    # IPv6 mode 「关闭」: the top-level switch, not dns.ipv6, withdraws the route.
+    disabled = {'mihomo': {'custom_config': CONFIG['mihomo']['custom_config'].replace('ipv6: true\ndns', 'ipv6: false\ndns')}}
     part, _, plan = preview(driver, router, disabled, {'error': 'offline'})
     assert not part['enabled'] and not part['blockers']
     assert execute(plan, driver, None)['ok']
     assert session.rows[fake6.ROUTES] == [other]
     assert driver.ipv6_fakeip_manifest is None
+
+
+NODES = {'mihomo': {'custom_config': CONFIG['mihomo']['custom_config'].replace('  ipv6: true', '  ipv6: false')}}
+
+
+def test_both_ipv6_modes_publish_the_route_so_switching_modes_leaves_the_router_alone():
+    """Like IPv4 Fake-IP: Mihomo uses IPv6 and Fake-IP, whatever dns.ipv6 says."""
+    session, driver = device()
+    part, report, plan = preview(driver, config=NODES)
+    assert part['enabled'] and part['status'] == 'missing' and not part['blockers']
+    assert report['ipv6_fakeip']['items'][0]['detail'].startswith('发布时添加')
+    assert execute(plan, driver, None)['ok']
+    router = {**ROUTER, 'ipv6_fakeip_state': copy.deepcopy(driver.ipv6_fakeip_manifest)}
+    assert router['ipv6_fakeip_state']['spec'] == {'cidr': 'fc00::/64', 'gateway': 'fdda::4%bridge'}
+    writes = len(session.writes)
+    for config in (CONFIG, NODES):  # 「客户端也走 IPv6」 and back: nothing left to publish
+        part, report, plan = preview(driver, router, config)
+        assert part['status'] == 'synced' and not part['ops'] and report['in_sync']
+    assert len(session.writes) == writes
+
+
+def test_tun_is_required_only_while_clients_receive_ipv6_fake_ip():
+    session, driver = device()
+    no_tun = NODES['mihomo']['custom_config'].replace('tun:\n  enable: true', 'tun:\n  enable: false')
+    part, _, plan = preview(driver, config={'mihomo': {'custom_config': no_tun}})
+    assert part['status'] == 'missing' and not part['blockers'] and not plan['blockers']
+    clients = no_tun.replace('  ipv6: false', '  ipv6: true')
+    part, _, plan = preview(driver, config={'mihomo': {'custom_config': clients}})
+    assert any('TUN' in item for item in part['blockers']) and plan['blockers']
+
+
+def test_missing_range_is_routed_only_once_clients_need_it():
+    """The settings fill fc00::1/64 when a mode is chosen; without it nothing is routed or blocked."""
+    without = NODES['mihomo']['custom_config'].replace('  fake-ip-range6: fc00::1/64\n', '')
+    assert fake6.settings({'mihomo': {'custom_config': without}}) == {'enabled': False, 'cidr': '', 'tun_enabled': False, 'error': ''}
+    assert not fake6.relevant({'mihomo': {'custom_config': without}}, ROUTER)
+    clients = without.replace('  ipv6: false', '  ipv6: true')
+    assert fake6.settings({'mihomo': {'custom_config': clients}})['error']
+    # Mihomo's IPv4-only DNS modes route nothing, as for IPv4.
+    redir = CONFIG['mihomo']['custom_config'].replace('enhanced-mode: fake-ip', 'enhanced-mode: redir-host')
+    assert not fake6.settings({'mihomo': {'custom_config': redir}})['enabled']
 
 
 @pytest.mark.parametrize('extra', [{'gateway': 'fdda::9%bridge'}, {'disabled': 'true'}, {'active': 'false'},

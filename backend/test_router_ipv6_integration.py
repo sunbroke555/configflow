@@ -166,7 +166,21 @@ def test_capture_still_rejects_settings_changed_during_publication(environment):
     assert 'baseline' not in receipt
 
 
-@pytest.mark.parametrize('field,value', [('ipv6', False), ('dns.ipv6', False), ('dns.enable', False),
+def test_switching_ipv6_mode_keeps_the_fake6_control_so_auto_sync_carries_on():
+    """dns.ipv6 picks the IPv6 mode only; the route stays the same in both, as does the sync baseline."""
+    router = {'id': 'ros', 'type': 'routeros', 'ipv6_fakeip_state': IPV6_MANIFEST}
+    nodes = copy.deepcopy(DOCUMENT)
+    nodes['dns']['ipv6'] = False
+    assert ipv6_fakeip.settings(config_for(nodes)) == ipv6_fakeip.settings(config_for())
+    assert ipv6_fakeip.relevant(config_for(nodes), router)
+    # Without TUN only the mode that hands out the addresses cannot be routed.
+    nodes['tun']['enable'] = False
+    assert not ipv6_fakeip.settings(config_for(nodes))['error']
+    nodes['dns']['ipv6'] = True
+    assert ipv6_fakeip.settings(config_for(nodes))['error']
+
+
+@pytest.mark.parametrize('field,value', [('ipv6', False), ('dns.enable', False),
     ('dns.enhanced-mode', 'redir-host'), ('dns.fake-ip-range6', 'fd01::1/64'), ('tun.enable', False)])
 def test_changed_fake6_control_pauses_auto_sync_before_any_download_or_write(environment, field, value):
     repository, driver = environment

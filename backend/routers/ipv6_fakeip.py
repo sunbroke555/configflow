@@ -25,6 +25,16 @@ RUNTIME = {'active', 'inactive', 'immediate-gw', 'belongs-to', 'hw-offloaded', '
 
 
 def settings(config):
+    """Whether the saved Mihomo configuration has an IPv6 Fake-IP range to route.
+
+    Like the IPv4 Fake-IP range, the route follows Mihomo's use of IPv6 and
+    Fake-IP (top-level ``ipv6``, default on, and DNS ``fake-ip`` with a
+    ``fake-ip-range6``), not ``dns.ipv6``: both IPv6 modes publish it, so a
+    mode switch never needs the router again. ``dns.ipv6`` only decides whether
+    clients receive these addresses; only then must the range be present and
+    TUN be on to receive the connections. The keys stay as they were, since
+    automatic rule sync fingerprints this result.
+    """
     result = {'enabled': False, 'cidr': '', 'tun_enabled': False, 'error': ''}
     try:
         raw = (config.get('mihomo') or {}).get('custom_config') or ''
@@ -37,8 +47,10 @@ def settings(config):
         for name, value in [('ipv6', document.get('ipv6', True)), ('dns.ipv6', dns.get('ipv6', False))]:
             if type(value) is not bool:
                 raise ValueError(name + ' 必须填写 true 或 false')
+        clients = dns.get('ipv6') is True
         result['enabled'] = (document.get('ipv6', True) is True and dns.get('enable') is True
-                             and dns.get('ipv6') is True and dns.get('enhanced-mode') == 'fake-ip')
+                             and dns.get('enhanced-mode') == 'fake-ip'
+                             and (clients or dns.get('fake-ip-range6') not in (None, '')))
         if not result['enabled']:
             return result
         network = ipaddress.IPv6Network(dns.get('fake-ip-range6'), strict=False)
@@ -47,7 +59,7 @@ def settings(config):
         result['cidr'] = str(network)
         tun = document.get('tun') or {}
         result['tun_enabled'] = isinstance(tun, dict) and tun.get('enable') is True
-        if not result['tun_enabled']:
+        if clients and not result['tun_enabled']:
             raise ValueError('IPv6 Fake-IP 需要 Mihomo 开启 TUN；请先检查设备配置')
     except (yaml.YAMLError, ValueError, TypeError, AttributeError) as error:
         result['error'] = ('IPv6 Fake-IP 配置无法确认，请检查 YAML、fake-ip-range6 和 TUN 设置：' + str(error))

@@ -105,8 +105,10 @@ export function readMihomoFakeIPv6Range(source: string, defaultSource?: string):
       return { visible: false, value: '', source: 'invalid', editable: false, error: '', message: '' }
     }
     const settings = dns as Record<string, unknown>
+    // Both IPv6 modes route the range upstream (dns.ipv6 only decides whether
+    // clients receive it), so it is shown whenever Mihomo uses IPv6 and Fake-IP.
     const visible = (values.ipv6 === undefined || values.ipv6 === true) && settings.enable === true
-      && settings.ipv6 === true && settings['enhanced-mode'] === 'fake-ip'
+      && settings['enhanced-mode'] === 'fake-ip'
     const raw = settings['fake-ip-range6']
     const missing = !Object.prototype.hasOwnProperty.call(settings, 'fake-ip-range6')
     const value = missing ? DEFAULT_MIHOMO_FAKE_IPV6_RANGE
@@ -126,7 +128,7 @@ export function readMihomoFakeIPv6Range(source: string, defaultSource?: string):
       : isAlias(dnsNode) || isAlias(target) ? '此网段使用 YAML 别名，请在下方 YAML 中修改。'
       : inheritedDNS || inheritedRange ? '此网段来自 YAML 合并配置，请在下方 YAML 中修改。'
       : !editable ? '此网段的 YAML 格式无法直接编辑，请在下方 YAML 中修正。'
-      : missing ? 'YAML 尚未填写；编辑网段或重新开启 DNS IPv6 后补齐。' : ''
+      : missing ? 'YAML 尚未填写，上游路由暂不发布此网段；编辑网段或重新选择 IPv6 模式后补齐。' : ''
     return { visible, value, source: missing ? 'default' : error ? 'invalid' : 'explicit', editable, error, message }
   } catch (failure) {
     const message = failure instanceof Error ? failure.message : '无法读取 IPv6 Fake-IP 网段，请检查 YAML。'
@@ -138,7 +140,7 @@ export function readMihomoFakeIPv6Range(source: string, defaultSource?: string):
 export function setMihomoFakeIPv6Range(source: string, value: string, defaultSource?: string): string {
   const state = readMihomoFakeIPv6Range(source, defaultSource)
   if (!state.editable) throw new Error(state.message || state.error || '当前网段无法直接编辑，请在 YAML 中修改。')
-  if (!state.visible) throw new Error('请先开启 IPv6 和 DNS IPv6，并使用 Fake-IP 模式。')
+  if (!state.visible) throw new Error('请先开启 IPv6，并使用 Fake-IP 模式。')
   const error = validateMihomoFakeIPv6Range(value)
   if (error) throw new Error(error)
   const document = parse(source.trim() ? source : defaultSource || '')
@@ -152,7 +154,7 @@ export function setMihomoFakeIPv6Range(source: string, value: string, defaultSou
   return document.toString({ lineWidth: 0 })
 }
 
-/** Edit the selected flag and fill a missing Fake-IP IPv6 range when it becomes usable. */
+/** Edit the selected flag and fill a missing Fake-IP IPv6 range once Mihomo uses IPv6 with Fake-IP. */
 export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field, enabled: boolean, defaultSource?: string): MihomoIPv6Edit {
   const state = readMihomoIPv6(source, defaultSource)
   if (!state[field].editable) throw new Error(state[field].message)
@@ -171,7 +173,8 @@ export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field,
   if (enabled && (values.ipv6 === undefined || values.ipv6 === true)
     && dns !== null && typeof dns === 'object' && !Array.isArray(dns)) {
     const settings = dns as Record<string, unknown>
-    if (settings.enable === true && settings.ipv6 === true && settings['enhanced-mode'] === 'fake-ip') {
+    // dns.ipv6 is not required: both IPv6 modes publish the range's upstream route.
+    if (settings.enable === true && settings['enhanced-mode'] === 'fake-ip') {
       if (Object.prototype.hasOwnProperty.call(settings, 'fake-ip-range6')) {
         if (typeof settings['fake-ip-range6'] !== 'string' || !settings['fake-ip-range6'].trim()) {
           notice = '已有 fake-ip-range6 的值为空或不是文本，未自动覆盖；请在 YAML 中填写有效的 IPv6 网段。'
@@ -185,7 +188,8 @@ export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field,
       }
     }
   }
-  if (!enabled && dns !== null && typeof dns === 'object' && !Array.isArray(dns)
+  // Turning dns.ipv6 off keeps the range in use (and on screen) for the route.
+  if (!enabled && field === 'core' && dns !== null && typeof dns === 'object' && !Array.isArray(dns)
     && Object.prototype.hasOwnProperty.call(dns, 'fake-ip-range6')) {
     notice = '已关闭 IPv6 Fake-IP，网段保留供再次开启。'
   }
@@ -201,8 +205,10 @@ export function setMihomoIPv6(source: string, field: MihomoIPv6Field, enabled: b
  * The three supported uses of IPv6, mapped onto the effective top-level `ipv6`
  * (Mihomo default: on) and `dns.ipv6` (default: off):
  *   off     → ipv6: false, dns.ipv6: false
- *   nodes   → ipv6: true,  dns.ipv6: false  (clients stay on IPv4)
- *   clients → ipv6: true,  dns.ipv6: true   (Fake-IP range filled when missing)
+ *   nodes   → ipv6: true,  dns.ipv6: false  (「Mihomo 用 IPv6，客户端走 IPv4 分流」)
+ *   clients → ipv6: true,  dns.ipv6: true   (「客户端也走 IPv6」)
+ * Both IPv6 modes fill a missing Fake-IP range (Fake-IP DNS only), since the
+ * upstream router routes it in either mode.
  * Any other handwritten combination is reported as `custom` and never rewritten
  * until the user picks a mode.
  */

@@ -9,7 +9,7 @@ import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vu
 import { upstreamRouterApi } from '@/api/upstreamRouterPending'
 import { Select } from '@/components/ui/select'
 import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
-import { firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, stepVisible, upstreamStep, verifyStep } from '@/lib/mihomoIPv6Steps'
+import { firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, upstreamStep, verifyStep } from '@/lib/mihomoIPv6Steps'
 import type { IPv6ReadinessCheck, MihomoIPv6Readiness as Readiness } from '@/types/mihomoIPv6'
 
 vi.mock('@/router', () => ({ default: { push: vi.fn() } }))
@@ -76,6 +76,9 @@ describe('IPv6 step derivation', () => {
     expect(upstreamStep({ state: 'synced', pending: 0 }, false)).toMatchObject({ status: '已同步', tone: 'success', issues: [] })
     expect(upstreamStep({ state: 'pending', pending: 2 }, false)).toMatchObject({ status: '2 项待处理', tone: 'neutral' })
     expect(upstreamStep({ state: 'none', pending: 0 }, false)).toMatchObject({ status: '未关联上级路由', tone: 'warning' })
+    // Clients on IPv4 need no router: nothing to fix, nothing to publish.
+    expect(upstreamStep({ state: 'none', pending: 0 }, false, 'nodes')).toMatchObject({ status: '未关联上级路由', tone: 'neutral', issues: [] })
+    expect(upstreamStep({ state: 'pending', pending: 1 }, false, 'nodes')).toMatchObject({ status: '1 项待处理' })
     expect(upstreamStep({ state: 'unknown', pending: 0 }, false).status).toBe('无法确认')
     expect(upstreamStep({ state: 'synced', pending: 0 }, true)).toMatchObject({ status: '保存后核对' })
   })
@@ -133,13 +136,22 @@ describe('IPv6 step derivation', () => {
     expect(verifyStep(context(), buildMihomoIPv6Summary({ readiness: data }), true)).toMatchObject({ status: '验证中', tone: 'progress' })
   })
 
-  it('orders the steps per mode and shows node-only upstream work only while pending', () => {
-    expect(stepOrder('nodes', true)).toEqual(['host', 'publish', 'upstream', 'verify'])
+  it('orders the steps per mode: both publish routes upstream and share the firewall hint', () => {
+    expect(stepOrder('nodes', true)).toEqual(['host', 'publish', 'upstream', 'firewall', 'verify'])
     expect(stepOrder('clients', false)).toEqual(['host', 'publish', 'upstream', 'firewall', 'verify'])
     expect(stepOrder('clients', true)).toEqual(['host', 'publish', 'upstream', 'firewall', 'oxidns', 'verify'])
-    expect(stepVisible('nodes', 'upstream', { state: 'synced', pending: 0 })).toBe(false)
-    expect(stepVisible('nodes', 'upstream', { state: 'pending', pending: 3 })).toBe(true)
-    expect(stepVisible('clients', 'upstream', null)).toBe(true)
+  })
+
+  it('does not fault a published Fake-IP route that clients do not use yet', () => {
+    // 「Mihomo 用 IPv6，客户端走 IPv4」: dns.ipv6 off, the route is there; only the forward hint remains.
+    const data = readiness({ configuration: { ipv6: true, dns_ipv6: false, fake_ipv6_range: 'fc00::/64', errors: [] },
+      routers: [{ id: 'ros', name: '主路由', status: 'warning', can_prepare: false, checks: [
+        { ...ok('fake_ipv6'), message: 'fc00::/64 已指向这台 Mihomo，沿用现有路由；DNS IPv6 关闭，客户端暂不使用此网段' },
+        { id: 'forward_hairpin', label: 'IPv6 同口转发', status: 'warning', message: hairpinWarning, command }] }] })
+    expect(firewallStep(context({ readiness: data }))).toMatchObject({ status: '需处理', commands: [{ command }] })
+    const client = buildMihomoIPv6Summary({ readiness: data }).find(group => group.id === 'client')!
+    expect(client.tone).not.toBe('danger')
+    expect(client.issues.join('')).not.toContain('分流路由')
   })
 })
 
@@ -196,14 +208,16 @@ describe('Mihomo IPv6 step list', () => {
     expect(copyText).toHaveBeenCalledWith(command)
   })
 
-  it('keeps node-only steps short and does not read the router list', async () => {
+  it('lists the router steps for clients on IPv4 too, without the OxiDNS hint or the router list', async () => {
     const wrapper = await mount({ mode: 'nodes' })
     expect(routerApi.list).not.toHaveBeenCalled()
-    expect(wrapper.findAll('[data-ipv6-step]').map(item => item.attributes('data-ipv6-step'))).toEqual(['host', 'publish', 'upstream', 'verify'])
-    expect(shown(wrapper, 'upstream')).toBe(false)
+    expect(wrapper.findAll('[data-ipv6-step]').map(item => item.attributes('data-ipv6-step'))).toEqual(['host', 'publish', 'upstream', 'firewall', 'verify'])
+    expect(['upstream', 'firewall'].every(id => shown(wrapper, id))).toBe(true)
+    // The same-port forward hint applies to the routes published in this mode.
+    expect(status(wrapper, 'firewall')).toBe('需处理')
+    expect(row(wrapper, 'firewall').get('pre').text()).toBe(command)
     wrapper.getComponent(UpstreamRouterPending).vm.$emit('status', { state: 'pending', pending: 4 })
     await flushPromises()
-    expect(shown(wrapper, 'upstream')).toBe(true)
     expect(status(wrapper, 'upstream')).toBe('4 项待处理')
   })
 

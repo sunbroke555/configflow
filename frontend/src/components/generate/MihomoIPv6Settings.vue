@@ -30,16 +30,18 @@ const stepsMode = computed(() => state.value.mode === 'nodes' || state.value.mod
 const rangeInput = ref('')
 const rangeError = ref('')
 const rangeDirty = ref(false)
-const rangeHelp = optionHelp('用于生成客户端收到的 IPv6 Fake-IP，通常保留默认值即可。', '填写 IPv6 内网网段，例如 fc00::1/64，并避开局域网正在使用的网段。切换到其他模式会保留此值，重新选择「客户端也走 IPv6」时继续使用。')
-const modeLabels: Record<MihomoIPv6Mode, string> = { off: '关闭', nodes: '仅节点使用 IPv6', clients: '客户端也走 IPv6' }
+const rangeHelp = optionHelp('客户端收到的 IPv6 Fake-IP 取自此网段，通常保留默认值即可。',
+  '填写 IPv6 内网网段，例如 fc00::1/64，并避开局域网正在使用的网段。两个 IPv6 模式都把此网段发布到上游路由，切换模式不用再改路由器；选择「关闭」会保留此值。')
+// The segmented option uses the short name; the description gives the full one.
+const modeLabels: Record<MihomoIPv6Mode, string> = { off: '关闭', nodes: 'Mihomo 用 IPv6，客户端走 IPv4', clients: '客户端也走 IPv6' }
 const modeDescriptions: Record<MihomoIPv6Mode, string> = {
   off: 'Mihomo 不使用 IPv6，客户端也只拿到 IPv4 地址。',
-  nodes: '客户端保持 IPv4，Mihomo 通过 IPv6 连接节点。客户端有 IPv6 时，规则集里的 IPv6 网段也会发布到上级路由。',
+  nodes: 'Mihomo 用 IPv6，客户端走 IPv4 分流：Mihomo 经 IPv6 连接节点，DNS 只给客户端返回 IPv4 地址。IPv6 Fake-IP 网段和规则集里的 IPv6 网段照常发布到上游路由，切换模式不用再改路由器。',
   clients: '手机、电脑也拿到 IPv6 地址并经 Mihomo 分流，需要上级路由配合。',
 }
 const modeHelp = optionHelp(
-  '节点只有 IPv6 地址或想走 IPv6 线路时，选「仅节点使用 IPv6」；希望手机、电脑也通过 IPv6 分流时，选「客户端也走 IPv6」。',
-  '关闭写入 ipv6: false；仅节点写入 ipv6: true、dns.ipv6: false；客户端也走 IPv6 写入两项 true，Fake-IP 模式下补齐 fake-ip-range6。与下方 YAML 双向同步，保存并发布后生效。')
+  '节点只有 IPv6 地址或想走 IPv6 线路时，选「Mihomo 用 IPv6，客户端走 IPv4」；希望手机、电脑也通过 IPv6 分流时，选「客户端也走 IPv6」。',
+  '关闭写入 ipv6: false；「Mihomo 用 IPv6，客户端走 IPv4」写入 ipv6: true、dns.ipv6: false；「客户端也走 IPv6」写入两项 true。两个 IPv6 模式在 Fake-IP 模式下都补齐 fake-ip-range6。与下方 YAML 双向同步，保存并发布后生效。')
 const modeOptions = computed(() => (Object.keys(modeLabels) as MihomoIPv6Mode[])
   .map(value => ({ value, label: modeLabels[value], disabled: !state.value.options[value].available })))
 watch(() => [content.value, props.defaultConfig, props.open, props.profileId] as const, () => {
@@ -113,7 +115,7 @@ watch(busy, value => emit('busy', value))
           <span class="text-[13px] font-medium">IPv6 模式</span>
           <FieldHelp label="IPv6 模式" :text="modeHelp" />
         </div>
-        <Segmented :model-value="state.mode || ''" :options="modeOptions" label="IPv6 模式" class="max-w-full"
+        <Segmented :model-value="state.mode || ''" :options="modeOptions" label="IPv6 模式" class="max-w-full" wrap
           :disabled="disabled || busy || state.mode === null" @update:model-value="changeMode" />
       </div>
       <div :id="`${id}-mode-description`" class="min-w-0 space-y-1 text-xs leading-relaxed" data-ipv6-mode-description>

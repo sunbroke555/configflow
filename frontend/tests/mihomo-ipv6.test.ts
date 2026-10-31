@@ -96,7 +96,7 @@ describe('Mihomo IPv6 YAML controls', () => {
 describe('Mihomo IPv6 Fake-IP range auto-fill', () => {
   const fakeIP = 'ipv6: true\ndns:\n  enable: true\n  ipv6: false # keep DNS note\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver: [223.5.5.5]\ntun:\n  enable: false\n'
 
-  it('adds the missing range only when DNS IPv6 is enabled and leaves other settings intact', () => {
+  it('adds the missing range when DNS IPv6 is enabled and leaves other settings intact', () => {
     const edit = setMihomoIPv6WithDetails(fakeIP, 'dns', true)
     expect(edit.addedFakeIPv6Range).toBe(true)
     expect(edit.notice).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
@@ -131,7 +131,6 @@ describe('Mihomo IPv6 Fake-IP range auto-fill', () => {
     ['redir-host mode', fakeIP.replace('enhanced-mode: fake-ip', 'enhanced-mode: redir-host'), 'dns'],
     ['mode omitted', fakeIP.replace('  enhanced-mode: fake-ip\n', ''), 'dns'],
     ['core disabled', fakeIP.replace('ipv6: true', 'ipv6: false'), 'dns'],
-    ['only IPv6 node support requested', fakeIP, 'core'],
   ] as const)('does not change the setup for %s', (_name, source, field) => {
     const edit = setMihomoIPv6WithDetails(source, field, true)
     expect(edit.addedFakeIPv6Range).toBe(false)
@@ -140,6 +139,14 @@ describe('Mihomo IPv6 Fake-IP range auto-fill', () => {
     if (field === 'core') expected.ipv6 = true
     else expected.dns.ipv6 = true
     expect(parse(edit.content)).toEqual(expected)
+  })
+
+  it('fills the range when Mihomo alone starts using IPv6 with Fake-IP, since the route is published anyway', () => {
+    const edit = setMihomoIPv6WithDetails(fakeIP.replace('ipv6: true', 'ipv6: false'), 'core', true)
+    expect(edit.addedFakeIPv6Range).toBe(true)
+    expect(edit.notice).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
+    expect(parse(edit.content)).toMatchObject({ ipv6: true, dns: { ipv6: false, 'fake-ip-range6': DEFAULT_MIHOMO_FAKE_IPV6_RANGE } })
+    expect(parse(edit.content).tun.enable).toBe(false)
   })
 
   it('preserves an existing custom range and leaves it in place when either switch is disabled', () => {
@@ -151,9 +158,8 @@ describe('Mihomo IPv6 Fake-IP range auto-fill', () => {
       const edit = setMihomoIPv6WithDetails(enabled.content, field, false)
       expect(parse(edit.content).dns['fake-ip-range6']).toBe('fd12:3456:789a::1/64')
       expect(edit.addedFakeIPv6Range).toBe(false)
-      expect(edit.notice).toContain('网段保留')
-      // Route publication is a step of the IPv6 checklist, not a fixed notice.
-      expect(edit.notice).not.toContain('上级路由')
+      // Without dns.ipv6 the range is still routed and stays on screen: nothing to announce.
+      expect(edit.notice).toBe(field === 'core' ? '已关闭 IPv6 Fake-IP，网段保留供再次开启。' : '')
     }
   })
 
@@ -215,7 +221,6 @@ describe('Mihomo editable IPv6 Fake-IP range', () => {
     ['core off', active.replace('ipv6: true', 'ipv6: false')],
     ['invalid core', active.replace('ipv6: true', 'ipv6: "true"')],
     ['DNS off', active.replace('enable: true', 'enable: false')],
-    ['DNS IPv6 off', active.replace('  ipv6: true', '  ipv6: false')],
     ['redir-host', active.replace('enhanced-mode: fake-ip', 'enhanced-mode: redir-host')],
     ['DNS omitted', 'ipv6: true\n'],
     ['malformed YAML', 'dns: [\n'],
@@ -281,12 +286,21 @@ describe('Mihomo editable IPv6 Fake-IP range', () => {
     expect(readMihomoFakeIPv6Range(next).value).toBe('fd99::1/64')
   })
 
-  it('keeps the chosen range when switching off and reopening DNS IPv6', () => {
+  it('keeps showing and editing the range with DNS IPv6 off, as the route is still published', () => {
+    const nodes = active.replace('  ipv6: true', '  ipv6: false')
+    expect(readMihomoFakeIPv6Range(nodes)).toMatchObject({ visible: true, value: 'fc00::1/64', source: 'default', editable: true })
+    expect(readMihomoFakeIPv6Range(nodes).message).toContain('上游路由暂不发布')
+    expect(parse(setMihomoFakeIPv6Range(nodes, 'fd42::1/64')).dns).toMatchObject({ ipv6: false, 'fake-ip-range6': 'fd42::1/64' })
+  })
+
+  it('keeps the chosen range when switching IPv6 off and on again', () => {
     const source = setMihomoFakeIPv6Range(active, 'fd42:1234::1/64')
-    const off = setMihomoIPv6WithDetails(source, 'dns', false)
+    const nodes = setMihomoIPv6WithDetails(source, 'dns', false)
+    expect(readMihomoFakeIPv6Range(nodes.content)).toMatchObject({ visible: true, value: 'fd42:1234::1/64' })
+    const off = setMihomoIPv6WithDetails(nodes.content, 'core', false)
     expect(readMihomoFakeIPv6Range(off.content)).toMatchObject({ visible: false, value: 'fd42:1234::1/64' })
     expect(off.notice).toContain('网段保留')
-    const on = setMihomoIPv6WithDetails(off.content, 'dns', true)
+    const on = setMihomoIPv6WithDetails(off.content, 'core', true)
     expect(readMihomoFakeIPv6Range(on.content)).toMatchObject({ visible: true, value: 'fd42:1234::1/64' })
     expect(on.addedFakeIPv6Range).toBe(false)
   })
@@ -332,6 +346,20 @@ describe('Mihomo IPv6 mode', () => {
     expect(() => setMihomoIPv6Mode(source, 'nodes')).toThrow()
   })
 
+  it('fills the Fake-IP range for 「Mihomo 用 IPv6，客户端走 IPv4」 as well', () => {
+    const nodes = setMihomoIPv6Mode(fakeIP, 'nodes')
+    expect(nodes.addedFakeIPv6Range).toBe(true)
+    expect(nodes.notice).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
+    expect(parse(nodes.content)).toEqual({ ...parse(fakeIP), ipv6: true, dns: { ...parse(fakeIP).dns, 'fake-ip-range6': 'fc00::1/64' } })
+    expect(readMihomoFakeIPv6Range(nodes.content)).toMatchObject({ visible: true, value: 'fc00::1/64', source: 'explicit' })
+    const clients = setMihomoIPv6Mode(nodes.content, 'clients')
+    expect(clients.addedFakeIPv6Range).toBe(false)
+    expect(clients.content.match(/fake-ip-range6:/g)).toHaveLength(1)
+    // redir-host has no Fake-IP range to fill.
+    const redir = fakeIP.replace('enhanced-mode: fake-ip', 'enhanced-mode: redir-host')
+    expect(setMihomoIPv6Mode(redir, 'nodes').content).not.toContain('fake-ip-range6')
+  })
+
   it('switches between all three modes, keeping comments and filling the Fake-IP range once', () => {
     const clients = setMihomoIPv6Mode(fakeIP, 'clients')
     expect(clients.addedFakeIPv6Range).toBe(true)
@@ -344,7 +372,7 @@ describe('Mihomo IPv6 mode', () => {
 
     const nodes = setMihomoIPv6Mode(clients.content, 'nodes')
     expect(parse(nodes.content)).toMatchObject({ ipv6: true, dns: { ipv6: false, 'fake-ip-range6': 'fc00::1/64' } })
-    expect(nodes.notice).toBe('已关闭 IPv6 Fake-IP，网段保留供再次开启。')
+    expect(nodes.notice).toBe('')
     expect(readMihomoIPv6Mode(nodes.content).mode).toBe('nodes')
 
     const off = setMihomoIPv6Mode(clients.content, 'off')

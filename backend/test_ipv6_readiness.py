@@ -184,6 +184,35 @@ def test_existing_route_cannot_hide_disabled_tun_or_overlapping_lan():
     assert not router.writes
 
 
+def test_route_is_expected_with_dns_ipv6_off_and_tun_matters_only_once_clients_use_it():
+    """「Mihomo 用 IPv6，客户端走 IPv4」: the route is published like IPv4's, without an error."""
+    nodes = YAML.replace('  ipv6: true', '  ipv6: false')
+    for tun in (True, False):
+        source = nodes if tun else nodes.replace('tun:\n  enable: true', 'tun:\n  enable: false')
+        configuration = bridge.configuration({'mihomo': {'custom_config': source}})[0]
+        assert configuration['fake_ipv6_route'] is True and configuration['fake_ipv6_enabled'] is False
+        router = Router()
+        result = ros.inspect(router, ROUTER, AGENT, host_status(), configuration, '192.168.0.2')
+        fake = next(c for c in result['checks'] if c['id'] == 'fake_ipv6')
+        assert result['plan']['dst-address'] == 'fc00::/64' and result['route_publication_required']
+        assert fake['status'] == 'warning' and 'DNS IPv6 关闭' in fake['message']
+        assert ('开启 TUN' in fake['message']) is not tun
+        assert result['status'] != 'error' and not router.writes
+        # The client Fake-IP trace (NAT, forward drops) needs clients that use the range.
+        assert not any(c['id'].startswith('fake6') for c in result['checks'])
+        # Already published: nothing to report while clients do not use the range.
+        router.rows[ros.ROUTES].append({'.id': '*A', 'dst-address': 'fc00::/64', 'gateway': 'fe80::3%lan4', 'active': 'true'})
+        result = ros.inspect(router, ROUTER, AGENT, host_status(), configuration, '192.168.0.2')
+        fake = next(c for c in result['checks'] if c['id'] == 'fake_ipv6')
+        assert fake['status'] == 'ok' and result['plan'] is None
+        assert not any(c['status'] == 'error' for c in result['checks'])
+    # Without a range there is nothing to route.
+    missing = bridge.configuration({'mihomo': {'custom_config': nodes.replace('  fake-ip-range6: fc00::1/64\n', '')}})[0]
+    assert missing['fake_ipv6_route'] is False
+    result = ros.inspect(Router(), ROUTER, AGENT, host_status(), missing, '192.168.0.2')
+    assert result['plan'] is None and next(c for c in result['checks'] if c['id'] == 'fake_ipv6')['status'] == 'ok'
+
+
 def test_existing_unscoped_gateway_must_not_ignore_resolved_wrong_interface():
     router = Router()
     router.rows[ros.ROUTES].append({'.id': '*A', 'dst-address': 'fc00::/64', 'gateway': 'fdda::3',
