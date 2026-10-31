@@ -246,10 +246,15 @@
     font-family: var(--font-sans);
   }
 
-  /* 滚动条默认透明（仍占位，避免内容跳动），滚动期间由 main.ts 打上 data-scrolling 后才显示 */
+  /* 滚动条默认透明（仍占位，避免内容跳动），滚动期间由 lib/scrollingMarker 打上 data-scrolling 后才显示 */
   * {
     scrollbar-width: thin;
     scrollbar-color: transparent transparent;
+  }
+
+  /* 页面滚动条常显低对比色：在根元素上切换样式会让整页重算，大列表页每次几百毫秒 */
+  :root {
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
   }
 
   [data-scrolling] {
