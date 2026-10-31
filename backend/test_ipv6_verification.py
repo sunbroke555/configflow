@@ -595,3 +595,37 @@ def test_publication_without_ipv6_is_judged_by_its_own_snapshot(verification, mo
     verify.enroll(manager, agent['id'], ident, published)
     verify.tick(manager)
     assert not calls
+
+
+def test_device_check_reports_publication_from_mihomo_files(verification, offline, monkeypatch):
+    """The step 「保存并发布 Mihomo」: the same judgement, without blocking the device check."""
+    from backend.agents import content_sync
+    jobs = []
+
+    class Deferred:
+        def submit(self, fn, *args):
+            jobs.append((fn, args))
+            return Future()
+    monkeypatch.setattr(content_sync, '_checker', content_sync.ContentSyncChecker(executor=Deferred()))
+    client, manager, agent, headers, path, calls, _ = verification
+
+    def publication():
+        response = client.get(path, headers=headers)
+        assert response.status_code == 200, response.get_json()
+        return response.get_json()['publication']
+
+    def settle():
+        fn, args = jobs.pop()
+        fn(*args)
+        assert not jobs
+    assert publication() == 'unknown'  # nothing published from here yet
+    confirm_publication(manager, agent)
+    assert publication() == 'synced' and not jobs  # the published revision needs no comparison
+    publish_router(manager)
+    assert publication() == 'checking'
+    settle()
+    assert publication() == 'synced'
+    manager.repository.save_profile('v6', {'mihomo': {'custom_config': YAML + 'log-level: debug\n'}})
+    assert publication() == 'checking'
+    settle()
+    assert publication() == 'changed'

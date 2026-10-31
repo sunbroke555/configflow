@@ -215,26 +215,20 @@ def _sha256(value):
 def _published(manager, agent, config, revision):
     """Whether this Mihomo runs the saved configuration: ``(status, digest)``.
 
-    Only what Mihomo receives counts. The revision of a configuration space
-    also moves when a router publication writes its readback records back or
-    another service's settings are saved, and neither changes a Mihomo file.
-    At the revision of the last confirmed publication the answer is direct;
-    otherwise the complete files this Mihomo would receive now are compared
-    with that publication, as the Agent page does. ``status`` is ``synced``
-    (``digest`` is the running file's confirmed SHA), ``changed`` or ``unknown``.
+    Judged by what Mihomo receives (``readiness.publication``), not by the
+    revision alone, which a router publication or another service's settings
+    also move. Runs in the worker, so it may wait for the comparison. With
+    ``synced``, ``digest`` is the running file's confirmed SHA for the Agent
+    to check; ``changed`` or ``unknown`` give no digest.
     """
     from backend.agents.rule_sync_store import load
     applied = agent.get('applied_content') or {}
     receipt = load(manager.repository, agent, with_bundle=False)
     if not receipt or applied.get('deployment_id') != receipt['manifest'].get('deployment_id'):
         return 'unknown', None
-    if agent.get('config_revision') != revision:
-        from backend.agents.content_sync import compare_now
-        from backend.routes.agents import _prepare_content_bundle
-        status = compare_now(agent, config, applied.get('base_url', ''), _prepare_content_bundle,
-                             scope=str(manager.repository.data_dir), repository=manager.repository).get('status')
-        if status != 'synced':
-            return ('changed' if status == 'changed' else 'unknown'), None
+    status = readiness.publication(manager, agent, config, revision, wait=True)
+    if status != 'synced':
+        return ('changed' if status == 'changed' else 'unknown'), None
     digest = _sha256(agent.get('config_version'))
     return ('synced' if digest else 'unknown'), digest
 

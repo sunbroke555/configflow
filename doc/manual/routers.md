@@ -36,9 +36,9 @@ fake-ip 是 OxiDNS/Mihomo 用于分流的临时地址。已经通过这种方式
 
 ### IPv4 同口转发的防火墙提示（RouterOS）
 
-主路由把 fake-ip 网段和规则集 IPv4 网段交给同一 LAN 上的 Mihomo 时，设备的连接先到 ROS，再从同一个 LAN 口转给 Mihomo；Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv4 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包：新连接偶尔卡几秒（实验网 RouterOS 7.25 实测每次约 6.6 秒，有时 13 秒），长连接也会卡一次。
+主路由把 fake-ip 网段和规则集 IPv4 网段交给同一 LAN 上的 Mihomo 时，设备的连接先到 ROS，再从同一个 LAN 口转给 Mihomo；Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv4 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包：新连接可能卡几秒甚至超时（实验网 RouterOS 7.25 实测每次约 6.6 秒，有时 13 秒；2026-10-31 复测 10 个新连接都超过 5 秒客户端超时），长连接也会卡一次。
 
-ROS 会给设备发 ICMP 重定向，让设备改为直接连 Mihomo，但每个设备只发几个、随后暂停约 20 秒，同时打开多个新地址时大部分仍会卡；开启了转发的 Linux 设备还会忽略重定向。关闭 `send-redirects`、FastTrack 都不能解决。所以只要 forward 链会丢弃「从 LAN 口进、又从同一口出、状态为 invalid」的包，差异报告就在「代理路由」表格下方提示，并给出一条可复制的命令，例如：
+ROS 会给设备发 ICMP 重定向，让设备改为直接连 Mihomo，但每个设备只发几个、随后暂停约 20 秒，同时打开多个新地址时大部分仍会卡；开启了转发的 Linux 设备还会忽略重定向。重定向只能部分缓解，不能依赖；关闭 `send-redirects`、FastTrack 都不能解决。所以只要 forward 链会丢弃「从 LAN 口进、又从同一口出、状态为 invalid」的包，差异报告就在「代理路由」表格下方提示，并给出一条可复制的命令，例如：
 
 ```
 /ip firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*7
@@ -91,7 +91,7 @@ Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备�
 
 **自动规则同步**：手动发布过一次后，远程规则集的 IPv6 网段增减会像 IPv4 一样自动应用，同样批量写入、回读，失败时连同本轮 IPv4 改动一起回滚并暂停同步。首次发布、Mihomo 的 IPv6 下一跳变化、关闭 IPv6、受管路由被手工删除，以及本项被跳过时，自动同步不改 IPv6 路由，只更新 IPv4，并在同步结果中说明需要手动预览发布；不会因此暂停同步。IPv6 Fake-IP 路由不在自动同步的范围内。
 
-**防火墙提示：同口转发被「drop invalid」丢弃。** 设备经 ROS 的同一 LAN 口把连接转给 Mihomo，Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv6 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包，每个新连接卡住约 7 秒（实验网 RouterOS 7.25 实测 6.6–7.4 秒）。下一跳是链路本地地址加接口时，RouterOS 会给设备发 ICMPv6 重定向，让设备改为直接连 Mihomo，但重定向有限速（约每秒 1 个），同时打开多个新地址时仍有连接卡住，长连接也会卡一次；开启了转发的 Linux 设备还会忽略重定向。所以只要 forward 链有生效的 `drop invalid`、且前面没有放行 LAN 进 LAN 出，就会提示，与下一跳类型无关。IPv6 Fake-IP 与本项走同一路径，差异报告按 forward 链的规则顺序检查这种情况，命中时在「IPv6 Fake-IP 分流路由」或本项显示提示和一条可复制命令；两项都受影响时，命令只在「IPv6 Fake-IP 分流路由」中显示一次，本项注明见上方。例如：
+**防火墙提示：同口转发被「drop invalid」丢弃。** 设备经 ROS 的同一 LAN 口把连接转给 Mihomo，Mihomo 的回包直接发给设备，不经过 ROS。ROS 只看到连接的第一个包，之后的包被判为 `invalid`。RouterOS 出厂 IPv6 防火墙的 forward 链有 `defconf: drop invalid`，会丢弃这些包，新连接可能卡几秒甚至超时。下一跳是链路本地地址加接口时，RouterOS 会给设备发 ICMPv6 重定向，让设备改为直接连 Mihomo：设备逐个建立连接时基本不卡（实验网 RouterOS 7.25 实测 10 个新连接都成功，0.2–1.1 秒），但重定向有限速（约每秒 1 个），同时打开多个新地址时仍有连接卡住，长连接也会卡一次；开启了转发的 Linux 设备或忽略重定向的设备，每个新连接都会卡住（实测 6.6–7.4 秒，或超过 5 秒客户端超时）。重定向只能部分缓解，不能依赖，所以只要 forward 链有生效的 `drop invalid`、且前面没有放行 LAN 进 LAN 出，就会提示，与下一跳类型无关。提示文字与 IPv4 同口转发共用。IPv6 Fake-IP 与本项走同一路径，差异报告按 forward 链的规则顺序检查这种情况，命中时在「IPv6 Fake-IP 分流路由」或本项显示提示和一条可复制命令；两项都受影响时，命令只在「IPv6 Fake-IP 分流路由」中显示一次，本项注明见上方。例如：
 
 ```
 /ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*B

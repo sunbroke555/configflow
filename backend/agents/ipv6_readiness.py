@@ -299,6 +299,32 @@ def check_key(manager, agent, profile_id, config):
     })
 
 
+def publication(manager, agent, config, revision, *, wait=False):
+    """Whether the saved configuration is what this Mihomo last received.
+
+    Only Mihomo's files count. The revision of a configuration space also
+    moves when a router publication writes its readback records back or when
+    another service's settings are saved; neither changes a Mihomo file. At
+    the revision of the last confirmed publication the answer is direct;
+    otherwise the complete files Mihomo would receive now are compared with
+    that publication, the comparison the Agent page shows (its cache is
+    shared). ``synced``, ``changed``, ``checking`` (the comparison runs in the
+    background; ``wait`` answers in this thread instead) or ``unknown`` when
+    there is no confirmed publication to compare with. Never contacts a device.
+    """
+    applied = agent.get('applied_content') or {}
+    if not applied.get('deployment_id') or agent.get('config_revision') is None:
+        return 'unknown'
+    if agent.get('config_revision') == revision:
+        return 'synced'
+    from .content_sync import compare_now, get_content_sync
+    from backend.routes.agents import _prepare_content_bundle
+    compare = compare_now if wait else get_content_sync
+    status = compare(agent, config, applied.get('base_url', ''), _prepare_content_bundle,
+                     scope=str(manager.repository.data_dir), repository=manager.repository).get('status')
+    return status if status in ('synced', 'changed', 'checking') else 'unknown'
+
+
 def _last_path(manager, agent_id):
     return (Path(manager.repository.data_dir) / LAST_CHECK_DIR
             / (hashlib.sha256(agent_id.encode()).hexdigest() + '.json'))
@@ -339,15 +365,18 @@ def status(manager, agent_id, profile_id, config, revision, refresh=False):
     A check that cannot reach the device keeps the last result and says so
     (``refresh_error``); ``stale`` marks a result whose inputs have changed.
     Concurrent requests for one Agent wait for each other and reuse the result.
+    ``publication`` (see ``publication``) is read on every call, never stored.
     """
     from .manager import online_status
     with _lock(agent_id):
         agent = _agent(manager, agent_id, profile_id)
         key = check_key(manager, agent, profile_id, config)
         last = _last(manager, agent_id, profile_id)
+        published = {'publication': publication(manager, agent, config, revision)}
         if last and last['key'] == key and not refresh:
             # Same content; a later save of identical YAML only moved the revision.
-            return {**last['result'], 'config_revision': revision, 'checked_at': last['checked_at'], 'cached': True}
+            return {**last['result'], 'config_revision': revision, 'checked_at': last['checked_at'], 'cached': True,
+                    **published}
         try:
             if online_status(agent) == 'offline':
                 raise MonitorError('AGENT_OFFLINE', 409, '设备离线，上线后重新检查')
@@ -356,10 +385,10 @@ def status(manager, agent_id, profile_id, config, revision, refresh=False):
             if not last:
                 raise
             return {**last['result'], 'checked_at': last['checked_at'], 'cached': True, 'stale': last['key'] != key,
-                    'refresh_error': {'code': error.code, 'message': error.message, 'at': _now()}}
+                    'refresh_error': {'code': error.code, 'message': error.message, 'at': _now()}, **published}
         data['config_revision'] = revision
         checked_at = remember(manager, agent, profile_id, config, data)
-        return {**data, 'checked_at': checked_at, 'cached': False}
+        return {**data, 'checked_at': checked_at, 'cached': False, **published}
 
 
 def prepare(manager, agent_id, profile_id, body):

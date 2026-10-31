@@ -43,6 +43,11 @@ export interface MihomoIPv6Readiness {
   stale?: boolean
   /** 这次重新检查失败的原因；仍显示上次结果 */
   refresh_error?: { code: string; message: string; at: string }
+  /**
+   * 已保存的配置是否就是这台 Mihomo 上次收到的内容：只比较 Mihomo 实际下发的文件，
+   * 路由器发布记录、其他服务的设置不算。checking 表示服务端正在后台比较，每次读取都重新取得。
+   */
+  publication?: 'synced' | 'changed' | 'checking' | 'unknown'
 }
 
 export interface IPv6VerificationInput {
