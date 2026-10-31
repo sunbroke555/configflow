@@ -48,10 +48,11 @@
       ref="cardContainer"
       class="grid grid-cols-[repeat(auto-fill,minmax(360px,1fr))] gap-3 max-md:grid-cols-1"
     >
-      <Motion
+      <div
         v-for="(aggregation, cfIndex) in aggregations"
         :key="aggregation.id"
-        v-bind="listItem(cfIndex)"
+        class="cf-list-in"
+        :style="listItemStyle(cfIndex)"
         :data-id="aggregation.id"
         data-reorder-item
         :class="[
@@ -176,7 +177,7 @@
             删除
           </Button>
         </footer>
-      </Motion>
+      </div>
     </div>
 
     <!-- ===== 新增 / 编辑聚合 ===== -->
@@ -369,7 +370,6 @@
 <script setup lang="ts">
 import HealthCheckFields from '@/components/HealthCheckFields.vue'
 import { computed, ref, onMounted, nextTick } from 'vue'
-import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
   ChevronDown,
@@ -408,7 +408,7 @@ import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { referencedProfileNames } from '@/lib/subscriptionRefresh'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import api from '@/api'
 import * as yaml from 'js-yaml'
 

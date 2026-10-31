@@ -181,10 +181,11 @@
       ref="subscriptionsContainer"
       class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3.5 max-md:grid-cols-1 max-md:gap-2"
     >
-      <Motion
+      <div
         v-for="(sub, index) in visibleSubscriptions"
         :key="sub.id"
-        v-bind="listItem(index)"
+        class="cf-list-in"
+        :style="listItemStyle(index)"
         :data-id="sub.id"
         data-reorder-item
         :class="cn(
@@ -340,7 +341,7 @@
             </DropdownMenu>
           </div>
         </template>
-      </Motion>
+      </div>
 
       <button
         v-if="!reorder.active.value && !keyword && statusFilter === 'all'"
@@ -540,11 +541,10 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import Toolbar from '@/components/common/Toolbar.vue'
 import ViewToggle from '@/components/common/ViewToggle.vue'
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Motion } from 'motion-v'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { isRefreshInterval, referencedProfileNames } from '@/lib/subscriptionRefresh'
 import { copyText } from '@/lib/clipboard'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 
 
 const router = useRouter()

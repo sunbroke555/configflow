@@ -267,10 +267,11 @@
       ref="nodesContainer"
       class="grid grid-cols-[repeat(auto-fill,minmax(212px,1fr))] gap-2.5 max-[420px]:grid-cols-1"
     >
-      <Motion
+      <div
         v-for="(node, cfIndex) in tileNodes"
         :key="node.readonly ? `sub:${subscriptionNodeKey(node)}` : node.id || node.name"
-        v-bind="listItem(Math.min(cfIndex, 24))"
+        class="cf-list-in"
+        :style="listItemStyle(cfIndex)"
         :data-name="node.name"
         :data-tile="cfIndex"
         :aria-busy="testingKeys.has(latencyKey(node)) || undefined"
@@ -408,7 +409,7 @@
             :style="{ height: `${bar === null ? 18 : bar < 0 ? 12 : Math.round(bar * 100)}%` }"
           />
         </div>
-      </Motion>
+      </div>
     </div>
 
     <!-- 节点字符串 -->
@@ -518,7 +519,6 @@
 <script setup lang="ts">
 import { onUnmounted, watch, ref, computed, onMounted, nextTick } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
-import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
   CheckSquare,
@@ -580,7 +580,7 @@ import ReorderBar from '@/components/shell/ReorderBar.vue'
 import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirmDanger, notify } from '@/lib/feedback'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import { nodeApi } from '@/api'
 import type { ProxyNode } from '@/types'
 import api from '@/api'

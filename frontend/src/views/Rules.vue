@@ -391,10 +391,11 @@
       ref="rulesContainer"
       class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 max-md:grid-cols-1"
     >
-      <Motion
+      <div
         v-for="(item, cfIndex) in cardList"
         :key="item.uniqueId"
-        v-bind="listItem(cfIndex)"
+        class="cf-list-in"
+        :style="listItemStyle(cfIndex)"
         data-reorder-item
         :data-id="item.uniqueId"
         :aria-hidden="item.isGroupEnd || undefined"
@@ -589,7 +590,7 @@
             </Button>
           </footer>
         </template>
-      </Motion>
+      </div>
     </div>
 
     <!-- ===== 添加 / 编辑规则（一页表单） ===== -->
@@ -768,7 +769,6 @@ import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { ref, shallowRef, onMounted, onUnmounted, onActivated, computed, nextTick, watch } from 'vue'
-import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
   ChevronDown,
@@ -820,7 +820,7 @@ import RuleDnsBatchDialog from '@/components/rules/RuleDnsBatchDialog.vue'
 import RuleDnsCell from '@/components/rules/RuleDnsCell.vue'
 import RulePolicySelect from '@/components/rules/RulePolicySelect.vue'
 import { confirm, notify } from '@/lib/feedback'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import { ruleApi, ruleSetApi, proxyGroupApi } from '@/api'
 import { cn } from '@/lib/utils'
 import { chipClass, dnsChip, dnsLabel, followRoute, isUpstreamValue, notifyRuleSaved, pinnedWithheld, ruleSetPayload } from '@/lib/ruleDns'
