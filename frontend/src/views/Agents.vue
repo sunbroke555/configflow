@@ -68,10 +68,11 @@
       </details>
 
       <div class="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3.5 max-md:grid-cols-1">
-        <Motion
+        <div
           v-for="(agent, index) in agents"
           :key="agent.id"
-          v-bind="listItem(index)"
+          class="cf-list-in"
+          :style="listItemStyle(index)"
           :class="cn(
             'relative flex flex-col overflow-hidden rounded-[18px] border border-border bg-card/90 p-[18px] shadow-surface max-sm:p-3',
             agent.status !== 'online' && !deployments[agent.id] && !upgrades[agent.id] && !agent.dns_follow && agent.oxidns_ha?.enabled !== true && !ruleUpdateRefs[agent.id]?.hasStatus && 'opacity-80'
@@ -336,7 +337,7 @@
               </DropdownMenuContent>
             </DropdownMenu>
           </footer>
-        </Motion>
+        </div>
       </div>
     </template>
 
@@ -921,7 +922,6 @@ import DockerAgentUpdateDialog from '@/components/agents/DockerAgentUpdateDialog
 import AgentTraffic from '@/components/agents/AgentTraffic.vue'
 import AgentLogLines from '@/components/agents/AgentLogLines.vue'
 import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
-import { Motion } from 'motion-v'
 import {
   ChartLine,
   ChevronDown,
@@ -981,7 +981,7 @@ import StatTile from '@/components/common/StatTile.vue'
 import StatusDot from '@/components/common/StatusDot.vue'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import { agentApi, type AgentInstallScriptParams, type AgentLogSource } from '@/api'
 import api from '@/api'
 import type { Agent } from '@/types'

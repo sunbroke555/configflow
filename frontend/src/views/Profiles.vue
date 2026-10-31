@@ -55,10 +55,11 @@
     </SectionCard>
 
     <div v-else class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4 max-md:grid-cols-1 max-sm:gap-2">
-      <Motion
+      <div
         v-for="(profile, index) in profiles"
         :key="profile.id"
-        v-bind="listItem(index)"
+        class="cf-list-in"
+        :style="listItemStyle(index)"
         :class="[
           'group relative flex flex-col gap-4 overflow-hidden rounded-[18px] border bg-card/90 p-5 shadow-surface transition-colors duration-200 hover:border-border-strong max-sm:gap-2 max-sm:rounded-xl max-sm:p-3',
           profile.id === activeProfileId
@@ -149,7 +150,7 @@
             </Button>
           </div>
         </footer>
-      </Motion>
+      </div>
     </div>
 
     <ProfileAgentBindings v-if="bindingProfile" :key="bindingProfile.id" :profile="bindingProfile" :delete-requested="bindingDeleteRequested" @close="bindingProfile = null" @changed="refreshBindings" @continue-delete="continueDelete" />
@@ -382,7 +383,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
-import { Motion } from 'motion-v'
 import {
   Boxes,
   ChevronDown,
@@ -433,7 +433,7 @@ import SectionCard from '@/components/common/SectionCard.vue'
 import ProfileAgentBindings from '@/components/ProfileAgentBindings.vue'
 import { profileApi, subscriptionApi } from '@/api'
 import { confirm, confirmDanger, notify, prompt } from '@/lib/feedback'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import { isDefaultProfile, useProfileStore, type Profile } from '@/stores/profile'
 
 const profileStore = useProfileStore()

@@ -14,12 +14,6 @@ vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn(), pushConfig: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
-// jsdom does not complete the card entrance animation. Keep the real Motion
-// wrapper and all card interactions, but start in the displayed state.
-vi.mock('@/lib/motion', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/lib/motion')>()
-  return { ...actual, listItem: (index: number) => ({ ...actual.listItem(index), initial: false }) }
-})
 
 const wrappers: ReturnType<typeof mount>[] = []
 let narrowViewport = false

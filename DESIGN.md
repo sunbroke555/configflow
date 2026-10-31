@@ -172,6 +172,7 @@ Mihomo 连接详情的「代理」页使用可点击的路径和候选卡片：�
 
 - 缓动：`--ease-tech` / `--cf-ease` = `cubic-bezier(0.32, 0.72, 0, 1)`，`--ease-flow` = `cubic-bezier(0.22, 1, 0.36, 1)`；常规时长 200ms
 - 组件动画用 `motion-v`，弹层进出场用 `tw-animate-css`（shadcn 自带）
+- 列表卡片进场用普通元素加 `class="cf-list-in"` 与 `:style="listItemStyle(index)"`（0.35s `--ease-flow` 上浮，前 12 张每张错开 35ms），不要在 `v-for` 里逐卡包 `<Motion>`：每张卡挂载都会强制一次布局，几百张卡就是秒级卡顿，而且静止模式关不掉
 - 装饰动效同时尊重系统 `prefers-reduced-motion` 和 Tweaks 的 `data-motion='off'`。静止模式保留处理中的加载转圈（`animate-spin` / `cf-loading-spin`），系统要求减少动效时加载动画也结束，只保留文字与进度反馈；外观设置说明两者的区别。策略规则的命中模拟同理：静止模式照常逐行扫描，系统要求减少动效时直接显示命中结果。
 - 动效默认「静止」，保留用户已保存的选择。Canvas 流向图在静止时只响应数据、布局、配色和交互变化重绘；页面隐藏或图表移出视口时取消帧调度，恢复可见后合并更新。
 - 关闭 CSS 动效时把动画时长压到 0.01ms，**不能**用 `animation-play-state: paused`：

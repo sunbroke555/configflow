@@ -289,10 +289,11 @@
         ref="rulesContainer"
         class="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3 max-md:grid-cols-1"
       >
-        <Motion
+        <div
           v-for="(rule, cfIndex) in visibleRules"
           :key="rule.id"
-          v-bind="listItem(cfIndex)"
+          class="cf-list-in"
+          :style="listItemStyle(cfIndex)"
           :data-id="rule.id"
           :data-library-rule-id="rule.id"
           :data-highlighted="highlightedRuleId === rule.id || undefined"
@@ -400,7 +401,7 @@
               <Trash2 class="size-4" />
             </Button>
           </footer>
-        </Motion>
+        </div>
       </div>
     </template>
 
@@ -685,7 +686,6 @@
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { load as loadYaml } from 'js-yaml'
-import { Motion } from 'motion-v'
 import {
   ArrowUpDown,
   ChevronDown,
@@ -748,7 +748,7 @@ import DragHandle from '@/components/shell/DragHandle.vue'
 import { useReorder } from '@/composables/useReorder'
 import { confirm, confirmDanger, notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
-import { listItem } from '@/lib/motion'
+import { listItemStyle } from '@/lib/motion'
 import { useProfileStore } from '@/stores/profile'
 import api, { ruleApi, tasksApi } from '@/api'
 import { absoluteTime } from '@/lib/scheduledTasks'

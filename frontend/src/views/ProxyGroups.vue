@@ -668,7 +668,6 @@ import {
   Timer,
   Trash2
 } from '@lucide/vue'
-import { Motion } from 'motion-v'
 import { cn } from '@/lib/utils'
 import AnimatedNumber from '@/components/common/AnimatedNumber.vue'
 import { Badge } from '@/components/ui/badge'
@@ -699,7 +698,6 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import MultiSelect from '@/components/common/MultiSelect.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import { choose, confirmDanger, notify } from '@/lib/feedback'
-import { listItem } from '@/lib/motion'
 import { proxyGroupApi, nodeApi } from '@/api'
 import { getActiveProfileId } from '@/profileContext'
 import type { ProxyGroup, ProxyNode, Subscription } from '@/types'

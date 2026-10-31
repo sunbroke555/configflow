@@ -567,6 +567,15 @@
     animation: scan 1.8s var(--ease-tech) infinite;
     pointer-events: none;
   }
+
+  /* 列表卡片进场：轻微上浮，前 12 张错峰（--i 由 listItemStyle 写入，之后共用最大延迟）。
+     不用 motion-v 逐卡包装：它挂载时每张卡都读 offsetParent，整个列表逐个强制布局。
+     只写起点并用 backwards 填充，播完不残留 transform，悬停上浮与停用卡片的透明度照常生效。
+     播完由 markListItemEntered 打上 data-entered：卡片被排序移动、或被拖动克隆时不再重播。 */
+  .cf-list-in:not([data-entered]) {
+    animation: cf-list-in 0.35s var(--ease-flow) backwards;
+    animation-delay: calc(var(--i, 12) * 35ms);
+  }
 }
 
 @keyframes aurora-drift {
@@ -587,6 +596,13 @@
 @keyframes scan {
   to {
     transform: translateX(100%);
+  }
+}
+
+@keyframes cf-list-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
   }
 }
 
@@ -613,6 +629,11 @@
   animation-iteration-count: 1 !important;
 }
 
+/* 列表进场在静止模式下不建动画，免得几百张卡各跑一个空动画 */
+:root[data-motion='off'] .cf-list-in {
+  animation: none;
+}
+
 /* 加载圈表达正在处理，静止模式仍保留；系统减少动效时不启用此例外。
    animate-spin 仅用于加载反馈，自定义加载动画用 cf-loading-spin 标记。 */
 @media (prefers-reduced-motion: no-preference) {
@@ -630,7 +651,8 @@
 @media (prefers-reduced-motion: reduce) {
   .tech-backdrop::before,
   .scanline::after,
-  .live-dot {
+  .live-dot,
+  .cf-list-in {
     animation: none;
   }
 }

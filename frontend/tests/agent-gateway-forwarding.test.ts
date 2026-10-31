@@ -23,10 +23,6 @@ vi.mock('@/lib/feedback', async importOriginal => {
   const actual = await importOriginal<typeof import('@/lib/feedback')>()
   return { ...actual, confirm: vi.fn(), notify: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() } }
 })
-vi.mock('@/lib/motion', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/lib/motion')>()
-  return { ...actual, listItem: (index: number) => ({ ...actual.listItem(index), initial: false }) }
-})
 
 const entry = (changes: Partial<GatewayForwardingEntry> = {}): GatewayForwardingEntry => ({
   agent_id: 'a1', agent_name: 'pve-mihomo', agent_version: '1.8.41-go',
