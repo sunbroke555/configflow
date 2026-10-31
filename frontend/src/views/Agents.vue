@@ -1082,11 +1082,14 @@ const openAgentSettings = async (agent: Agent) => {
   try {
     // Refresh both sources before capturing the scope: another tab may have
     // rebound the device or changed the default for an older unbound Agent.
+    // 只需要绑定、名称和类型：用不含内容同步计算的轻量列表，仍是实时请求。
     const [response, currentProfiles, editor] = await Promise.all([
-      agentApi.getAll(), refreshProfiles(), import('./Generate.vue')
+      agentApi.summaries(), refreshProfiles(), import('./Generate.vue')
     ])
     if (!settingsPageActive) return
-    const current = (response.data as Agent[]).find(item => item.id === agent.id)
+    if (!Array.isArray(response.data)) throw new Error('设备列表响应无效。')
+    const currentAgents = response.data as Agent[]
+    const current = currentAgents.find(item => item.id === agent.id)
     if (!current) throw new Error('此 Agent 已不存在，请刷新列表。')
     if (!supportsAgentSettings(current.service_type)) throw new Error('此 Agent 的软件类型暂不支持配置设置。')
     const profileId = current.profile_id || defaultProfileId.value
@@ -1096,6 +1099,7 @@ const openAgentSettings = async (agent: Agent) => {
     agentSettings.value = {
       agentId: current.id, agentName: current.name, serviceType: current.service_type,
       profileId: profile.id, profileName: profile.name,
+      targets: { agents: currentAgents, profiles: currentProfiles },
     }
   } catch (error: any) {
     if (settingsPageActive) {

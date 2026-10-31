@@ -123,6 +123,41 @@ describe('settings save and publish', () => {
     expect(agentApi.pushConfig).toHaveBeenCalledWith('one', expect.any(String), guard())
   })
 
+  it('reuses the entry snapshot once on open and still rechecks the binding before publishing', async () => {
+    const initialTargets = { agents: [agent(), agent({ id: 'two', name: '书房 DNS' })], profiles: [{ id: 'office', name: '办公室', is_default: true }] }
+    const wrapper = await render({ preferredAgentId: 'two', initialTargets })
+    expect(agentApi.summaries).not.toHaveBeenCalled()
+    expect(profileApi.list).not.toHaveBeenCalled()
+    expect(wrapper.getComponent(Select).props('modelValue')).toBe('two')
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent(), agent({ id: 'two', name: '书房 DNS', profile_id: 'home' })]))
+    await publish(wrapper)
+    expect(agentApi.summaries).toHaveBeenCalledTimes(1)
+    expect(agentApi.pushConfig).not.toHaveBeenCalled()
+
+    // 再次打开不再沿用入口快照
+    await wrapper.setProps({ open: false })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
+    expect(profileApi.list).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the targets again when retrying after the entry snapshot was used', async () => {
+    const initialTargets = { agents: [agent()], profiles: [{ id: 'office', name: '办公室', is_default: true }] } as any
+    const wrapper = await render({ initialTargets })
+    expect(agentApi.summaries).not.toHaveBeenCalled()
+    vi.mocked(agentApi.summaries).mockRejectedValueOnce(new Error('网络错误'))
+    await wrapper.setProps({ open: false })
+    await wrapper.setProps({ open: true })
+    await flushPromises()
+    expect(wrapper.text()).toContain('暂时无法读取目标设备')
+    await button(wrapper, '重试读取').trigger('click')
+    await flushPromises()
+    expect(agentApi.summaries).toHaveBeenCalledTimes(2)
+    expect(profileApi.list).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('发布到：客厅 DNS')
+  })
+
   it('uses real preflight stages without inventing deployment steps before submission', async () => {
     const saved = deferred<PublishGuard>()
     const checked = deferred<any>()

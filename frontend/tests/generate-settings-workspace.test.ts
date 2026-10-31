@@ -31,8 +31,9 @@ const WorkspaceStub = defineComponent({
 })
 
 describe('Agent settings use the bound space without switching the global space', () => {
+  const targets = { agents: [{ id: 'bedroom-agent', name: '卧室设备', profile_id: 'bedroom' }], profiles: [{ id: 'bedroom', name: '卧室空间' }] }
   const context = (serviceType: AgentSettingsContext['serviceType']): AgentSettingsContext => ({
-    agentId: 'bedroom-agent', agentName: '卧室设备', profileId: 'bedroom', profileName: '卧室空间', serviceType,
+    agentId: 'bedroom-agent', agentName: '卧室设备', profileId: 'bedroom', profileName: '卧室空间', serviceType, targets,
   })
   const renderAgentSettings = (service: AgentSettingsContext['serviceType']) => {
     const wrapper = shallowMount(Generate, {
@@ -58,7 +59,7 @@ describe('Agent settings use the bound space without switching the global space'
     expect(workspace.props('backLabel')).toBe('返回 Agent 列表')
     expect(workspace.text()).toContain('卧室空间')
     expect(workspace.text()).toContain('共用此配置')
-    expect(workspace.getComponent(SettingsPublishBar).props()).toMatchObject({ profileId: 'bedroom', preferredAgentId: 'bedroom-agent', serviceType: service })
+    expect(workspace.getComponent(SettingsPublishBar).props()).toMatchObject({ profileId: 'bedroom', preferredAgentId: 'bedroom-agent', initialTargets: targets, serviceType: service })
     setActiveProfileId('another-space')
     workspace.vm.$emit('save')
     await flushPromises()
@@ -91,7 +92,7 @@ describe('Agent settings use the bound space without switching the global space'
     const wrapper = renderAgentSettings('oxidns')
     await flushPromises()
     const editor = wrapper.getComponent(OxidnsSettings)
-    expect(editor.props()).toMatchObject({ open: true, profileId: 'bedroom', preferredAgentId: 'bedroom-agent', backLabel: '返回 Agent 列表' })
+    expect(editor.props()).toMatchObject({ open: true, profileId: 'bedroom', preferredAgentId: 'bedroom-agent', initialTargets: targets, backLabel: '返回 Agent 列表' })
     expect(editor.props('contextLabel')).toContain('卧室空间')
     setActiveProfileId('another-space')
     await nextTick()
@@ -99,6 +100,42 @@ describe('Agent settings use the bound space without switching the global space'
     editor.vm.$emit('update:open', false)
     await nextTick()
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('requests every MosDNS settings part at once and opens after all of them arrive', async () => {
+    const pending = deferred<any>()
+    vi.mocked(customConfigApi.getMosdns).mockReturnValueOnce(pending.promise)
+    const get = vi.spyOn(api, 'get')
+    const wrapper = renderAgentSettings('mosdns')
+    await flushPromises()
+    expect(ruleApi.getAll).toHaveBeenCalledWith('bedroom')
+    expect(ruleSetApi.getAll).toHaveBeenCalledWith('bedroom')
+    expect(get.mock.calls.map(([url]) => url).filter(url => url.startsWith('/mosdns/')).sort()).toEqual([
+      '/mosdns/api-settings', '/mosdns/cache-settings', '/mosdns/custom-matches',
+      '/mosdns/dns-servers', '/mosdns/log-settings', '/mosdns/rulesets',
+    ])
+    expect(wrapper.emitted('ready')).toBeUndefined()
+    expect(wrapper.findAllComponents(SettingsWorkspace).some(item => item.props('open'))).toBe(false)
+    pending.resolve({ data: { config: initialConfig } })
+    await flushPromises()
+    expect(wrapper.emitted('ready')).toHaveLength(1)
+    expect((wrapper.vm as any).mosdnsCustomConfig).toBe(initialConfig)
+  })
+
+  it('does not open MosDNS settings or keep partial values when one part fails', async () => {
+    const adapter = api.defaults.adapter as (config: any) => Promise<any>
+    api.defaults.adapter = async config => {
+      if (config.url === '/mosdns/dns-servers') throw new Error('连接失败')
+      if (config.url === '/mosdns/log-settings') return { ...(await adapter(config)), data: { log_level: 'debug' } }
+      return adapter(config)
+    }
+    const wrapper = renderAgentSettings('mosdns')
+    await flushPromises()
+    expect(wrapper.emitted('ready')).toBeUndefined()
+    expect(wrapper.findAllComponents(SettingsWorkspace).some(item => item.props('open'))).toBe(false)
+    expect(notify.error).toHaveBeenCalledWith('加载 MosDNS 设置失败')
+    expect((wrapper.vm as any).mosdnsCustomConfig).toBe('')
+    expect((wrapper.vm as any).mosdnsLogLevel).toBe('info')
   })
 
   it('ends a failed initial load without opening an empty editable draft', async () => {

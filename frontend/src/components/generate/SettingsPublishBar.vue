@@ -14,6 +14,7 @@ import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vu
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { createDeploymentId, deploymentNeedsNotice, deploymentStatusLabel, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import { stripTrailingPunctuation } from '@/lib/text'
+import type { AgentSettingsTargets } from '@/lib/agentSettings'
 import type { MihomoPublishedTarget } from '@/types/mihomoIPv6'
 
 type ServiceType = 'mihomo' | 'mosdns' | 'oxidns' | 'surge'
@@ -26,6 +27,8 @@ const props = defineProps<{
   profileId: string
   serviceType: ServiceType
   preferredAgentId?: string
+  /** 入口刚读取的设备与配置空间列表：首次打开时沿用，省去一次重复读取 */
+  initialTargets?: AgentSettingsTargets
   disabled?: boolean
   save: () => Promise<PublishGuard | null>
   /**
@@ -54,6 +57,8 @@ const verifiedPublication = ref<MihomoPublishedTarget | null>(null)
 const routerCheck = ref(0)
 let session = 0
 let targetsInitialized = false
+// 只沿用一次；之后的重试读取与发布前复核都重新请求。
+let initialTargets = props.initialTargets
 let disposed = false
 const terminal = new Set(['succeeded', 'failed', 'rolled_back', 'rollback_failed'])
 const { deployments, busy, track, beginSubmission, endSubmission, activate } = useAgentDeployments(() => {}, (agentId, task) => {
@@ -180,7 +185,9 @@ async function loadTargets() {
   loading.value = true
   loadError.value = ''
   try {
-    const data = await readTargets()
+    const initial = initialTargets
+    initialTargets = undefined
+    const data = initial || await readTargets()
     if (disposed || !props.open || generation !== session) return
     updateTargets(data)
     restorePending()
