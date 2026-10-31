@@ -78,6 +78,12 @@ describe('Agent settings use the bound space without switching the global space'
       }, 'bedroom')
     }
     expect(activeProfileId.value).toBe('another-space')
+    if (service === 'mihomo') {
+      expect(wrapper.emitted('close')).toBeUndefined()
+      expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
+      workspace.vm.$emit('update:open', false)
+      await flushPromises()
+    }
     expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
@@ -231,7 +237,8 @@ describe('generation settings workspace integration', () => {
     workspace.vm.$emit('save')
     await flushPromises()
     expect(customConfigApi[saveMethod]).toHaveBeenCalledExactlyOnceWith({ config: edited, ...(target === 'mihomo' ? { provider_update_interval: 3600 } : {}) }, 'workspace-profile')
-    expect(workspace.props('open')).toBe(false)
+    expect(workspace.props('open')).toBe(target === 'mihomo')
+    expect(workspace.props('dirty')).toBe(false)
   })
 
   it('keeps the basic draft open and dirty after a save failure, then permits retry', async () => {
@@ -247,6 +254,18 @@ describe('generation settings workspace integration', () => {
     workspace.vm.$emit('save')
     await flushPromises()
     expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '', provider_update_interval: 3600 }, 'workspace-profile')
+    expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
+    expect(notify.success).toHaveBeenCalledWith('基础配置草稿已保存')
+    draft.customConfigContent = '# continue editing\n'
+    await nextTick()
+    expect(workspace.props('dirty')).toBe(true)
+    workspace.getComponent(SettingsPublishBar).vm.$emit('save-draft')
+    await flushPromises()
+    expect(customConfigApi.saveMihomo).toHaveBeenLastCalledWith({ config: '# continue editing\n', provider_update_interval: 3600 }, 'workspace-profile')
+    expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
+    expect(customConfigApi.getMihomo).toHaveBeenCalledTimes(1)
+    workspace.vm.$emit('update:open', false)
+    await nextTick()
     expect(workspace.props('open')).toBe(false)
   })
 
@@ -343,7 +362,7 @@ describe('generation settings workspace integration', () => {
     expect(customConfigApi[saveMethod]).toHaveBeenCalledTimes(1)
     publish.vm.$emit('save-draft')
     await flushPromises()
-    expect(workspace.props('open')).toBe(false)
+    expect(workspace.props('open')).toBe(target === 'mihomo')
   })
 
   it('keeps Loon as draft-only because it has no publish target', async () => {
@@ -440,7 +459,7 @@ describe('generation settings workspace integration', () => {
     expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
     workspace.vm.$emit('save')
     await flushPromises()
-    expect(workspace.props('open')).toBe(false)
+    expect(workspace.props()).toMatchObject({ open: true, dirty: false, busy: false })
   })
 
 })

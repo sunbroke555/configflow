@@ -1636,7 +1636,7 @@ const showCustomConfigDialog = async (type: ConfigType) => {
   }
 }
 
-const saveCustomConfig = async (close = true): Promise<PublishGuard | null> => {
+const saveCustomConfig = async (close = currentConfigType.value !== 'mihomo'): Promise<PublishGuard | null> => {
   if (!pageActive || !customConfigDialogVisible.value || savingCustomConfig.value || ipv6NetworkBusy.value) return null
   const session = customConfigSession.capture()
   const type = currentConfigType.value

@@ -23,6 +23,7 @@ _locks_guard = threading.Lock()
 _locks = {}
 MAX_RESPONSE = 512 * 1024
 AGENT_FIELDS = ('id', 'host', 'port', 'token', 'profile_id', 'deployment_method', 'service_type')
+PREPARE_AGENT_FIELDS = (*AGENT_FIELDS, 'enabled', 'gateway_installation_id')
 HOST_LABELS = {
     'platform': '安装环境', 'network': '主机网络', 'interface': '实际上联网卡',
     'address': '主机 IPv6 地址', 'default_route': 'IPv6 默认路由',
@@ -39,6 +40,18 @@ def _lock(agent_id):
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
+
+
+def _prepare_config(config):
+    """Bind host preparation to saved inputs, not unrelated runtime metadata.
+
+    The compatibility view includes every Agent's deployment/heartbeat state
+    and global app/backup settings. They are not inputs to host preparation.
+    Target identity is checked separately; profile content and resolved shared
+    resources remain protected even when a save has the same revision.
+    """
+    return {key: value for key, value in config.items()
+            if key not in {'agents', 'backup', 'system_config', 'created_at', 'updated_at', '_revision'}}
 
 
 def configuration(config):
@@ -229,8 +242,8 @@ def _inspect(manager, agent, profile_id, config=None):
                    host.get('can_prepare') is True)
     if not authorized_gateway:
         checks.append(ros.check('gateway_role', '网关用途', 'warning', '自动开启转发仅适用于已关联上游路由或已启用 Linux 网关的设备'))
-    proof = {'agent': {key: agent.get(key) for key in AGENT_FIELDS},
-             'config': config, 'interface': host.get('interface'), 'interface_index': host.get('interface_index'),
+    proof = {'agent': {key: agent.get(key) for key in PREPARE_AGENT_FIELDS},
+             'config': _prepare_config(config), 'interface': host.get('interface'), 'interface_index': host.get('interface_index'),
              'router_fingerprints': [r.get('fingerprint') for r in results]}
     return {'success': True, 'agent_id': agent['id'], 'profile_id': profile_id,
             'configuration': settings, 'host': host, 'checks': checks, 'routers': results,
@@ -263,7 +276,8 @@ def prepare(manager, agent_id, profile_id, body):
             raise MonitorError('PREPARE_UNAVAILABLE', 409, '当前状态不满足自动补齐条件，请查看检查结果')
         reset_config_context()
         current_agent = _agent(manager, agent_id, profile_id)
-        if get_config(profile_id) != config or any(current_agent.get(key) != agent.get(key) for key in AGENT_FIELDS):
+        if (_prepare_config(get_config(profile_id)) != _prepare_config(config)
+                or any(current_agent.get(key) != agent.get(key) for key in PREPARE_AGENT_FIELDS)):
             raise MonitorError('CHECK_CHANGED', 409, '配置或设备信息已变化，请重新检查')
         prepared_host = None
         try:

@@ -387,3 +387,94 @@ def test_default_yaml_and_invalid_boolean_save(environment):
     for raw in ('ipv6: ture', 'dns:\n  ipv6: "true"'):
         response = client.post('/api/custom-config/mihomo', headers=headers, json={'config': raw})
         assert response.status_code == 400
+
+
+@pytest.mark.parametrize('during_recheck', [False, True])
+def test_unrelated_agent_runtime_does_not_invalidate_prepare(environment, monkeypatch, during_recheck):
+    client, manager, _, headers, path, router, calls, _ = environment
+    other = manager.register_agent({'name': 'Other', 'host': '192.168.0.4', 'port': 27647,
+                                    'service_type': 'mosdns', 'profile_id': 'other'})
+    report = client.get(path, headers=headers).get_json()
+
+    def change_runtime():
+        def update(agents):
+            row = next(a for a in agents if a['id'] == other['id'])
+            row.update(config_version='background-publication', last_heartbeat='2026-10-30T23:59:00')
+        manager._update_agents(update)
+
+    if during_recheck:
+        original = bridge._request
+        def request(agent, operation='', payload=None):
+            if not operation:
+                change_runtime()
+            return original(agent, operation, payload)
+        monkeypatch.setattr(bridge, '_request', request)
+    else:
+        change_runtime()
+    response = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']})
+    assert response.status_code == 200, response.get_json()
+    assert any(operation == 'prepare' for operation, _ in calls)
+    assert not router.writes
+
+
+def test_identical_saved_draft_keeps_preparation_valid(environment):
+    client, manager, _, headers, path, router, calls, _ = environment
+    report = client.get(path, headers=headers).get_json()
+    # Saving identical content advances profile metadata/revision only.
+    manager.repository.save_profile('v6', {'mihomo': {'custom_config': YAML}})
+    response = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']})
+    assert response.status_code == 200, response.get_json()
+    assert any(operation == 'prepare' for operation, _ in calls)
+    assert not router.writes
+
+
+@pytest.mark.parametrize('during_recheck', [False, True])
+def test_real_draft_edit_still_blocks_prepare(environment, monkeypatch, during_recheck):
+    client, manager, _, headers, path, router, calls, _ = environment
+    report = client.get(path, headers=headers).get_json()
+    def change_draft():
+        manager.repository.save_profile('v6', {'mihomo': {'custom_config': YAML.replace('fc00::1/64', 'fc01::1/64')}})
+    if during_recheck:
+        original = bridge._request
+        def request(agent, operation='', payload=None):
+            if not operation:
+                change_draft()
+            return original(agent, operation, payload)
+        monkeypatch.setattr(bridge, '_request', request)
+    else:
+        change_draft()
+    response = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']})
+    assert response.status_code == 409, response.get_json()
+    assert response.get_json()['code'] == 'CHECK_CHANGED'
+    assert not router.writes and not any(operation == 'prepare' for operation, _ in calls)
+
+
+def test_router_route_order_and_lifetime_changes_keep_prepare_valid(environment):
+    client, _, _, headers, path, router, calls, _ = environment
+    router.rows[ros.ROUTES].append({'.id': '*A', 'dst-address': '2001:db8::/64', 'gateway': 'pppoe-out1',
+                                   'active': 'true', 'expires-after': '5m'})
+    report = client.get(path, headers=headers).get_json()
+    router.rows[ros.ROUTES][-1]['expires-after'] = '4m59s'
+    router.rows[ros.ROUTES].reverse()
+    fresh = client.get(path, headers=headers).get_json()
+    assert fresh['check_token'] == report['check_token']
+    response = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']})
+    assert response.status_code == 200, response.get_json()
+    assert any(operation == 'prepare' for operation, _ in calls)
+    assert not router.writes
+
+
+@pytest.mark.parametrize('changed', [{'host': '192.168.0.5'}, {'port': 27648}, {'token': 'replaced'},
+                                    {'gateway_installation_id': 'reinstalled'}])
+def test_real_target_change_still_blocks_prepare(environment, changed):
+    client, manager, agent, headers, path, router, calls, _ = environment
+    report = client.get(path, headers=headers).get_json()
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(changed))
+    response = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']})
+    assert response.status_code == 409, response.get_json()
+    assert not router.writes and not any(operation == 'prepare' for operation, _ in calls)

@@ -223,12 +223,14 @@ try {
       assert.equal(await page.getByRole('button', { name: '重新检查', exact: true }).isDisabled(), true)
       await page.getByRole('button', { name: '返回设置', exact: true }).click()
       await page.getByRole('button', { name: '保存草稿', exact: true }).click()
-      await page.getByRole('button', { name: '打开设置', exact: true }).click()
+      await page.waitForFunction(() => !document.querySelector('[data-settings-workspace] [inert]'))
+      assert.equal(await page.locator('[data-settings-workspace]').isVisible(), true, 'Saving the draft keeps the current editor open')
       await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).waitFor()
       assert.equal(await page.getByRole('switch', { name: 'DNS 返回 IPv6 地址', exact: true }).getAttribute('aria-checked'), 'true')
       assert.ok(yaml.includes('# 保留用户注释') && yaml.includes('# 单独控制 AAAA 答案'))
       assert.ok(yaml.includes('fake-ip-range6: fc00::1/64'), 'Enabling DNS IPv6 fills the missing range in the draft')
-      report.scenarios.push({ width, theme, state: 'prepare-probe-edit-save-reopen', writes })
+      await page.screenshot({ path: join(output, `${width}-${theme}-saved-draft-open.png`) })
+      report.scenarios.push({ width, theme, state: 'prepare-probe-edit-save-stays-open', writes })
     }
     if (width === 375) {
       const prepare = page.getByRole('button', { name: '补齐缺少的配置', exact: true })
