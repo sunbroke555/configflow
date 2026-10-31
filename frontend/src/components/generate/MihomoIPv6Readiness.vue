@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { LoaderCircle, RefreshCw } from '@lucide/vue'
 import { agentApi, profileApi } from '@/api'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,7 @@ import MihomoIPv6Verification from './MihomoIPv6Verification.vue'
 import MihomoIPv6VerificationSettings from './MihomoIPv6VerificationSettings.vue'
 import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
 import type { MihomoIPv6Readiness } from '@/types/mihomoIPv6'
+import { checkedAgo } from '@/lib/format'
 
 type Agent = { id: string; name: string; profile_id?: string; service_type?: string; status?: string; enabled?: boolean }
 type Profile = { id: string; is_default?: boolean }
@@ -35,6 +36,19 @@ const selected = computed(() => candidates.value.find(agent => agent.id === sele
 const busy = computed(() => phase.value !== 'idle')
 const available = computed(() => props.open && !props.disabled && !props.dirty && !busy.value
   && selected.value?.status === 'online' && selected.value.enabled !== false)
+// The last check is shown for an offline device too; the server does not contact it.
+const readable = computed(() => props.open && !props.disabled && !props.dirty && !busy.value
+  && !!selected.value && selected.value.enabled !== false)
+const now = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
+const checked = computed(() => {
+  void now.value
+  return result.value?.checked_at ? `${checkedAgo(result.value.checked_at)}。路由器或主机上的手动修改不会自动发现，请点「重新检查」。` : ''
+})
+const recheckFailed = computed(() => {
+  const failure = result.value?.refresh_error
+  return failure ? `这次未能重新检查：${failure.message.replace(/[。.]$/, '')}。以下是${result.value?.stale ? '设备或配置变化前' : '上次'}的结果。` : ''
+})
 const canPrepare = computed(() => available.value && result.value?.can_prepare === true && !!result.value.check_token)
 const current = (generation: number, id?: string) => !disposed && props.open && generation === session
   && (!id || id === selectedId.value)
@@ -84,11 +98,12 @@ async function loadTargets() {
   } finally {
     if (current(generation)) phase.value = 'idle'
   }
-  if (current(generation) && !error.value && available.value) await inspect()
+  if (current(generation) && !error.value && readable.value) await inspect()
 }
 
-async function inspect() {
-  if (!available.value) return
+// Without refresh the server returns the last check while nothing it reads has changed.
+async function inspect(refresh = false) {
+  if (!readable.value) return
   const generation = session
   const id = selectedId.value
   phase.value = 'checking'
@@ -96,7 +111,7 @@ async function inspect() {
   actionMessage.value = ''
   result.value = null
   try {
-    const { data } = await agentApi.ipv6Readiness(id, props.profileId)
+    const { data } = await agentApi.ipv6Readiness(id, props.profileId, { refresh })
     if (current(generation, id)) acceptResult(data, id)
   } catch (failure) {
     if (current(generation, id)) error.value = messageOf(failure)
@@ -146,7 +161,7 @@ function selectTarget(value: unknown) {
   result.value = null
   actionMessage.value = ''
   error.value = ''
-  if (available.value) void inspect()
+  if (readable.value) void inspect()
 }
 
 watch(() => [props.open, props.profileId, props.preferredAgentId] as const, () => {
@@ -174,7 +189,8 @@ watch(() => props.dirty, dirty => {
   }
 }, { flush: 'sync' })
 watch(busy, value => emit('busy', value), { immediate: true })
-onUnmounted(() => { disposed = true; session++; emit('busy', false) })
+onMounted(() => { ticker = setInterval(() => { now.value = Date.now() }, 30000) })
+onUnmounted(() => { clearInterval(ticker); disposed = true; session++; emit('busy', false) })
 </script>
 
 <template>
@@ -189,12 +205,14 @@ onUnmounted(() => { disposed = true; session++; emit('busy', false) })
       <p v-else-if="selected" class="m-0 min-w-0 flex-1 break-words text-xs">检查设备：{{ selected.name }}{{ selected.status !== 'online' ? '（离线）' : selected.enabled === false ? '（已禁用）' : '' }}</p>
       <p v-else-if="phase !== 'loading' && !targetUnavailable && !error" class="m-0 text-xs text-muted-foreground">此配置空间尚未绑定 Mihomo 设备，可先设置并保存草稿。</p>
       <Button v-if="!selected || selected.status !== 'online' || selected.enabled === false" type="button" variant="outline" class="min-h-11" :disabled="busy || disabled" @click="loadTargets"><RefreshCw class="size-3.5" />重新读取设备</Button>
-      <Button v-else type="button" variant="outline" class="min-h-11" :disabled="!available" @click="inspect"><RefreshCw class="size-3.5" />重新检查</Button>
+      <Button v-else type="button" variant="outline" class="min-h-11" :disabled="!available" @click="inspect(true)"><RefreshCw class="size-3.5" />重新检查</Button>
     </div>
     <p v-if="targetUnavailable" class="m-0 text-xs text-warning-accent" role="status">原目标设备已不属于此配置空间，请明确选择另一台设备后再检查。</p>
     <p v-if="busy" class="m-0 flex items-center gap-2 text-xs" role="status"><LoaderCircle class="size-4 animate-spin motion-reduce:animate-none" />{{ phase === 'loading' ? '正在读取设备…' : phase === 'checking' ? '正在检查 IPv6 配置…' : '正在补齐缺少的配置并复查…' }}</p>
     <p v-if="error" class="m-0 break-words text-xs text-destructive-accent" role="alert">{{ error }}</p>
     <p v-if="actionMessage" class="m-0 break-words text-xs" role="status">{{ actionMessage }}</p>
+    <p v-if="result && recheckFailed" class="m-0 break-words text-xs text-warning-accent" role="status" data-ipv6-readiness-recheck-failed>{{ recheckFailed }}</p>
+    <p v-if="result && checked" class="m-0 break-words text-xs text-muted-foreground" data-ipv6-readiness-checked>{{ checked }}</p>
     <template v-if="result">
       <MihomoIPv6Verification :key="`${selectedId}-${verificationVersion}`" :open="open" :agent-id="selectedId" :profile-id="profileId" :config-revision="result.config_revision" :readiness="result" :disabled="!available">
         <template #actions>

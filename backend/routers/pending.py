@@ -5,16 +5,18 @@ the 上游路由 page after its preview. Each router that uses the Agent as its 
 gateway, in any profile, is read live with the same drift report and release
 preview as that page (``_inspect`` and ``build_plan``); nothing is written.
 
-Reads run concurrently under one deadline and are reused for a short time. The
-cache key covers each linked router record, its profile's configuration revision
-and the Agent record, so a saved draft or a release is never answered from an
-older read. A read that fails or times out is ``unknown``, never ``synced``.
+Reads run concurrently under one deadline and are reused for as long as the
+cache key is unchanged. The key covers each linked router record, its profile's
+configuration revision and the Agent record, so a saved draft or a release is
+never answered from an older read; saving, publishing and the user's
+「重新检查」 also force a new read (``refresh``), since edits made directly on a
+router are not seen. A read with a router that could not be read is not reused:
+``unknown`` is never kept as a result, nor turned into ``synced``.
 """
 import copy
 import hashlib
 import json
 import threading
-import time
 from collections import OrderedDict
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import datetime
@@ -24,7 +26,6 @@ from backend.routers.base import RouterError
 from backend.routers.store import routers_of
 from backend.utils.logger import get_logger
 
-CACHE_TTL = 30           # seconds a read is reused without ?refresh=1
 ROUTER_TIMEOUT = 25      # seconds for all routers of one Agent, read in parallel
 MAX_WORKERS = 8
 MAX_AGENTS = 64          # cached Agents
@@ -173,18 +174,17 @@ def _targets(agent_id: str):
 
 
 class _Entry:
-    __slots__ = ('signature', 'routers', 'checked_at', 'read_at', 'pending')
+    __slots__ = ('signature', 'routers', 'checked_at', 'pending')
 
     def __init__(self, signature: str):
         self.signature = signature
         self.routers: Optional[List[Dict[str, Any]]] = None
         self.checked_at = ''
-        self.read_at = 0.0
         self.pending: Optional[Future] = None
 
 
 class PendingCache:
-    """Short-lived per-Agent results; simultaneous requests share one read."""
+    """Per-Agent results kept while their key holds; simultaneous requests share one read."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -205,7 +205,7 @@ class PendingCache:
             while len(self._entries) > MAX_AGENTS:
                 self._entries.popitem(last=False)
             if (entry.routers is not None and not refresh and entry.pending is None
-                    and time.monotonic() - entry.read_at < CACHE_TTL):
+                    and all(router.get('state') != 'unknown' for router in entry.routers)):
                 return copy.deepcopy(entry.routers), entry.checked_at, True
             owner = entry.pending is None
             if owner:
@@ -224,7 +224,7 @@ class PendingCache:
             pending.set_exception(failure)
             raise
         with self._lock:
-            entry.routers, entry.checked_at, entry.read_at, entry.pending = routers, checked_at, time.monotonic(), None
+            entry.routers, entry.checked_at, entry.pending = routers, checked_at, None
         pending.set_result((routers, checked_at))
         return copy.deepcopy(routers), checked_at, False
 

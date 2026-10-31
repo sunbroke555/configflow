@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from backend.agents import ipv6_readiness as bridge
+from backend.agents.oxidns_monitor import MonitorError
 from backend.routers import ipv6_readiness as ros
 from backend.routers.base import RouterError
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401
@@ -556,8 +557,8 @@ def test_router_route_order_and_lifetime_changes_keep_prepare_valid(environment)
     report = client.get(path, headers=headers).get_json()
     router.rows[ros.ROUTES][-1]['expires-after'] = '4m59s'
     router.rows[ros.ROUTES].reverse()
-    fresh = client.get(path, headers=headers).get_json()
-    assert fresh['check_token'] == report['check_token']
+    fresh = client.get(path + '?refresh=1', headers=headers).get_json()
+    assert fresh['cached'] is False and fresh['check_token'] == report['check_token']
     response = client.post(path + '/prepare', headers=headers, json={
         'interface': report['prepare_interface'], 'check_token': report['check_token']})
     assert response.status_code == 200, response.get_json()
@@ -575,3 +576,86 @@ def test_real_target_change_still_blocks_prepare(environment, changed):
         'interface': report['prepare_interface'], 'check_token': report['check_token']})
     assert response.status_code == 409, response.get_json()
     assert not router.writes and not any(operation == 'prepare' for operation, _ in calls)
+
+
+def test_opening_again_shows_the_last_check_until_what_it_reads_changes(environment):
+    """Like the IPv4 forwarding row: no device or router is contacted while nothing changed."""
+    client, manager, agent, headers, path, router, calls, _ = environment
+    reads = []
+    original = router._list
+    router._list = lambda table: reads.append(table) or original(table)
+    first = client.get(path, headers=headers).get_json()
+    assert first['cached'] is False and first['checked_at'] and len(calls) == 1
+    count = len(reads)
+
+    def again(suffix=''):
+        return client.get(path + suffix, headers=headers).get_json()
+    # A heartbeat (metrics, timestamps) is not a change.
+    manager.update_heartbeat(agent['id'], {'metrics': {'cpu': 3}})
+    cached = again()
+    assert cached['cached'] is True and cached['checked_at'] == first['checked_at']
+    assert cached['check_token'] == first['check_token'] and cached['config_revision'] == first['config_revision']
+    assert len(calls) == 1 and len(reads) == count
+    # The user's 「重新检查」.
+    assert again('?refresh=1')['cached'] is False and len(calls) == 2
+    # A saved draft (also the save before a publish).
+    config = manager.repository.get_profile('v6')
+    manager.repository.save_profile('v6', {**config, 'mihomo': {'custom_config': YAML.replace('fc00::1/64', 'fd00::1/64')}})
+    assert again()['cached'] is False and len(calls) == 3
+    assert again()['cached'] is True and len(calls) == 3
+    # The device record: a new Agent version, a publication, a router record.
+    manager.update_heartbeat(agent['id'], {'version': '1.8.51-go'})
+    assert again()['cached'] is False and len(calls) == 4
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        latest_deployment={'deployment_id': 'd2', 'status': 'succeeded'}))
+    assert again()['cached'] is False and len(calls) == 5
+    config = manager.repository.get_profile('v6')
+    routers = [{**item, 'name': 'Renamed'} for item in config['routers']['items']]
+    manager.repository.save_profile('v6', {**config, 'routers': {'items': routers}})
+    assert again()['routers'][0]['name'] == 'Renamed' and len(calls) == 6
+    # Kept privately under the data directory, without router credentials.
+    stored = list((manager.repository.data_dir / '.ipv6-readiness').glob('*.json'))
+    assert len(stored) == 1 and 'private' not in stored[0].read_text()
+
+
+def test_a_failed_recheck_keeps_the_last_result_and_says_why(environment, monkeypatch):
+    client, manager, agent, headers, path, router, calls, _ = environment
+    first = client.get(path, headers=headers).get_json()
+
+    def unreachable(*_args, **_kwargs):
+        raise MonitorError('AGENT_UNREACHABLE', 502, '无法连接 Agent 进行 IPv6 检查')
+    monkeypatch.setattr(bridge, '_request', unreachable)
+    response = client.get(path + '?refresh=1', headers=headers)
+    data = response.get_json()
+    assert response.status_code == 200 and data['cached'] is True and data['stale'] is False
+    assert data['checked_at'] == first['checked_at'] and data['check_token'] == first['check_token']
+    assert data['refresh_error']['message'] == '无法连接 Agent 进行 IPv6 检查'
+    # Offline: the device is not contacted, the last result stays and is marked as outdated.
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        last_heartbeat='2026-01-01T00:00:00'))
+    monkeypatch.setattr(bridge, '_request', lambda *_: pytest.fail('an offline device is not contacted'))
+    data = client.get(path, headers=headers).get_json()
+    assert data['stale'] is True and data['refresh_error']['code'] == 'AGENT_OFFLINE'
+    assert data['checks'] == first['checks']
+
+
+def test_without_a_last_result_a_failed_check_is_an_error(environment, monkeypatch):
+    client, _, _, headers, path, *_ = environment
+
+    def unreachable(*_args, **_kwargs):
+        raise MonitorError('AGENT_UNREACHABLE', 502, '无法连接 Agent 进行 IPv6 检查')
+    monkeypatch.setattr(bridge, '_request', unreachable)
+    response = client.get(path, headers=headers)
+    assert response.status_code == 502 and response.get_json()['success'] is False
+
+
+def test_the_check_after_preparing_becomes_the_last_result(environment):
+    client, _, _, headers, path, router, calls, _ = environment
+    report = client.get(path, headers=headers).get_json()
+    prepared = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']}).get_json()
+    assert prepared['success'] is True and prepared['checked_at']
+    count = len(calls)
+    again = client.get(path, headers=headers).get_json()
+    assert again['cached'] is True and again['checked_at'] == prepared['checked_at'] and len(calls) == count
+    assert 'message' not in again

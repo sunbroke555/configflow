@@ -1,17 +1,18 @@
 <script setup lang="ts">
 // 上级路由待发布提醒：按实际读取的差异报告与发布预览提示，并直达该路由器的预览发布。
 // 只提醒和链接；路由器写入始终在「上游路由」页预览确认后进行。
-import { computed, inject, onUnmounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { routerKey, type RouteLocationRaw } from 'vue-router'
 import { TriangleAlert } from '@lucide/vue'
 import { Button } from '@/components/ui/button'
 import { upstreamRouterApi, type UpstreamRouterStatus } from '@/api/upstreamRouterPending'
 import { summarizeUpstreamRouters, upstreamRouterLink, type UpstreamRouterSummary } from '@/lib/upstreamRouterPending'
+import { checkedAgo } from '@/lib/format'
 
 const props = defineProps<{
   /** 作为代理网关的 Mihomo Agent；为空时不读取，发出 none */
   agentId: string
-  /** 变化时重新读取并跳过服务端短时复用，用于保存草稿、发布或重新检查之后 */
+  /** 变化时强制重新读取路由器（不用服务端上次的结果），用于保存草稿、发布或重新检查之后 */
   refreshKey?: unknown
   /** 只显示每台路由器一行，不列出待发布项目 */
   compact?: boolean
@@ -25,6 +26,14 @@ const navigation = inject(routerKey, null)
 const routers = ref<UpstreamRouterStatus[]>([])
 const agentProfileId = ref('')
 const failure = ref('')
+const checkedAt = ref('')
+// 「检查于 N 分钟前」随时间更新。
+const now = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
+const checked = computed(() => {
+  void now.value
+  return checkedAt.value ? checkedAgo(checkedAt.value) : ''
+})
 const STATES = new Set(['synced', 'pending', 'blocked', 'unknown'])
 let session = 0
 let controller: AbortController | null = null
@@ -72,7 +81,8 @@ function go(event: MouseEvent, to: RouteLocationRaw) {
 }
 
 function publish() {
-  emit('status', failure.value ? { state: 'unknown', pending: 0 } : summarizeUpstreamRouters(routers.value))
+  emit('status', failure.value ? { state: 'unknown', pending: 0 }
+    : { ...summarizeUpstreamRouters(routers.value), ...(checkedAt.value ? { checkedAt: checkedAt.value } : {}) })
 }
 
 async function load(refresh: boolean) {
@@ -96,11 +106,13 @@ async function load(refresh: boolean) {
     }
     routers.value = data.routers.filter(valid)
     agentProfileId.value = typeof data.agent_profile_id === 'string' ? data.agent_profile_id : ''
+    checkedAt.value = typeof data.checked_at === 'string' ? data.checked_at : ''
     failure.value = ''
   } catch (error) {
     if (disposed || generation !== session || abort.signal.aborted) return
     // 读取失败不能当成已同步，也不保留旧的状态冒充当前结果。
     routers.value = []
+    checkedAt.value = ''
     failure.value = messageOf(error)
   } finally {
     if (!disposed && generation === session) {
@@ -116,11 +128,14 @@ watch(() => [props.agentId, props.refreshKey] as const, ([agentId, refreshKey], 
     routers.value = []
     failure.value = ''
     agentProfileId.value = ''
+    checkedAt.value = ''
   }
   void load(sameAgent && previous![1] !== refreshKey)
 }, { immediate: true })
 
+onMounted(() => { ticker = setInterval(() => { now.value = Date.now() }, 30000) })
 onUnmounted(() => {
+  clearInterval(ticker)
   disposed = true
   session++
   controller?.abort()
@@ -140,8 +155,8 @@ onUnmounted(() => {
             <template v-else-if="line.name">无法确认上级路由「{{ line.name }}」状态</template>
             <template v-else>无法确认上级路由状态</template>
           </p>
-          <p v-if="line.profile || line.detail" class="m-0 text-muted-foreground">
-            <template v-if="line.profile">配置空间「{{ line.profile }}」<template v-if="line.detail"> · </template></template>{{ line.detail }}
+          <p v-if="line.profile || line.detail || (line.name && checked)" class="m-0 text-muted-foreground">
+            <template v-if="line.profile">配置空间「{{ line.profile }}」<template v-if="line.detail || (line.name && checked)"> · </template></template>{{ line.detail }}<template v-if="line.name && checked"><template v-if="line.detail"> · </template><span data-upstream-router-checked>{{ checked }}</span></template>
           </p>
         </div>
       </div>

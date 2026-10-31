@@ -3,7 +3,12 @@ import type { UpstreamRouterStatus } from '@/api/upstreamRouterPending'
 
 /** `UpstreamRouterPending` 通过 `@status` 发出的汇总；none 表示没有路由器把这台 Mihomo 设为代理网关。 */
 export type UpstreamRouterSummaryState = 'none' | 'synced' | 'pending' | 'unknown'
-export interface UpstreamRouterSummary { state: UpstreamRouterSummaryState; pending: number }
+export interface UpstreamRouterSummary {
+  state: UpstreamRouterSummaryState
+  pending: number
+  /** 这次结果读取路由器的时间；服务端在缓存键不变时沿用上次读取 */
+  checkedAt?: string
+}
 
 /**
  * 有待发布或暂时无法发布（blocked）的路由器时为 pending，项数相加，blocked 至少计 1；

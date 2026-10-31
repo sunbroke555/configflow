@@ -34,9 +34,11 @@ def ipv6_readiness_operation(agent_id, operation='status'):
         profile_id = resolve_profile_id(explicit=selected[0])
         manager = get_agent_manager()
         if operation == 'status':
+            # ?refresh=1 is the user's 「重新检查」 or a confirmed publish; otherwise the
+            # last check is reused while nothing it depends on has changed.
             config, revision = manager.repository.get_publish_snapshot(profile_id)
-            data = ipv6_readiness._inspect(manager, ipv6_readiness._agent(manager, agent_id, profile_id), profile_id, config)
-            data['config_revision'] = revision
+            data = ipv6_readiness.status(manager, agent_id, profile_id, config, revision,
+                                         refresh=request.args.get('refresh') in ('1', 'true'))
         elif operation == 'prepare':
             before, revision = manager.repository.get_publish_snapshot(profile_id)
             data = ipv6_readiness.prepare(manager, agent_id, profile_id, body)

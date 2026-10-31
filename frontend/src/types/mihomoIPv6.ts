@@ -35,6 +35,14 @@ export interface MihomoIPv6Readiness {
   check_token: string
   connectivity: IPv6Connectivity
   message?: string
+  /** 这次结果的检查时间（服务端时区的 ISO 时间） */
+  checked_at?: string
+  /** 依赖未变，沿用上次检查 */
+  cached?: boolean
+  /** 结果依赖的设备或配置已变化，但这次未能重新检查 */
+  stale?: boolean
+  /** 这次重新检查失败的原因；仍显示上次结果 */
+  refresh_error?: { code: string; message: string; at: string }
 }
 
 export interface IPv6VerificationInput {

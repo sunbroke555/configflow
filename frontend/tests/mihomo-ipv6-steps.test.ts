@@ -187,7 +187,7 @@ afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.r
 describe('Mihomo IPv6 step list', () => {
   it('checks the fixed device once and never reads a router report of its own', async () => {
     const wrapper = await mount()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
     // The firewall step uses the device check; only the saved router list is read for OxiDNS.
     expect(routerApi.list).toHaveBeenCalledExactlyOnceWith('bound')
     expect(wrapper.findAll('[data-ipv6-step]').map(item => item.attributes('data-ipv6-step'))).toEqual(['host', 'publish', 'upstream', 'firewall', 'oxidns', 'verify'])
@@ -256,23 +256,55 @@ describe('Mihomo IPv6 step list', () => {
     const wrapper = await mount()
     const pending = wrapper.getComponent(UpstreamRouterPending)
     const key = pending.props('refreshKey')
+    const readiness = vi.mocked(agentApi.ipv6Readiness)
     await wrapper.setProps({ recheckKey: 1 })
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
+    // Closing the device check: the server's last result, which that window may have renewed.
+    expect(readiness).toHaveBeenCalledTimes(2)
+    expect(readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: false })
     expect(pending.props('refreshKey')).toBe(key)
+    // A confirmed publish changed the device: check it again.
     await wrapper.setProps({ refreshKey: 1 })
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(3)
+    expect(readiness).toHaveBeenCalledTimes(3)
+    expect(readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: true })
     expect(pending.props('refreshKey')).not.toBe(key)
     const published = pending.props('refreshKey')
+    // A save: the server checks again only if the saved content changed.
     await wrapper.setProps({ dirty: true })
     await wrapper.setProps({ dirty: false })
     await flushPromises()
+    expect(readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: false })
     expect(pending.props('refreshKey')).not.toBe(published)
     const saved = pending.props('refreshKey')
-    await wrapper.get('[aria-label="重新检查步骤"]').trigger('click')
+    await wrapper.get('[data-ipv6-steps-recheck]').trigger('click')
     await flushPromises()
+    expect(readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: true })
     expect(pending.props('refreshKey')).not.toBe(saved)
+  })
+
+  it('shows when the device and the routers were last checked and how to catch manual edits', async () => {
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValue(response({ ...hinted(), cached: true, checked_at: new Date(Date.now() - 12 * 60000).toISOString() }))
+    const wrapper = await mount()
+    const line = () => wrapper.get('[data-ipv6-steps-checked]').text()
+    expect(line()).toBe('设备检查于 12 分钟前。路由器或主机上的手动修改不会自动发现，请点「重新检查」。')
+    wrapper.getComponent(UpstreamRouterPending).vm.$emit('status', { state: 'synced', pending: 0, checkedAt: new Date(Date.now() - 3 * 60000).toISOString() })
+    await flushPromises()
+    expect(line()).toContain('设备检查于 12 分钟前，上游路由读取于 3 分钟前。')
+    expect(wrapper.get('[data-ipv6-steps-recheck]').text()).toBe('重新检查')
+    await wrapper.setProps({ dirty: true })
+    expect(wrapper.find('[data-ipv6-steps-checked]').exists()).toBe(false)
+  })
+
+  it('keeps the last result when a new check fails and says so', async () => {
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValue(response({ ...hinted(), cached: true, stale: false,
+      checked_at: new Date(Date.now() - 2 * 3600000).toISOString(),
+      refresh_error: { code: 'AGENT_UNREACHABLE', message: '无法连接 Agent 进行 IPv6 检查', at: new Date().toISOString() } }))
+    const wrapper = await mount()
+    expect(wrapper.get('[data-ipv6-steps-recheck-failed]').text()).toBe('这次未能重新检查：无法连接 Agent 进行 IPv6 检查。以下是上次的结果。')
+    expect(wrapper.get('[data-ipv6-steps-checked]').text()).toContain('设备检查于 2 小时前')
+    expect(status(wrapper, 'host')).toBe('已就绪')
+    expect(status(wrapper, 'firewall')).toBe('需处理')
   })
 
   it('works with the real reminder: blocked counts as waiting, the reminder lines stay hidden', async () => {
@@ -317,7 +349,8 @@ describe('Mihomo IPv6 step list', () => {
     expect(wrapper.findComponent(MihomoIPv6Verification).exists()).toBe(false)
     await wrapper.setProps({ dirty: false })
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    // The saved content is part of the server's key: a changed draft is checked anew.
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
     expect(status(wrapper, 'publish')).toBe('已发布')
   })
 
@@ -344,18 +377,30 @@ describe('Mihomo IPv6 step list', () => {
     expect(wrapper.text()).toContain('选择要检查的 Mihomo 设备')
     wrapper.getComponent(Select).vm.$emit('update:modelValue', 'gw2')
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw2', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw2', 'bound', { refresh: false })
   })
 
-  it('never replaces an unavailable entry device or checks an offline one', async () => {
+  it('never replaces an unavailable entry device, and shows the last check of an offline one', async () => {
     vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...gateway, status: 'offline' }]))
+    vi.mocked(agentApi.ipv6Readiness).mockRejectedValueOnce({ response: { data: { message: '设备离线，上线后重新检查' } } })
     let wrapper = await mount()
-    expect(agentApi.ipv6Readiness).not.toHaveBeenCalled()
+    // Asked for its last result; without one the server says it is offline.
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
     expect(wrapper.text()).toContain('离线，上线后重新检查')
     vi.mocked(agentApi.summaries).mockResolvedValue(response([gateway, dnsAgent]))
-    await wrapper.get('[aria-label="重新检查步骤"]').trigger('click')
+    await wrapper.get('[data-ipv6-steps-recheck]').trigger('click')
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
+    expect(status(wrapper, 'host')).toBe('已就绪')
+    vi.mocked(agentApi.ipv6Readiness).mockClear()
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValueOnce(response({ ...hinted(), stale: true, checked_at: new Date().toISOString(),
+      refresh_error: { code: 'AGENT_OFFLINE', message: '设备离线，上线后重新检查', at: '' } }))
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...gateway, status: 'offline' }]))
+    wrapper = await mount()
+    expect(wrapper.get('[data-ipv6-steps-recheck-failed]').text()).toBe('这次未能重新检查：设备离线，上线后重新检查。以下是设备或配置变化前的结果。')
+    // The offline reason is said once, not again as a notice.
+    expect(wrapper.text().match(/上线后重新检查/g)).toHaveLength(1)
+    expect(status(wrapper, 'host')).toBe('已就绪')
     vi.mocked(agentApi.ipv6Readiness).mockClear()
     vi.mocked(agentApi.summaries).mockResolvedValue(response([{ ...gateway, status: 'offline' }]))
     wrapper = await mount({ preferredAgentId: 'missing' })

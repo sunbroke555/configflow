@@ -504,8 +504,9 @@ export const agentApi = {
     api.get<{ success: boolean; gateways: GatewayForwardingEntry[] }>('/agents/gateway-forwarding', { timeout: 60000 }),
   persistGatewayForwarding: (agentId: string) =>
     api.post<{ success: boolean; message?: string; gateway: GatewayForwardingEntry }>('/agents/gateway-forwarding', { agent_id: agentId }, { timeout: 90000 }),
-  ipv6Readiness: (id: string, profileId: string) =>
-    api.get<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness`, { params: { profile_id: profileId }, ...profileOptions(profileId), timeout: 60000 }),
+  /** 设备 IPv6 检查：依赖未变时服务端返回上次结果；refresh 用于「重新检查」与发布成功之后。 */
+  ipv6Readiness: (id: string, profileId: string, options: { refresh?: boolean } = {}) =>
+    api.get<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness`, { params: { profile_id: profileId, ...(options.refresh ? { refresh: 1 } : {}) }, ...profileOptions(profileId), timeout: 60000 }),
   prepareIPv6: (id: string, data: import('@/types/mihomoIPv6').IPv6PrepareInput) =>
     api.post<import('@/types/mihomoIPv6').MihomoIPv6Readiness>(`/agents/${encodeURIComponent(id)}/ipv6-readiness/prepare`, data, { ...profileOptions(data.profile_id), timeout: 90000 }),
   probeIPv6: (id: string, profileId: string) =>

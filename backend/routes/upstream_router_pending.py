@@ -14,7 +14,8 @@ def upstream_router_pending(agent_id):
     """Routers in any profile that use this Agent as proxy gateway, with their live release state.
 
     Read-only: each router gets the 上游路由 page's report and release preview.
-    ``?refresh=1`` skips the short reuse window after the user saved or checked.
+    The last read is reused while its key holds; ``?refresh=1`` (after a save, a
+    publish or the user's 「重新检查」) reads the routers again.
     """
     refresh = request.args.get('refresh') in ('1', 'true')
     try:

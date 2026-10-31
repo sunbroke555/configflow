@@ -212,7 +212,7 @@ def test_an_unexpected_error_is_unknown_with_its_kind(lab):
     assert entry['state'] == 'unknown' and entry['message'] == '读取失败：KeyError'
 
 
-def test_results_are_reused_briefly_and_any_relevant_change_reads_again(lab):
+def test_results_are_reused_until_the_key_changes_and_any_relevant_change_reads_again(lab):
     client, admin, agent, routers, states, reads, get = lab
     gateway = agent()
     routers('home', ('主路由', 'http://pending', gateway))
@@ -221,6 +221,10 @@ def test_results_are_reused_briefly_and_any_relevant_change_reads_again(lab):
     states['http://pending'] = synced_state()
     again = get(gateway)
     assert again['cached'] is True and again['routers'][0]['state'] == 'pending' and len(reads) == 1
+    # No fixed expiry: the same key keeps answering from the last read, with its time.
+    assert not hasattr(pending, 'CACHE_TTL')
+    later = get(gateway)
+    assert later['cached'] is True and later['checked_at'] == again['checked_at'] and len(reads) == 1
     # The reminder refreshes after a save or a check.
     fresh = get(gateway, refresh=1)
     assert fresh['cached'] is False and fresh['routers'][0]['state'] == 'synced' and len(reads) == 2
@@ -254,9 +258,20 @@ def test_simultaneous_requests_share_one_read():
     second.join(5)
     assert calls == [1]
     assert [routers for routers, _, _ in results] == [[{'id': 'r', 'state': 'synced'}]] * 2
-    # Within the reuse window the result is served from memory; another signature reads again.
+    # While the signature holds the result is served from memory; another signature reads again.
     assert cache.read('a', 'sig', load)[2] is True and calls == [1]
     assert cache.read('a', 'changed', load)[2] is False and calls == [1, 1]
+
+
+def test_a_read_with_an_unreadable_router_is_tried_again():
+    """unknown is not a result to keep: the next request reads again, a known result is then kept."""
+    cache = pending.PendingCache()
+    answers = [[{'id': 'r', 'state': 'unknown'}, {'id': 's', 'state': 'synced'}], [{'id': 'r', 'state': 'pending'}]]
+    load = lambda: answers.pop(0)
+    assert cache.read('a', 'sig', load)[0][0]['state'] == 'unknown'
+    routers, _, cached = cache.read('a', 'sig', load)
+    assert routers[0]['state'] == 'pending' and cached is False and not answers
+    assert cache.read('a', 'sig', load)[2] is True
 
 
 def test_requires_authentication(lab):

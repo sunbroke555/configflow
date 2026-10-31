@@ -24,6 +24,12 @@ export const relativeTime = (iso: string | null | undefined): string => {
   return new Date(t).toLocaleDateString('zh-CN')
 }
 
+/** 「检查于 12 分钟前」；不到一分钟时写「刚刚检查」。verb 换成「读取」等同理 */
+export const checkedAgo = (iso: string | null | undefined, verb = '检查'): string => {
+  const when = relativeTime(iso)
+  return when === '刚刚' ? `刚刚${verb}` : `${verb}于 ${when}`
+}
+
 /** 订阅流量信息（subscription-userinfo）的派生值 */
 export interface TrafficInfo {
   upload?: number

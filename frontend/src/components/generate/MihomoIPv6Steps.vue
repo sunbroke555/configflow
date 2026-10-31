@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import { Copy, RefreshCw, ScanLine } from '@lucide/vue'
 import { agentApi, profileApi, routerApi } from '@/api'
@@ -13,6 +13,7 @@ import { upstreamRouterLink } from '@/lib/upstreamRouterPending'
 import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
 import { copyText } from '@/lib/clipboard'
 import { notify } from '@/lib/feedback'
+import { checkedAgo } from '@/lib/format'
 import {
   firewallStep, hostStep, oxidnsStep, publishStep, stepOrder, upstreamStep, verifyStep,
   type IPv6Step, type IPv6StepContext, type IPv6StepId, type OxiDNSLink, type UpstreamPendingStatus,
@@ -40,9 +41,12 @@ const upstreamLinks = ref<Array<{ key: string; label: string; to: RouteLocationR
 let upstreamSession = 0
 const verifier = ref<{ verification: IPv6Verification | null; fresh: boolean } | null>(null)
 // Bumped after a save, a publish or a manual refresh: the upstream reminder
-// then skips its short server-side reuse. Opening the settings and closing the
-// device check (which refreshes its own reminder) reuse the last read.
+// then reads the routers again. Opening the settings and closing the device
+// check (which refreshes its own reminder) reuse the server's last read.
 const upstreamKey = ref(0)
+// 「检查于 N 分钟前」随时间更新。
+const now = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
 // Bumped by each new readiness: remounts the embedded verifier to re-read it.
 const readings = ref(0)
 let session = 0
@@ -56,6 +60,8 @@ const candidates = computed(() => agents.value.filter(agent => (agent.service_ty
 const selected = computed(() => candidates.value.find(agent => agent.id === selectedId.value))
 const online = computed(() => selected.value?.status === 'online' && selected.value.enabled !== false)
 const available = computed(() => props.open && !props.dirty && online.value)
+// The last check is shown for an offline device too; the server does not contact it.
+const readable = computed(() => props.open && !props.dirty && !!selected.value && selected.value.enabled !== false)
 const current = (generation: number, id?: string) => !disposed && props.open && generation === session && (!id || id === selectedId.value)
 const messageOf = (failure: any) => failure?.response?.data?.message || failure?.message || '读取失败，请重试。'
 
@@ -81,9 +87,23 @@ const notice = computed(() => {
   if (targetUnavailable.value) return { text: '原目标设备已不属于此配置空间，请重新选择设备后检查。', tone: 'warning' }
   if (!candidates.value.length) return { text: '此配置空间尚未绑定 Mihomo 设备，绑定后才能检查。', tone: 'muted' }
   if (!selected.value) return { text: '选择要检查的 Mihomo 设备。', tone: 'muted' }
-  if (!online.value) return { text: `设备「${selected.value.name}」${selected.value.enabled === false ? '已禁用' : '离线'}，上线后重新检查。`, tone: 'warning' }
   if (props.dirty) return { text: '有未保存的修改。检查读取已保存的配置，保存草稿后自动重新检查。', tone: 'muted' }
+  // With a last result the line below says it could not be checked again.
+  if (!online.value && !readiness.value?.refresh_error) return { text: `设备「${selected.value.name}」${selected.value.enabled === false ? '已禁用' : '离线'}，上线后重新检查。`, tone: 'warning' }
   return null
+})
+// When the shown result was taken, and that edits made on a router or the host itself are not seen.
+const checked = computed(() => {
+  void now.value
+  const at = readiness.value?.checked_at
+  if (!at || props.dirty || phase.value !== 'idle') return ''
+  const routers = upstream.value?.checkedAt ? `，上游路由${checkedAgo(upstream.value.checkedAt, '读取')}` : ''
+  return `设备${checkedAgo(at)}${routers}。路由器或主机上的手动修改不会自动发现，请点「重新检查」。`
+})
+const recheckFailed = computed(() => {
+  const failure = readiness.value?.refresh_error
+  if (!failure || props.dirty) return ''
+  return `这次未能重新检查：${failure.message.replace(/[。.]$/, '')}。以下是${readiness.value?.stale ? '设备或配置变化前' : '上次'}的结果。`
 })
 
 async function readTargets() {
@@ -130,16 +150,19 @@ async function loadTargets() {
   if (current(generation) && !error.value) await inspect()
 }
 
-async function inspect(refreshUpstream = false) {
-  if (!available.value || phase.value === 'loading') return
+// The server answers with the last check while nothing it reads has changed;
+// `refresh` (「重新检查」, a confirmed publish) checks the device again and
+// `upstream` (also after a save) reads the upstream routers again.
+async function inspect(options: { refresh?: boolean; upstream?: boolean } = {}) {
+  if (!readable.value || phase.value === 'loading') return
   const generation = ++session
   const id = selectedId.value
   const profileId = props.profileId
   phase.value = 'checking'
   error.value = ''
-  if (refreshUpstream) upstreamKey.value++
+  if (options.upstream) upstreamKey.value++
   try {
-    const { data } = await agentApi.ipv6Readiness(id, profileId)
+    const { data } = await agentApi.ipv6Readiness(id, profileId, { refresh: !!options.refresh })
     if (!current(generation, id)) return
     if (data?.success !== true || data.agent_id !== id || data.profile_id !== profileId
       || !Array.isArray(data.checks) || !Array.isArray(data.routers) || !data.connectivity) {
@@ -205,11 +228,11 @@ function selectTarget(value: unknown) {
   void inspect()
 }
 
-// Re-read the devices too when the target is missing, offline or could not be read.
+// 「重新检查」: re-read the devices too when the target is missing, offline or could not be read.
 function refresh() {
   if (phase.value !== 'idle') return
   if (!agents.value.length || !selected.value || !online.value) void loadTargets()
-  else void inspect(true)
+  else void inspect({ refresh: true, upstream: true })
 }
 
 async function copyCommand(command: string) {
@@ -233,12 +256,14 @@ watch(() => [props.open, props.profileId, props.preferredAgentId] as const, () =
   clearResults()
   if (props.open) void loadTargets()
 }, { immediate: true, flush: 'sync' })
-// A save (draft no longer dirty), a publish or a closed device check all change
-// what the saved configuration and devices report.
-watch(() => props.dirty, (dirty, before) => { if (before && !dirty) void inspect(true) })
-watch(() => props.refreshKey, () => void inspect(true))
+// A save changes the saved configuration (the server checks again if its
+// content did); a publish changes the device, so it is checked again; a closed
+// device check may have checked again or prepared the host, which the server kept.
+watch(() => props.dirty, (dirty, before) => { if (before && !dirty) void inspect({ upstream: true }) })
+watch(() => props.refreshKey, () => void inspect({ refresh: true, upstream: true }))
 watch(() => props.recheckKey, () => void inspect())
-onUnmounted(() => { disposed = true; session++ })
+onMounted(() => { ticker = setInterval(() => { now.value = Date.now() }, 30000) })
+onUnmounted(() => { clearInterval(ticker); disposed = true; session++ })
 </script>
 
 <template>
@@ -246,8 +271,8 @@ onUnmounted(() => { disposed = true; session++ })
     <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
       <h3 class="m-0 min-w-0 flex-1 text-[13px] font-semibold">需要完成的步骤<span v-if="selected" class="block break-words font-normal text-muted-foreground sm:ml-2 sm:inline">设备：{{ selected.name }}</span></h3>
       <div class="flex shrink-0 items-center gap-1">
-        <Button type="button" variant="ghost" size="icon" class="size-11" aria-label="重新检查步骤" title="重新检查步骤" :disabled="!open || dirty || disabled || phase !== 'idle'" @click="refresh">
-          <RefreshCw class="size-4" :class="phase === 'checking' && 'animate-spin motion-reduce:animate-none'" aria-hidden="true" />
+        <Button type="button" variant="ghost" class="min-h-11 px-3 text-[13px]" :disabled="!open || dirty || disabled || phase !== 'idle'" data-ipv6-steps-recheck @click="refresh">
+          <RefreshCw class="size-4" :class="phase === 'checking' && 'animate-spin motion-reduce:animate-none'" aria-hidden="true" />重新检查
         </Button>
         <Button type="button" variant="outline" class="min-h-11 shrink-0 border-border-strong text-[13px]" aria-label="检查设备 IPv6" :disabled="disabled" @click="emit('check', selectedId)"><ScanLine class="size-4" aria-hidden="true" />检查设备</Button>
       </div>
@@ -257,6 +282,8 @@ onUnmounted(() => { disposed = true; session++ })
       <SelectContent><SelectItem v-for="agent in candidates" :key="agent.id" :value="agent.id" :disabled="agent.status !== 'online' || agent.enabled === false" class="min-h-11 break-all whitespace-normal">{{ agent.name }}{{ agent.status !== 'online' ? '（离线）' : agent.enabled === false ? '（已禁用）' : '' }}</SelectItem></SelectContent>
     </Select>
     <p v-if="notice" class="m-0 break-words text-xs leading-relaxed" :class="notice.tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground'" role="status">{{ notice.text }}</p>
+    <p v-if="recheckFailed" class="m-0 break-words text-xs leading-relaxed text-warning-accent" role="status" data-ipv6-steps-recheck-failed>{{ recheckFailed }}</p>
+    <p v-if="checked" class="m-0 break-words text-xs leading-relaxed text-muted-foreground" data-ipv6-steps-checked>{{ checked }}</p>
     <ol class="m-0 min-w-0 list-none divide-y divide-border/70 p-0">
       <li v-for="item in steps" :key="item.id" class="min-w-0" :data-ipv6-step="item.id">
         <AgentStatusRow :label="item.label" :status="item.status" :tone="item.tone">

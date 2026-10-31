@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { upstreamRouterApi, type UpstreamRouterStatus } from '@/api/upstreamRouterPending'
 import UpstreamRouterPending from '@/components/routers/UpstreamRouterPending.vue'
 import { readRouterDeepLink, summarizeUpstreamRouters, upstreamRouterLink } from '@/lib/upstreamRouterPending'
+import { checkedAgo } from '@/lib/format'
 
 vi.mock('@/api/upstreamRouterPending', () => ({ upstreamRouterApi: { pending: vi.fn() } }))
 
@@ -71,6 +72,19 @@ describe('upstream router pending reminder', () => {
     expect(link.attributes('href')).toBe('/routers?router=ros&profile=home&preview=1')
     expect(wrapper.get('[data-upstream-router-pending]').attributes('role')).toBe('status')
     expect(wrapper.emitted('status')).toEqual([[{ state: 'pending', pending: 2 }]])
+  })
+
+  it('says when the routers were read, since the server reuses that read until something it knows changes', async () => {
+    const at = new Date(Date.now() - 5 * 60000).toISOString()
+    vi.mocked(upstreamRouterApi.pending).mockResolvedValue(reply([PENDING], { checked_at: at, cached: true }))
+    const { wrapper } = await render()
+    expect(wrapper.get('[data-upstream-router="home:ros"] [data-upstream-router-checked]').text()).toBe('检查于 5 分钟前')
+    expect(wrapper.emitted('status')).toEqual([[{ state: 'pending', pending: 2, checkedAt: at }]])
+  })
+
+  it('words a fresh read as 刚刚检查 and an older one with its age', () => {
+    expect(checkedAgo(new Date().toISOString())).toBe('刚刚检查')
+    expect(checkedAgo(new Date(Date.now() - 3 * 60000).toISOString(), '读取')).toBe('读取于 3 分钟前')
   })
 
   it('keeps one line per router in compact mode and shortens long item lists', async () => {
