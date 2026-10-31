@@ -17,7 +17,7 @@ const value = (item: SubscriptionHostsReport['items'][number]) =>
 </script>
 
 <template>
-  <div class="min-w-0 border-b border-border px-5 py-2 text-xs max-sm:px-3" aria-label="订阅 hosts" data-subscription-hosts>
+  <div class="min-w-0 border-b border-border px-5 py-2 text-xs max-sm:px-3" role="group" aria-label="订阅 hosts" data-subscription-hosts>
     <div class="flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1">
       <span class="font-semibold text-foreground">订阅 hosts</span>
       <span class="text-muted-foreground" data-subscription-hosts-counts>
@@ -34,7 +34,7 @@ const value = (item: SubscriptionHostsReport['items'][number]) =>
         aria-controls="subscription-hosts-items"
         @click="open = !open"
       >
-        {{ open ? '收起条目' : '查看条目' }}
+        {{ open ? '收起' : '详情' }}
         <ChevronDown :class="['size-3.5 transition-transform', open && 'rotate-180']" aria-hidden="true" />
       </Button>
     </div>
