@@ -122,6 +122,8 @@ const routerAgentIds = computed(() => props.serviceType !== 'mihomo' || !routerC
   : selected.value ? [selected.value.id] : candidates.value.map(agent => agent.id))
 const stillCurrent = (current: Attempt) => !disposed && props.open && session === current.session
   && props.profileId === current.profileId && props.serviceType === current.serviceType
+// The published Mihomo snapshot has IPv6 on (「关闭」 has no IPv6 to verify).
+const publishedIPv6 = (deployment?: AgentDeployment) => deployment?.ipv6_verification_requested === true
 
 watch(task, value => {
   const current = visibleAttempt.value
@@ -136,9 +138,12 @@ watch(task, value => {
   const key = `${current.agentId}:${current.deploymentId}`
   if (announcedPublications.has(key)) return
   announcedPublications.add(key)
-  verifiedPublication.value = { agent_id: current.agentId, profile_id: current.profileId,
+  const target = { agent_id: current.agentId, profile_id: current.profileId,
     deployment_id: current.deploymentId, config_revision: current.configRevision! }
-  emit('published', verifiedPublication.value)
+  // Verify only what this publication turned on: the server enrolls a publication
+  // for IPv6 verification from its own snapshot, not from a later draft.
+  verifiedPublication.value = publishedIPv6(value) ? target : null
+  emit('published', target)
 }, { deep: true })
 
 async function readTargets() {
@@ -426,7 +431,7 @@ onUnmounted(() => { disposed = true; session++ })
       <MihomoIPv6Verification v-if="verifiedPublication" :key="verifiedPublication.deployment_id" :open="open" auto
         :agent-id="verifiedPublication.agent_id" :profile-id="verifiedPublication.profile_id"
         :deployment-id="verifiedPublication.deployment_id" :config-revision="verifiedPublication.config_revision" />
-      <p v-else-if="visibleAttempt?.serviceType === 'mihomo' && !visibleAttempt.inherited && task?.status === 'succeeded'" class="m-0 text-warning-accent">暂未确认这次发布的验收结果；可打开「检查设备」查看或重新验证连接与分流。</p>
+      <p v-else-if="visibleAttempt?.serviceType === 'mihomo' && !visibleAttempt.inherited && task?.status === 'succeeded' && publishedIPv6(task)" class="m-0 text-warning-accent">暂未确认这次发布的验收结果；可打开「检查设备」查看或重新验证连接与分流。</p>
       <p v-if="task?.status === 'succeeded' && hasDNSFollowers" class="m-0 break-words text-muted-foreground" data-dns-follow-hint>
         后台会继续处理已绑定的 OxiDNS；<RouterLink class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页面查看同步结果或重试</RouterLink>。
       </p>

@@ -16,6 +16,8 @@ const pending = ref(false)
 const starting = ref(false)
 // A run started or observed in progress here reads a newer static snapshot.
 const freshVerification = ref(false)
+// The verified configuration has IPv6 off: nothing to verify, which is not a failure.
+const notApplicable = ref(false)
 const message = ref('')
 const error = ref('')
 let generation = 0
@@ -32,6 +34,11 @@ const failureMessage = (failure: any) => failure?.response?.data?.message || fai
 function accept(data: IPv6VerificationResult, session: number, required = false) {
   if (!current(session)) return false
   if (!data?.success || data.agent_id !== props.agentId || data.profile_id !== props.profileId) throw new Error('验收结果与当前设备或配置空间不一致。')
+  notApplicable.value = data.applicable === false
+  if (notApplicable.value) {
+    verification.value = null
+    return false
+  }
   const value = data.verification
   if (!value) {
     if (required) throw new Error('服务端尚未确认验收任务，请重新读取结果。')
@@ -79,6 +86,7 @@ async function start() {
   const session = ++generation
   clearTimeout(timer)
   verification.value = null
+  notApplicable.value = false
   error.value = ''
   message.value = ''
   started = Date.now()
@@ -98,6 +106,7 @@ watch(() => [props.open, props.agentId, props.profileId, props.configRevision, p
   const session = ++generation
   clearTimeout(timer)
   verification.value = null
+  notApplicable.value = false
   pending.value = false
   starting.value = false
   freshVerification.value = false
@@ -122,13 +131,14 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer) })
     <p v-if="message" class="m-0 break-words text-xs text-warning-accent" role="status">{{ message }}</p>
     <p v-if="error" class="m-0 break-words text-xs text-destructive-accent" role="alert">{{ error }}</p>
     <p v-if="!validRevision" class="m-0 text-xs text-warning-accent">请重新检查设备，取得当前配置版本后再验证。</p>
-    <div v-if="readiness" data-mihomo-ipv6-verification>
+    <p v-if="notApplicable" class="m-0 text-xs text-muted-foreground" role="status" data-ipv6-not-applicable>未启用 IPv6，无需验收。</p>
+    <div v-else-if="readiness" data-mihomo-ipv6-verification>
       <MihomoIPv6CheckSummary :readiness="readiness" :prefer-verification-snapshot="freshVerification" :verification="verification && !running && !error ? verification : undefined" />
     </div>
     <MihomoIPv6VerificationResult v-else-if="verification && verification.status !== 'running'" :verification="verification" :compact="auto" />
     <div class="flex flex-wrap gap-2">
       <slot name="actions" />
-      <Button v-if="!auto || error || canRetryAutomatic" type="button" variant="outline" class="min-h-11" :disabled="disabled || pending || running || !validRevision" @click="start"><RefreshCw class="size-3.5" aria-hidden="true" />验证连接与分流</Button>
+      <Button v-if="!notApplicable && (!auto || error || canRetryAutomatic)" type="button" variant="outline" class="min-h-11" :disabled="disabled || pending || running || !validRevision" @click="start"><RefreshCw class="size-3.5" aria-hidden="true" />验证连接与分流</Button>
       <Button v-if="message || (error && running)" type="button" variant="ghost" class="min-h-11" :disabled="pending" @click="error = ''; message = ''; started = Date.now(); read(generation)">重新读取结果</Button>
     </div>
   </section>

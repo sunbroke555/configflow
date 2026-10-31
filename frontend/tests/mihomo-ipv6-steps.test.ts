@@ -21,7 +21,7 @@ const gateway = { id: 'gw', name: '客厅 Mihomo', service_type: 'mihomo', profi
 const dnsAgent = { id: 'dns', name: '旁路 OxiDNS', service_type: 'oxidns', profile_id: 'bound', status: 'online' }
 const ok = (id: string, label = id): IPv6ReadinessCheck => ({ id, label, status: 'ok', message: `${label} 通过` })
 const command = '/ipv6 firewall filter add chain=forward action=accept in-interface=bridge out-interface=bridge comment="LAN to Mihomo via router" place-before=*5'
-const hairpinWarning = 'IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接：每个新连接会卡住约 7 秒。'
+const hairpinWarning = 'IPv6 防火墙会丢弃同口转发的后续包：设备经 ROS 同一 LAN 口转给 Mihomo，回包不经过 ROS，新连接可能卡几秒甚至超时。'
 const readiness = (overrides: Partial<Readiness> = {}): Readiness => ({
   success: true, agent_id: 'gw', profile_id: 'bound', config_revision: 7,
   configuration: { ipv6: true, dns_ipv6: true, fake_ipv6_range: 'fc00::/64', errors: [] },
@@ -69,6 +69,19 @@ describe('IPv6 step derivation', () => {
     expect(publishStep(context({ readiness: pending }))).toMatchObject({ status: '待发布', issues: ['已保存草稿与设备配置不同：DNS IPv6。请通过保存并发布应用配置。'] })
     expect(publishStep(context({ readiness: readiness({ host: {} }) }))).toMatchObject({ status: '无法确认', tone: 'neutral' })
     expect(publishStep(context({ readiness: readiness({ host: { core: { error: '无法读取' } } }) })).status).toBe('无法确认')
+  })
+
+  it('reports any other Mihomo change from the server comparison of the delivered files', () => {
+    // A router publication or another service's settings only move the revision: still published.
+    for (const publication of ['synced', 'unknown', undefined] as const) {
+      expect(publishStep(context({ readiness: readiness({ publication }) }))).toMatchObject({ status: '已发布', tone: 'success' })
+    }
+    expect(publishStep(context({ readiness: readiness({ publication: 'changed' }) }))).toMatchObject({
+      status: '待发布', tone: 'neutral', issues: ['已保存的配置还没有发布到这台 Mihomo，请使用底部「保存并发布」。'] })
+    expect(publishStep(context({ readiness: readiness({ publication: 'checking' }) }))).toMatchObject({ status: '核对中', tone: 'progress' })
+    // The device's own IPv6 values stay the more specific reason.
+    const both = readiness({ publication: 'changed', checks: [{ id: 'deployed_config', label: '设备上的配置', status: 'warning', message: '已保存草稿与设备配置不同：DNS IPv6。' }] })
+    expect(publishStep(context({ readiness: both })).issues).toEqual(['已保存草稿与设备配置不同：DNS IPv6。'])
   })
 
   it('maps the upstream reminder states', () => {
@@ -352,6 +365,40 @@ describe('Mihomo IPv6 step list', () => {
     // The saved content is part of the server's key: a changed draft is checked anew.
     expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
     expect(status(wrapper, 'publish')).toBe('已发布')
+  })
+
+  it('follows the background comparison of Mihomo files without checking the device again', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(agentApi.ipv6Readiness)
+        .mockResolvedValueOnce(response(readiness({ checked_at: 'first', publication: 'checking' })))
+        .mockResolvedValueOnce(response(readiness({ checked_at: 'first', publication: 'checking' })))
+        .mockResolvedValueOnce(response(readiness({ checked_at: 'first', publication: 'changed' })))
+      const wrapper = await mount()
+      expect(status(wrapper, 'publish')).toBe('核对中')
+      const verifier = wrapper.getComponent(MihomoIPv6Verification)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(status(wrapper, 'publish')).toBe('核对中')
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(status(wrapper, 'publish')).toBe('待发布')
+      expect(row(wrapper, 'publish').text()).toContain('还没有发布到这台 Mihomo')
+      // Re-reads of an unchanged check: never a forced device check, and the verifier is kept.
+      expect(vi.mocked(agentApi.ipv6Readiness).mock.calls).toEqual(Array(3).fill(['gw', 'bound', { refresh: false }]))
+      expect(wrapper.getComponent(MihomoIPv6Verification).vm).toBe(verifier.vm)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(3)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('stops following the comparison when the list closes', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(agentApi.ipv6Readiness).mockResolvedValue(response(readiness({ checked_at: 'first', publication: 'checking' })))
+      const wrapper = await mount()
+      await wrapper.setProps({ open: false })
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
   })
 
   it('asks the device check window to open for the selected device', async () => {

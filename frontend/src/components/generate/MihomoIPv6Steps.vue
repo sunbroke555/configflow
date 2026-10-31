@@ -49,6 +49,8 @@ const now = ref(Date.now())
 let ticker: ReturnType<typeof setInterval> | undefined
 // Bumped by each new readiness: remounts the embedded verifier to re-read it.
 const readings = ref(0)
+// While the server still compares Mihomo's files (after a save or a router publication).
+let publicationTimer: ReturnType<typeof setTimeout> | undefined
 let session = 0
 let initialized = false
 let disposed = false
@@ -113,6 +115,7 @@ async function readTargets() {
 }
 
 function clearResults() {
+  clearTimeout(publicationTimer)
   readiness.value = null
   oxidns.value = []
   upstream.value = null
@@ -170,6 +173,7 @@ async function inspect(options: { refresh?: boolean; upstream?: boolean } = {}) 
     }
     readiness.value = data
     readings.value++
+    followPublication(generation, id)
   } catch (failure) {
     if (current(generation, id)) {
       error.value = messageOf(failure)
@@ -179,6 +183,31 @@ async function inspect(options: { refresh?: boolean; upstream?: boolean } = {}) 
     if (current(generation, id)) phase.value = 'idle'
   }
   if (current(generation, id) && readiness.value && props.mode === 'clients') await readOxiDNS(generation, id)
+}
+
+// 「保存并发布 Mihomo」 waits for the server's comparison of Mihomo's files, which
+// runs in the background. Re-read the reused device check (no device is
+// contacted while it is unchanged) until the comparison answers.
+function followPublication(generation: number, id: string, attempt = 0) {
+  clearTimeout(publicationTimer)
+  if (readiness.value?.publication !== 'checking' || attempt >= 40) return
+  publicationTimer = setTimeout(async () => {
+    if (!current(generation, id) || phase.value !== 'idle') return
+    try {
+      const { data } = await agentApi.ipv6Readiness(id, props.profileId, { refresh: false })
+      if (!current(generation, id) || phase.value !== 'idle' || !readiness.value) return
+      if (data?.success !== true || data.agent_id !== id || data.profile_id !== props.profileId
+        || !Array.isArray(data.checks) || !Array.isArray(data.routers) || !data.connectivity) return
+      if (data.checked_at === readiness.value.checked_at) readiness.value = { ...readiness.value, publication: data.publication }
+      else {
+        readiness.value = data
+        readings.value++
+      }
+      followPublication(generation, id, attempt + 1)
+    } catch {
+      // The next check reads it again.
+    }
+  }, 3000)
 }
 
 // The saved router settings only (no router is contacted): which linked
@@ -263,7 +292,7 @@ watch(() => props.dirty, (dirty, before) => { if (before && !dirty) void inspect
 watch(() => props.refreshKey, () => void inspect({ refresh: true, upstream: true }))
 watch(() => props.recheckKey, () => void inspect())
 onMounted(() => { ticker = setInterval(() => { now.value = Date.now() }, 30000) })
-onUnmounted(() => { clearInterval(ticker); disposed = true; session++ })
+onUnmounted(() => { clearInterval(ticker); clearTimeout(publicationTimer); disposed = true; session++ })
 </script>
 
 <template>

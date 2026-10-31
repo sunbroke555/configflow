@@ -96,6 +96,48 @@ describe('settings save and publish', () => {
     expect(wrapper.emitted('published')).toBeUndefined()
   })
 
+  // The server enrolls a Mihomo publication for IPv6 verification from its own snapshot
+  // (ipv6: true); the flag is what the bar follows, never a draft saved afterwards.
+  async function publishMihomo(extra: Record<string, any>) {
+    vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mihomo' })]))
+    vi.mocked(agentApi.pushConfig).mockImplementationOnce(async (_id, deploymentId) => response({
+      deployment_id: deploymentId, profile_id: 'office', service_type: 'mihomo', config_revision: 7, status: 'succeeded', ...extra,
+    }))
+    const wrapper = await render({ serviceType: 'mihomo', save: vi.fn().mockResolvedValue(guard({ expected_service_type: 'mihomo' })) })
+    await publish(wrapper)
+    return wrapper
+  }
+
+  it('verifies a publication whose own snapshot turns IPv6 on', async () => {
+    const wrapper = await publishMihomo({ ipv6_verification_requested: true })
+    const id = vi.mocked(agentApi.pushConfig).mock.lastCall![1]
+    expect(wrapper.find('[data-ipv6-verifier]').exists()).toBe(true)
+    expect(agentApi.verifyIPv6).toHaveBeenCalledExactlyOnceWith('one', { profile_id: 'office', expected_config_revision: 7, deployment_id: id })
+    expect(wrapper.text()).toContain('IPv6 节点连接')
+  })
+
+  it('shows no IPv6 verification, button or device-check hint after publishing with IPv6 off', async () => {
+    const wrapper = await publishMihomo({})
+    expect(wrapper.emitted('published')).toHaveLength(1)
+    expect(wrapper.find('[data-ipv6-verifier]').exists()).toBe(false)
+    expect(agentApi.verifyIPv6).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('发布成功')
+    expect(wrapper.text()).not.toMatch(/IPv6 网络|IPv6 节点连接|客户端分流|验证连接与分流|检查设备|验收/)
+    // A later draft (for example switching back to an IPv6 mode) changes nothing about this publication.
+    await button(wrapper, '保存草稿').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-ipv6-verifier]').exists()).toBe(false)
+    expect(agentApi.verifyIPv6).not.toHaveBeenCalled()
+  })
+
+  it('keeps the device-check hint for an IPv6 publication it cannot verify here', async () => {
+    const wrapper = await publishMihomo({ ipv6_verification_requested: true, config_revision: 8 })
+    expect(wrapper.find('[data-ipv6-verifier]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('暂未确认这次发布的验收结果')
+    const off = await publishMihomo({ config_revision: 8 })
+    expect(off.text()).not.toContain('暂未确认这次发布的验收结果')
+  })
+
   it('does not announce inherited successes or results after leaving the editing session', async () => {
     vi.mocked(agentApi.summaries).mockResolvedValue(response([agent({ service_type: 'mihomo', latest_deployment: {
       deployment_id: 'old', profile_id: 'office', service_type: 'mihomo', config_revision: 7, status: 'succeeded',

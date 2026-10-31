@@ -37,6 +37,8 @@ export interface AgentDeployment {
   retrying?: boolean
   dns_checks?: AgentDNSCheck[]
   dns_checked_at?: string
+  /** Set by the server when this Mihomo publication's own snapshot turns IPv6 on. */
+  ipv6_verification_requested?: boolean
   ha_publication?: import('@/types/agentHAPublication').AgentHAPublication
 }
 

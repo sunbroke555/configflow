@@ -3,7 +3,7 @@ import copy
 
 import pytest
 
-from backend.routers import ipv6_routes as routes6
+from backend.routers import forward_hint, ipv6_routes as routes6
 from backend.routers.base import RouterError
 from backend.routers.desired import compute_desired
 from backend.routers.plan import build_plan
@@ -335,7 +335,9 @@ def test_drop_invalid_before_a_same_port_accept_is_reported_with_a_copyable_fix(
     session, driver = device()
     session.rows['/ipv6/firewall/filter'] = copy.deepcopy(DEFCONF)
     part = inspect(driver, wanted(*TELEGRAM6))
-    assert any('drop invalid' in warning and '7 秒' in warning for warning in part['warnings'])
+    # Same text as IPv4: no fixed delay, redirects only ease it (VM151 lab, 2026-10-31).
+    assert forward_hint.IPV6_DROP in part['warnings']
+    assert not any('7 秒' in warning or '每个新连接' in warning for warning in part['warnings'])
     assert part['fix_command'] == ('/ipv6 firewall filter add chain=forward action=accept in-interface=bridge '
                                    'out-interface=bridge comment="LAN to Mihomo via router" place-before=*11')
     assert part['ops'] and not part['skip']  # a hint: the routes are still published

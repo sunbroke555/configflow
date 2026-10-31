@@ -74,6 +74,12 @@ export function publishStep(context: IPv6StepContext): IPv6Step {
   if (saved) return step('publish', '需处理', 'warning', [saved.message])
   const deployed = readiness.checks.find(check => check.id === 'deployed_config' && check.status !== 'ok')
   if (deployed) return step('publish', '待发布', 'neutral', [deployed.message])
+  // Any other Mihomo change, judged by the files Mihomo receives: a router publication or
+  // another service's settings move the revision without making this pending.
+  if (readiness.publication === 'changed') {
+    return step('publish', '待发布', 'neutral', ['已保存的配置还没有发布到这台 Mihomo，请使用底部「保存并发布」。'])
+  }
+  if (readiness.publication === 'checking') return step('publish', '核对中', 'progress')
   const core = readiness.host?.core
   if (!core || typeof core !== 'object' || 'error' in core) {
     return step('publish', '无法确认', 'neutral', [], '设备没有返回当前 Mihomo 配置，发布后重新检查；仍无法确认时请更新 Agent。')

@@ -24,6 +24,7 @@ _slots = threading.BoundedSemaphore(8)
 _loops = set()
 _loop_lock = threading.Lock()
 _TERMINAL = {'succeeded', 'failed', 'rolled_back', 'rollback_failed'}
+NOT_APPLICABLE = '未启用 IPv6，无需验收'
 
 
 def _now():
@@ -199,24 +200,54 @@ def _source(manager, agent, deployment_id, expected_revision):
         # The Agent adapts the uploaded YAML to this installation before
         # publishing. Its confirmed final SHA identifies the file we verify;
         # the upload manifest only binds the immutable source snapshot.
-        digest = task.get('config_version')
-    else:
-        # Manual checks still describe a captured saved revision. The Agent
-        # separately reports whether those values match the running core.
-        applied = agent.get('applied_content') or {}
-        if agent.get('config_revision') == revision:
-            from backend.agents.rule_sync_store import load
-            receipt = load(manager.repository, agent, with_bundle=False)
-            if receipt and applied.get('deployment_id') == receipt['manifest'].get('deployment_id'):
-                digest = agent.get('config_version')
-    digest = digest.lower() if isinstance(digest, str) and re.fullmatch(r'[0-9a-fA-F]{64}', digest) else None
+        digest = _sha256(task.get('config_version'))
+    # A manual check describes a captured saved revision; whether this Mihomo
+    # runs it is settled in the worker (see _published).
     if expected_revision is not None and (type(expected_revision) is not int or expected_revision != revision):
         raise MonitorError('CONFIG_CHANGED', 409, '验收对应的配置版本已变化，请重新检查')
     return config, revision, digest
 
 
+def _sha256(value):
+    return value.lower() if isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{64}', value) else None
+
+
+def _published(manager, agent, config, revision):
+    """Whether this Mihomo runs the saved configuration: ``(status, digest)``.
+
+    Judged by what Mihomo receives (``readiness.publication``), not by the
+    revision alone, which a router publication or another service's settings
+    also move. Runs in the worker, so it may wait for the comparison. With
+    ``synced``, ``digest`` is the running file's confirmed SHA for the Agent
+    to check; ``changed`` or ``unknown`` give no digest.
+    """
+    from backend.agents.rule_sync_store import load
+    applied = agent.get('applied_content') or {}
+    receipt = load(manager.repository, agent, with_bundle=False)
+    if not receipt or applied.get('deployment_id') != receipt['manifest'].get('deployment_id'):
+        return 'unknown', None
+    status = readiness.publication(manager, agent, config, revision, wait=True)
+    if status != 'synced':
+        return ('changed' if status == 'changed' else 'unknown'), None
+    digest = _sha256(agent.get('config_version'))
+    return ('synced' if digest else 'unknown'), digest
+
+
+def _ipv6_enabled(config):
+    return readiness.configuration(config)[0].get('ipv6') is True
+
+
+def _not_applicable(agent_id, profile_id):
+    """Without IPv6 in the verified configuration there is nothing to verify."""
+    return {'success': True, 'agent_id': agent_id, 'profile_id': profile_id, 'verification': None,
+            'applicable': False, 'message': NOT_APPLICABLE}
+
+
 def result(manager, agent_id, profile_id, deployment_id=None):
     agent = readiness._agent(manager, agent_id, profile_id)
+    if not deployment_id and not _ipv6_enabled(manager.repository.get_publish_snapshot(profile_id)[0]):
+        # An earlier run while IPv6 was on says nothing about this configuration.
+        return _not_applicable(agent_id, profile_id)
     runs = agent.get('ipv6_verifications') or {}
     report = deepcopy(runs.get(deployment_id) if deployment_id else max(
         (r for r in runs.values() if r.get('profile_id') == profile_id),
@@ -253,13 +284,14 @@ def _safe_checks(data, prefix=''):
     return checks
 
 
-def _runtime_checks(runtime, digest):
+def _runtime_checks(runtime, digest, publication='unknown'):
     checks = [c for c in _safe_checks(runtime, 'runtime_') if c['id'] != 'runtime_client_path']
     if not digest:
         # Even an old Agent's incomplete response cannot establish which saved
         # configuration was tested without a confirmed publication receipt.
         checks.append(_check('runtime_expected_config', '验收配置版本', 'unknown',
-                             '缺少与当前已保存配置一致的发布记录，尚不能确认验收的是这一版配置'))
+                             '已保存的配置还没有发布到这台 Mihomo，请先保存并发布再验收' if publication == 'changed'
+                             else '缺少与当前已保存配置一致的发布记录，尚不能确认验收的是这一版配置'))
     required = {'deployed_config', 'runtime_core', 'runtime_ipv6', 'runtime_tun',
                 'proxy_http', 'node_ipv6_transport', 'dns_a', 'dns_aaaa'}
     present = {c['id'].removeprefix('runtime_') for c in checks}
@@ -328,11 +360,14 @@ def _execute(manager, source, config, saved, digest, report, key):
                 check['label'] = str(router.get('name') or 'ROS') + ' · ' + check['label']
                 checks.append(check)
         test_url = _url(config, saved)
+        publication = 'synced' if digest else 'unknown'
+        if not report.get('deployment_id'):
+            publication, digest = _published(manager, source, config, report['config_revision'])
         payload = {'test_url': test_url}
         if digest:
             payload['expected_config_sha256'] = digest
         runtime = readiness._request(source, 'verify', payload)
-        checks.extend(_runtime_checks(runtime, digest))
+        checks.extend(_runtime_checks(runtime, digest, publication))
         if saved['client_agent_id']:
             checks.extend(_client_checks(manager, source, config, saved, test_url, report['run_id']))
         else:
@@ -395,6 +430,9 @@ def start(manager, agent_id, profile_id, body, *, automatic=False):
     if automatic and old:
         return result(manager, agent_id, profile_id, deployment_id)
     config, revision, digest = _source(manager, source, deployment_id, body.get('expected_config_revision'))
+    if not _ipv6_enabled(config):
+        # The published snapshot for a publication, else the saved configuration.
+        return _not_applicable(agent_id, profile_id)
     if _reusable(manager, source, old, automatic, deployment_id):
         return result(manager, agent_id, profile_id, deployment_id)
     saved = _settings(source)

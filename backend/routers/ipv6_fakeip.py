@@ -155,18 +155,16 @@ def hairpin(driver, lan, cidr):
     Mihomo through the router's LAN port, so one same-port accept covers both.
     ICMPv6 redirects (sent only for an LLA next hop, about one per second,
     ignored by forwarding Linux clients) ease but do not remove the stall, so
-    the next hop never silences this. See ``forward_hint`` (shared with IPv4).
-    Read-only: returns (warning, command).
+    the next hop never silences this. The text is ``forward_hint``'s, shared
+    with IPv4. Read-only: returns (warning, command).
     """
-    from backend.routers.forward_hint import check
+    from backend.routers.forward_hint import IPV6_DROP, check
     result = check(driver, 6, lan, [cidr])
     if result['status'] == 'unknown':
         return '未能读取 RouterOS IPv6 防火墙，无法确认转给 Mihomo 的连接是否会被 forward 链丢弃', ''
     if result['status'] != 'drop':
         return '', ''
-    return ('IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接：设备经 ROS 同一 LAN 口转给 Mihomo 时，回程不经过 ROS，'
-            '后续数据包被判为 invalid，每个新连接会卡住约 7 秒。请在「drop invalid」之前放行同口转发（下方命令），'
-            '一条命令同时覆盖 IPv6 Fake-IP 和 IPv6 规则集路由；ConfigFlow 不修改防火墙，路由照常发布。'), result['command']
+    return IPV6_DROP, result['command']
 
 
 def inspect(config, router, agent, host, driver):
