@@ -4,7 +4,9 @@ List requests only inspect snapshots/cache and schedule work. Downloads and bund
 generation run in at most two workers; a missing baseline never implies a match.
 Remote changes are checked on a fifteen-minute successful-result cache interval.
 ``compare_now`` answers in its caller's thread, for callers that are already in
-a background worker; it shares the cache with the list.
+a background worker; it shares the cache with the list. ``get_push_diff`` asks
+the same workers to also list what changed (``push_diff``), from the bundle the
+comparison prepares anyway; a few of those answers are kept with the result.
 """
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -37,6 +39,16 @@ class _Entry:
     repository: object = None
     result: dict | None = None
     expires: float = 0
+    # Set by get_push_diff: the next worker for these inputs also lists changes.
+    want_detail: bool = False
+
+
+@dataclass
+class _Detail:
+    key: str
+    repository: object
+    value: dict
+    expires: float
 
 
 def _unknown(reason):
@@ -83,7 +95,7 @@ def _input_key(agent, config, base_url):
 
 class ContentSyncChecker:
     def __init__(self, *, executor=None, clock=time.monotonic, max_workers=2,
-                 success_ttl=900, error_ttl=30, max_entries=512):
+                 success_ttl=900, error_ttl=30, max_entries=512, max_details=8):
         self._executor = executor or ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='agent-content-sync')
         self._clock = clock
         self._success_ttl = success_ttl
@@ -92,6 +104,9 @@ class ContentSyncChecker:
         self._slots = threading.BoundedSemaphore(max_workers)
         self._lock = threading.RLock()
         self._entries = OrderedDict()
+        # Change lists are larger than a status; keep only the latest few.
+        self._details = OrderedDict()
+        self._max_details = max(1, max_details)
         self._running = {}
         # Bumped by invalidate(), so a compare_now that prepared from an older
         # cache does not store its answer.
@@ -159,6 +174,7 @@ class ContentSyncChecker:
         """
         with self._lock:
             self._generation += 1
+            self._details.clear()
             for identity, entry in list(self._entries.items()):
                 if identity in self._running:
                     # The worker may have read the old cache; a fresh entry
@@ -168,28 +184,50 @@ class ContentSyncChecker:
                     entry.result, entry.expires = None, 0
 
     @staticmethod
-    def _prepare_fingerprint(agent, config, base_url, prepare):
+    def _prepare_bundle(agent, config, base_url, prepare):
+        """The candidate bundle, retargeted to the installed main filename."""
         from backend.common.config import reset_config_context
-        from backend.agents.deployment_bundle import deployment_content_fingerprint, retarget_config_path
+        from backend.agents.deployment_bundle import retarget_config_path
         reset_config_context()
         try:
             bundle = prepare(agent, config, base_url=base_url, deployment_id='check-' + uuid.uuid4().hex)
-            bundle = retarget_config_path(bundle, agent['applied_content']['config_path'])
-            return deployment_content_fingerprint(bundle.manifest)
+            return retarget_config_path(bundle, agent['applied_content']['config_path'])
         finally:
             reset_config_context()
 
+    @classmethod
+    def _prepare_fingerprint(cls, agent, config, base_url, prepare):
+        from backend.agents.deployment_bundle import deployment_content_fingerprint
+        return deployment_content_fingerprint(cls._prepare_bundle(agent, config, base_url, prepare).manifest)
+
+    def _store_detail(self, identity, entry, value, ttl):
+        self._details[identity] = _Detail(entry.key, entry.repository, value, self._clock() + ttl)
+        self._details.move_to_end(identity)
+        while len(self._details) > self._max_details:
+            self._details.popitem(last=False)
+
     def _check(self, identity, entry, token, agent, config, base_url, prepare):
         result = None
+        detail = None
         ttl = self._error_ttl
+        with self._lock:
+            want_detail = entry.want_detail
         try:
             if _current_repository() is not entry.repository:
                 result = _unknown('check_failed')
             else:
-                fingerprint = self._prepare_fingerprint(agent, config, base_url, prepare)
+                bundle = None
+                if want_detail:
+                    from backend.agents.deployment_bundle import deployment_content_fingerprint
+                    bundle = self._prepare_bundle(agent, config, base_url, prepare)
+                    fingerprint = deployment_content_fingerprint(bundle.manifest)
+                else:
+                    fingerprint = self._prepare_fingerprint(agent, config, base_url, prepare)
                 result = {'status': 'synced' if fingerprint == agent['applied_content']['fingerprint'] else 'changed',
                           'checked_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}
                 ttl = self._success_ttl
+                if bundle is not None and result['status'] == 'changed':
+                    detail = self._build_detail(agent, bundle, entry.repository)
         except Exception:
             # Preparation exceptions can contain tokens, URLs or YAML excerpts.
             result = _unknown('check_failed')
@@ -198,13 +236,80 @@ class ContentSyncChecker:
                 # Cache loaders below preparation use the process-global repository.
                 # A repository switch invalidates even an otherwise matching result.
                 if _current_repository() is not entry.repository:
-                    result, ttl = _unknown('check_failed'), self._error_ttl
+                    result, ttl, detail = _unknown('check_failed'), self._error_ttl, None
                 if self._entries.get(identity) is entry and result is not None:
                     entry.result = result
                     entry.expires = self._clock() + ttl
+                    if detail is not None:
+                        # A failed listing is retried soon; the status itself stays cached.
+                        self._store_detail(identity, entry, {**detail, 'checked_at': result['checked_at']},
+                                           self._error_ttl if detail.get('reason') == 'diff_failed' else ttl)
+                    if want_detail:
+                        # Later list refreshes need no change list until one is asked for again.
+                        entry.want_detail = False
                 if self._running.get(identity) is token:
                     del self._running[identity]
                 self._slots.release()
+
+    @staticmethod
+    def _build_detail(agent, bundle, repository):
+        from backend.agents.push_diff import build_push_diff
+        try:
+            return build_push_diff(agent, bundle, repository)
+        except Exception:
+            # The status stands; only the itemized list is unavailable.
+            return {'status': 'changed', 'files': None, 'reason': 'diff_failed'}
+
+    def get_push_diff(self, agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
+        """What a push would change, prepared by the same bounded workers.
+
+        Answers ``checking`` while a worker runs, then ``synced``, the change
+        list (``status: changed``), or the comparison's own unavailability.
+        """
+        if not isinstance(agent, dict) or not isinstance(config, dict) or not isinstance(agent.get('id'), str):
+            return _unknown('invalid_inputs')
+        identity = (scope, agent['id'])
+        if repository is _UNBOUND_REPOSITORY:
+            repository = _current_repository()
+        try:
+            agent_snapshot, config_snapshot = deepcopy(agent), deepcopy(config)
+            unavailable = _precondition(agent_snapshot, config_snapshot)
+            key = None if unavailable else _input_key(agent_snapshot, config_snapshot, base_url)
+        except Exception:
+            unavailable, key = _unknown('invalid_inputs'), None
+        with self._lock:
+            if _current_repository() is not repository:
+                return _unknown('check_failed')
+            if unavailable:
+                return unavailable
+            entry = self._entries.get(identity)
+            if entry is None or entry.key != key or entry.repository is not repository:
+                entry = _Entry(key, repository)
+                self._entries[identity] = entry
+            self._entries.move_to_end(identity)
+            self._trim()
+            now = self._clock()
+            detail = self._details.get(identity)
+            if detail is not None and detail.key == key and detail.repository is repository and now < detail.expires:
+                return deepcopy(detail.value)
+            if entry.result is not None and now < entry.expires and entry.result.get('status') != 'changed':
+                return dict(entry.result)
+            # A queued worker for these inputs reads this when it starts.
+            entry.want_detail = True
+            if identity in self._running:
+                return {'status': 'checking'}
+            if not self._slots.acquire(blocking=False):
+                return {'status': 'checking'}
+            token = object()
+            self._running[identity] = token
+            try:
+                self._executor.submit(self._check, identity, entry, token, agent_snapshot,
+                                      config_snapshot, base_url, prepare)
+            except Exception:
+                self._running.pop(identity, None)
+                self._slots.release()
+                return _unknown('check_failed')
+            return {'status': 'checking'}
 
     def compare_now(self, agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
         """The same comparison, answered in the caller's thread.
@@ -266,6 +371,10 @@ def get_content_sync(agent, config, base_url, prepare, *, scope='', repository=_
 
 def compare_now(agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
     return _checker.compare_now(agent, config, base_url, prepare, scope=scope, repository=repository)
+
+
+def get_push_diff(agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
+    return _checker.get_push_diff(agent, config, base_url, prepare, scope=scope, repository=repository)
 
 
 def invalidate_content_sync():

@@ -163,6 +163,41 @@ describe('Agent configuration status wording', () => {
     expect(wrapper.get('[data-agent-status-row="配置推送"] > div > button').text()).toBe('配置推送成功')
   })
 
+  it('opens what the next push changes from the changed label, as a keyboard button', async () => {
+    narrowViewport = true
+    vi.mocked(api.get).mockImplementation(async (path: string) => ({
+      data: path.endsWith('/push-diff') ? { status: 'synced', baseline: { pushed_at: '2026-10-10T12:00:00Z' } } : {},
+    }) as any)
+    const { footer } = await render(agent({ content_sync: { status: 'changed' } }))
+    const label = footer.get('button[data-sync-diff]')
+    expect(label.attributes('type')).toBe('button')
+    expect(label.text()).toContain('有变更，待推送')
+    expect(label.attributes('aria-label')).toContain('查看「Config display test」这次推送会改动的内容')
+    expect(label.classes()).toContain('max-md:min-h-11')
+    await label.trigger('click')
+    await flushPromises()
+    expect(api.get).toHaveBeenCalledWith('/agents/config-display-agent/push-diff', expect.anything())
+    expect(document.body.querySelector('[data-push-diff]')!.textContent).toContain('无变更')
+  })
+
+  it('keeps states without a server conclusion as plain text', async () => {
+    const { footer } = await render(agent({ content_sync: { status: 'checking' } }))
+    expect(footer.text()).toContain('正在核对配置')
+    expect(footer.find('button[data-sync-diff]').exists()).toBe(false)
+  })
+
+  it('lets phones read why there is no baseline from the same entry', async () => {
+    vi.mocked(api.get).mockImplementation(async (path: string) => ({
+      data: path.endsWith('/push-diff') ? { status: 'unknown', reason: 'baseline_missing' } : {},
+    }) as any)
+    const { footer } = await render(agent({ content_sync: { status: 'unknown', reason: 'baseline_missing' } }))
+    await footer.get('button[data-sync-diff]').trigger('click')
+    await flushPromises()
+    const dialog = document.body.querySelector('[data-push-diff]')!
+    expect(dialog.textContent).toContain('没有可对比的基准')
+    expect(dialog.textContent).toContain('旧版本')
+  })
+
   it('uses the content comparison after a rebind instead of inferring from profile identity', async () => {
     const { footer } = await render(agent({ profile_id: 'second', content_sync: { status: 'changed' } }), [
       { id: 'default', name: 'Default', revision: 43 }, { id: 'second', name: 'Second', revision: 43 }

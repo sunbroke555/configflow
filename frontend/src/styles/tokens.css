@@ -267,6 +267,20 @@ body {
   white-space: nowrap;
 }
 
+/* 待推送的变更：展开的明细接在配置项下方，不另起分隔线。 */
+.push-diff-config tr.is-expanded td {
+  border-bottom: none;
+}
+
+.push-diff-config tr.push-diff-detail td {
+  padding-top: 0;
+}
+
+.push-diff-files tr.push-diff-more td {
+  padding-top: var(--cf-sp-2);
+  padding-bottom: var(--cf-sp-2);
+}
+
 .cf-table__foot {
   padding: var(--cf-sp-3);
   border-top: 1px solid var(--cf-bd);
@@ -546,6 +560,39 @@ body {
   .policy-source-records [data-slot='input'] {
     width: 100%;
     min-width: 0;
+  }
+
+  /* 待推送的变更：名称与变化同排，摘要、原值、新值各占一行；明细紧跟在所属配置项下。 */
+  .push-diff-files tbody tr,
+  .push-diff-config tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--cf-sp-2);
+    padding: var(--cf-sp-3);
+  }
+
+  .push-diff-files tbody tr { grid-template-areas: 'file change' 'summary summary'; }
+  .push-diff-files td:nth-child(1) { grid-area: file; }
+  .push-diff-files td:nth-child(2) { grid-area: change; }
+  .push-diff-files td:nth-child(3) { grid-area: summary; }
+  .push-diff-config tbody tr { grid-template-areas: 'key change' 'old old' 'new new'; }
+  .push-diff-config td:nth-child(1) { grid-area: key; }
+  .push-diff-config td:nth-child(2) { grid-area: change; }
+  .push-diff-config td:nth-child(3) { grid-area: old; }
+  .push-diff-config td:nth-child(4) { grid-area: new; }
+
+  .push-diff-files tbody tr.push-diff-more,
+  .push-diff-config tbody tr.push-diff-detail {
+    display: block;
+  }
+
+  /* 新增项没有原值、删除项没有新值：手机上不占一行。 */
+  .push-diff-config td.push-diff-empty {
+    display: none;
+  }
+
+  .push-diff-config tbody tr.push-diff-detail {
+    padding-top: 0;
+    border-top: 0;
   }
 }
 

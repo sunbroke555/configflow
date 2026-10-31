@@ -1,0 +1,296 @@
+<template>
+  <Dialog :open="true" @update:open="open => !open && emit('close')">
+    <DialogContent class="flex min-h-0 max-w-[calc(100vw-2rem)] flex-col gap-0 overflow-hidden p-0 max-sm:p-0 sm:max-w-[880px]" data-push-diff>
+      <DialogHeader class="shrink-0 border-b border-border px-4 py-4 pr-14 sm:px-5 sm:pr-14">
+        <DialogTitle class="break-words">{{ agent.name }} · 待推送的变更</DialogTitle>
+        <DialogDescription>对比上次成功推送的发布包与按当前配置将要推送的发布包，只读，不会改动设备。</DialogDescription>
+      </DialogHeader>
+
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-5" :aria-busy="loading">
+        <div v-if="loading" role="status" data-push-diff-loading>
+          <p class="m-0 flex items-center gap-2 text-[13px] text-muted-foreground">
+            <Loader2 class="size-4 animate-spin text-primary-accent" aria-hidden="true" />
+            正在生成这次将要推送的内容并与上次推送对比…
+          </p>
+          <LoadingRows :rows="4" class="px-0" />
+        </div>
+
+        <div v-else-if="error" role="alert" class="flex flex-col items-center gap-3 px-4 py-10 text-center" data-push-diff-error>
+          <div class="flex size-11 items-center justify-center rounded-lg bg-destructive-soft text-destructive-accent">
+            <CircleAlert class="size-5" aria-hidden="true" />
+          </div>
+          <p class="m-0 text-[14px] font-medium">无法读取待推送的变更</p>
+          <p class="m-0 max-w-[52ch] break-words text-[13px] leading-relaxed text-muted-foreground">{{ error }}</p>
+          <Button variant="outline" size="sm" class="mt-1" @click="load">
+            <RefreshCw class="size-3.5" />
+            重试
+          </Button>
+        </div>
+
+        <EmptyState v-else-if="result?.status === 'synced'" :icon="CircleCheck" title="无变更"
+          :description="`当前配置生成的发布包与上次推送${pushedAt ? `（${pushedAt}）` : ''}一致，推送不会改动设备上的文件。`" data-push-diff-synced />
+
+        <EmptyState v-else-if="unavailable" :icon="unavailable.title === '正在推送' ? Loader2 : FileQuestion" :title="unavailable.title"
+          :description="unavailable.description" data-push-diff-unavailable />
+
+        <div v-else-if="result?.status === 'changed'" class="flex flex-col gap-5" data-push-diff-changed>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12px] text-muted-foreground">
+            <span v-if="pushedAt">上次推送：{{ pushedAt }}<template v-if="typeof result.baseline?.config_revision === 'number'"> · 修订 <span class="num">v{{ result.baseline.config_revision }}</span></template></span>
+            <span v-if="result.checked_at">{{ checkedAgo(result.checked_at, '对比') }}</span>
+            <span v-if="result.counts" class="flex flex-wrap gap-1.5" data-push-diff-counts>
+              <span v-for="key in COUNT_KEYS" :key="key" :class="['chip', key !== 'unchanged' && result.counts[key] ? CHANGE_CHIPS[key] : '']">
+                {{ CHANGE_LABELS[key] }} <span class="num">{{ result.counts[key] }}</span>
+              </span>
+            </span>
+          </div>
+          <p v-if="notice" class="m-0 flex items-start gap-2 text-[12.5px] leading-relaxed text-muted-foreground" data-push-diff-notice>
+            <Info class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{{ notice }}
+          </p>
+
+          <section v-if="result.files" aria-labelledby="push-diff-files-title" class="flex flex-col gap-2">
+            <h3 id="push-diff-files-title" class="m-0 text-[14px] font-semibold">哪些文件变了</h3>
+            <div class="cf-table-wrap">
+              <table class="cf-table cf-mobile-records push-diff-files" data-push-diff-files>
+                <thead>
+                  <tr><th>文件</th><th class="w-20">变化</th><th>摘要</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="file in result.files" :key="file.path" :data-file="file.path">
+                    <td class="min-w-0 align-top">
+                      <div class="break-words text-[13px] font-medium">{{ fileTitle(file) }}</div>
+                      <div class="mt-0.5 break-all text-[11.5px] text-muted-foreground"><template v-if="file.role !== 'config'">{{ fileRole(file) }} · </template><span class="font-mono">{{ file.path }}</span></div>
+                    </td>
+                    <td class="align-top"><span :class="['chip', CHANGE_CHIPS[file.status as PushDiffChange]]">{{ CHANGE_LABELS[file.status] }}</span></td>
+                    <td class="align-top text-[12.5px]" data-summary>
+                      <span v-for="(part, index) in summarySegments(file)" :key="index" :class="TONE_CLASSES[part.tone]">{{ part.text }}</span>
+                    </td>
+                  </tr>
+                  <tr v-if="result.files_omitted" class="push-diff-more">
+                    <td colspan="3" class="text-[12px] text-muted-foreground">还有 <span class="num">{{ result.files_omitted }}</span> 个变化的文件未列出。</td>
+                  </tr>
+                  <tr v-if="unchangedCount" class="push-diff-more">
+                    <td colspan="3">
+                      <Button variant="ghost" size="sm" class="-ml-2 text-muted-foreground" :aria-expanded="unchangedOpen" aria-controls="push-diff-unchanged" @click="unchangedOpen = !unchangedOpen">
+                        <ChevronRight :class="['size-3.5 transition-transform', unchangedOpen && 'rotate-90']" />
+                        未变的 <span class="num">{{ unchangedCount }}</span> 个文件
+                      </Button>
+                      <ul v-if="unchangedOpen" id="push-diff-unchanged" class="m-0 mt-1 flex list-none flex-col gap-1 p-0 pb-1.5 text-[12px]">
+                        <li v-for="file in result.unchanged" :key="file.path" class="min-w-0 break-all">
+                          {{ fileTitle(file) }} <span class="text-muted-foreground"><template v-if="file.role !== 'config'">· {{ fileRole(file) }} </template>· <span class="font-mono">{{ file.path }}</span></span>
+                        </li>
+                        <li v-if="result.unchanged_omitted" class="text-muted-foreground">还有 <span class="num">{{ result.unchanged_omitted }}</span> 个未列出</li>
+                      </ul>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section v-if="result.files" aria-labelledby="push-diff-config-title" class="flex flex-col gap-2">
+            <h3 id="push-diff-config-title" class="m-0 text-[14px] font-semibold">主配置改了哪些项</h3>
+            <p v-if="configNoticeText" class="m-0 text-[12.5px] text-muted-foreground" data-push-diff-config-notice>{{ configNoticeText }}</p>
+            <div v-if="items.length" class="cf-table-wrap">
+              <table class="cf-table cf-mobile-records push-diff-config" data-push-diff-config>
+                <thead>
+                  <tr><th class="w-[30%]">配置项</th><th class="w-20">变化</th><th>原值</th><th>新值</th></tr>
+                </thead>
+                <tbody>
+                  <template v-for="(item, index) in items" :key="item.key">
+                    <tr :data-key="item.key" :class="{ 'is-expanded': item.list && expanded.has(index) }">
+                      <td class="align-top font-mono text-[12px] break-all">{{ item.key }}</td>
+                      <td class="align-top"><span :class="['chip', CHANGE_CHIPS[item.change]]">{{ CHANGE_LABELS[item.change] }}</span></td>
+                      <td data-label="原值" :class="['align-top', valueText(item, 'old').empty && 'push-diff-empty']">
+                        <span :class="valueClass(item, 'old')"><Lock v-if="item.masked && !valueText(item, 'old').empty" class="mr-1 inline size-3 align-[-1px]" aria-hidden="true" />{{ valueText(item, 'old').text }}</span>
+                      </td>
+                      <td data-label="新值" :class="['align-top', !item.list && valueText(item, 'new').empty && 'push-diff-empty']">
+                        <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <span v-if="item.list" class="text-[12.5px]" data-list-summary>
+                            <span v-for="(part, partIndex) in listSegments(item.list)" :key="partIndex" :class="TONE_CLASSES[part.tone]">{{ part.text }}</span>
+                          </span>
+                          <span v-else :class="valueClass(item, 'new')"><Lock v-if="item.masked && !valueText(item, 'new').empty" class="mr-1 inline size-3 align-[-1px]" aria-hidden="true" />{{ valueText(item, 'new').text }}</span>
+                          <Button v-if="item.list?.entries?.length" variant="ghost" size="xs" class="-my-1 text-primary-accent max-md:-my-2"
+                            :aria-expanded="expanded.has(index)" :aria-controls="`push-diff-detail-${index}`" @click="toggle(index)">
+                            <ChevronDown :class="['size-3 transition-transform', expanded.has(index) && 'rotate-180']" />
+                            {{ expanded.has(index) ? '收起明细' : '展开明细' }}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr v-if="item.list && expanded.has(index)" :id="`push-diff-detail-${index}`" class="push-diff-detail">
+                      <td colspan="4">
+                        <ul class="m-0 flex list-none flex-col gap-1 rounded-md border border-border bg-background/50 p-2.5 font-mono text-[12px] leading-relaxed">
+                          <li v-for="(entry, entryIndex) in item.list.entries" :key="entryIndex" class="min-w-0 break-all">
+                            <span :class="ENTRY_TONES[entry.change]">{{ ENTRY_SIGNS[entry.change] }} {{ entry.text }}</span>
+                            <ul v-if="entry.fields?.length" class="m-0 mt-0.5 flex list-none flex-col gap-0.5 border-l border-border py-0.5 pl-3 text-muted-foreground">
+                              <li v-for="(field, fieldIndex) in entry.fields" :key="fieldIndex">{{ fieldText(field) }}</li>
+                              <li v-if="entry.fields_omitted">另有 <span class="num">{{ entry.fields_omitted }}</span> 处变化</li>
+                            </ul>
+                          </li>
+                        </ul>
+                        <p v-if="item.list.omitted" class="m-0 mt-1.5 text-[12px] text-muted-foreground">
+                          还有 <span class="num">{{ item.list.omitted }}</span> 条未列出{{ rawText ? '，完整内容见下方「原始差异」' : '' }}。
+                        </p>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+            <p v-if="result.config?.omitted" class="m-0 text-[12px] text-muted-foreground">
+              还有 <span class="num">{{ result.config.omitted }}</span> 项配置变化未列出{{ rawText ? '，见下方「原始差异」' : '' }}。
+            </p>
+          </section>
+
+          <section v-if="result.config?.raw" class="flex flex-col gap-2 border-t border-border pt-3" data-push-diff-raw>
+            <div class="flex flex-wrap items-center gap-x-2">
+              <Button variant="ghost" size="sm" class="-ml-2" :aria-expanded="rawOpen" aria-controls="push-diff-raw-text" :disabled="!rawText" @click="rawOpen = !rawOpen">
+                <ChevronRight :class="['size-3.5 transition-transform', rawOpen && 'rotate-90']" />
+                原始差异
+              </Button>
+              <span class="text-[12px] text-muted-foreground">{{ rawText ? '主配置的 unified diff，密码、令牌等已隐藏' : '主配置过大，没有生成原始差异' }}</span>
+            </div>
+            <pre v-if="rawOpen && rawText" id="push-diff-raw-text" class="m-0 max-h-96 overflow-auto rounded-lg border border-border bg-muted p-3 font-mono text-[12px] leading-relaxed"><span v-for="(line, index) in rawLines" :key="index" :class="['block whitespace-pre', LINE_TONES[diffLineTone(line)]]">{{ line || ' ' }}</span></pre>
+            <p v-if="rawOpen && result.config.raw.truncated" class="m-0 text-[12px] text-muted-foreground">
+              差异较长，只显示前面部分，另有 <span class="num">{{ result.config.raw.omitted_lines }}</span> 行未显示。
+            </p>
+          </section>
+        </div>
+      </div>
+
+      <DialogFooter class="shrink-0 flex-row flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3 sm:px-5">
+        <span v-if="pushOffered && offline" class="mr-auto text-[12px] text-muted-foreground">Agent 离线，上线后才能推送。</span>
+        <Button variant="outline" @click="emit('close')">关闭</Button>
+        <Button v-if="pushOffered && !offline" :disabled="!canPush" data-push-diff-push @click="emit('push')">
+          <Loader2 v-if="pushing" class="size-4 animate-spin" />
+          <Send v-else class="size-4" />
+          推送
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { ChevronDown, ChevronRight, CircleAlert, CircleCheck, FileQuestion, Info, Loader2, Lock, RefreshCw, Send } from '@lucide/vue'
+import type { Agent } from '@/types'
+import { agentPushDiffApi, type PushDiffChange, type PushDiffItem, type PushDiffResponse } from '@/api/agentPushDiff'
+import {
+  CHANGE_CHIPS, CHANGE_LABELS, configNotice, contentNotice, diffLineTone, fieldText, fileRole, fileTitle, listSegments,
+  summarySegments, unavailableCopy, valueText, type DiffLineTone, type Tone,
+} from '@/lib/agentPushDiff'
+import { checkedAgo } from '@/lib/format'
+import EmptyState from '@/components/common/EmptyState.vue'
+import LoadingRows from '@/components/common/LoadingRows.vue'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+
+const props = defineProps<{
+  agent: Agent
+  /** 与卡片「推送」按钮相同的可用条件 */
+  canPush: boolean
+  pushing: boolean
+  offline: boolean
+}>()
+const emit = defineEmits<{ (event: 'close'): void; (event: 'push'): void; (event: 'refresh'): void }>()
+
+const POLL_MS = 1500
+const POLL_LIMIT_MS = 120_000
+const COUNT_KEYS = ['modified', 'added', 'removed', 'unchanged'] as const
+const TONE_CLASSES: Record<Tone, string> = {
+  plain: '', muted: 'text-muted-foreground', added: 'num text-success-accent', removed: 'num text-destructive-accent',
+}
+const ENTRY_TONES: Record<PushDiffChange, string> = {
+  added: 'text-success-accent', removed: 'text-destructive-accent', modified: 'text-warning-accent',
+}
+const ENTRY_SIGNS: Record<PushDiffChange, string> = { added: '+', removed: '−', modified: '~' }
+const LINE_TONES: Record<DiffLineTone, string> = {
+  added: 'text-success-accent', removed: 'text-destructive-accent', hunk: 'text-muted-foreground', meta: 'text-muted-foreground', plain: '',
+}
+
+const loading = ref(true)
+const error = ref('')
+const result = ref<PushDiffResponse | null>(null)
+const expanded = ref(new Set<number>())
+const unchangedOpen = ref(false)
+const rawOpen = ref(false)
+let controller: AbortController | null = null
+let request = 0
+
+const unavailable = computed(() => result.value && (result.value.status === 'never-pushed' || result.value.status === 'unknown')
+  ? unavailableCopy(result.value) : null)
+const notice = computed(() => result.value ? contentNotice(result.value) : '')
+const configNoticeText = computed(() => result.value ? configNotice(result.value) : '')
+const items = computed<PushDiffItem[]>(() => result.value?.config?.items || [])
+const rawText = computed(() => result.value?.config?.raw?.text || '')
+const rawLines = computed(() => rawOpen.value ? rawText.value.split('\n') : [])
+const unchangedCount = computed(() => result.value?.counts?.unchanged || 0)
+const pushedAt = computed(() => {
+  const value = result.value?.baseline?.pushed_at
+  return value ? new Date(value).toLocaleString() : ''
+})
+// 推送能消除差异或建立基准时才提供；正在推送、无法对比时不提供。
+const pushOffered = computed(() => result.value?.status === 'changed' || Boolean(unavailable.value?.pushable))
+
+function valueClass(item: PushDiffItem, side: 'old' | 'new') {
+  const value = valueText(item, side)
+  if (value.empty || value.masked) return 'text-[12.5px] text-muted-foreground'
+  return 'font-mono text-[12px] break-all'
+}
+
+function toggle(index: number) {
+  const next = new Set(expanded.value)
+  if (next.has(index)) next.delete(index)
+  else next.add(index)
+  expanded.value = next
+}
+
+function wait(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('aborted', 'AbortError')) }, { once: true })
+  })
+}
+
+async function load() {
+  controller?.abort()
+  const current = ++request
+  const own = new AbortController()
+  controller = own
+  loading.value = true
+  error.value = ''
+  result.value = null
+  expanded.value = new Set()
+  rawOpen.value = false
+  const started = Date.now()
+  try {
+    for (;;) {
+      const { data } = await agentPushDiffApi.get(props.agent.id, own.signal)
+      if (current !== request) return
+      if (!data || typeof data.status !== 'string') throw new Error('服务端返回的格式异常，请更新 ConfigFlow 后重试。')
+      if (data.status !== 'checking') {
+        result.value = data
+        break
+      }
+      if (Date.now() - started > POLL_LIMIT_MS) throw new Error('生成发布包超过 2 分钟仍未完成，请稍后重试。')
+      await wait(POLL_MS, own.signal)
+    }
+    // 卡片上的状态是更早的比较结果；对不上时让页面重新读取列表。
+    const card = props.agent.content_sync?.status
+    const now = result.value?.status
+    if ((now === 'synced' || now === 'changed') && card && card !== now) emit('refresh')
+  } catch (failure: any) {
+    if (current !== request || own.signal.aborted) return
+    error.value = failure?.response?.data?.message || failure?.message || '读取失败，请重试。'
+  } finally {
+    if (current === request) loading.value = false
+  }
+}
+
+onMounted(load)
+onBeforeUnmount(() => {
+  request++
+  controller?.abort()
+})
+</script>
