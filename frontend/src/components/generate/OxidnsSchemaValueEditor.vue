@@ -8,7 +8,7 @@
         <OxidnsParameterPicker v-if="node.type === 'object' && missingFields.length" :fields="missingFields" :label="label" :scope-title="scopeTitle || schema?.label || label" :compact-mobile="inlineAddress" :disabled="disabled" @select="addField" />
         <Button v-if="!focused && node.type === 'object'" type="button" variant="ghost" class="oxi-native-control text-xs text-muted-foreground" :disabled="disabled" :aria-label="`${label} 添加自定义字段`" @click="addUnknown"><Plus class="size-3.5" />自定义字段</Button>
         <Button v-if="node.type === 'array'" type="button" variant="outline" class="oxi-native-control" :disabled="disabled" :aria-label="`${label} 添加条目`" @click="addItem"><Plus class="size-3.5" />添加条目</Button>
-        <DropdownMenu v-if="focused">
+        <DropdownMenu v-if="focused" :modal="true">
           <DropdownMenuTrigger as-child><Button type="button" variant="ghost" size="icon" class="oxi-native-icon text-muted-foreground" :disabled="disabled" :aria-label="`${label} 更多操作`"><Ellipsis class="size-3.5" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem v-if="inlineAddress" class="oxi-native-control" :disabled="disabled" :aria-label="`${label} 完整条目设置`" @select="emit('navigate', node.id)"><ChevronRight class="size-3.5" />完整条目设置</DropdownMenuItem>
@@ -59,7 +59,7 @@
             <div class="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[11px] text-muted-foreground"><code class="break-all">{{ entry.key }}</code><span class="num">{{ countSummary(entry.value) }}</span></div>
           </div>
           <Button type="button" variant="ghost" class="oxi-native-control shrink-0 gap-1 text-xs" :disabled="disabled" :aria-label="`${label}.${entry.key} 编辑分组`" @click="emit('navigate', entry.value.id)">编辑分组<ChevronRight class="size-3.5" /></Button>
-          <DropdownMenu>
+          <DropdownMenu :modal="true">
             <DropdownMenuTrigger as-child><Button type="button" variant="ghost" size="icon" class="oxi-native-icon text-muted-foreground" :disabled="disabled" :aria-label="`${label}.${entry.key} 更多操作`"><Ellipsis class="size-3.5" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end"><DropdownMenuItem class="oxi-native-control" variant="destructive" :disabled="disabled" :aria-label="`${label} 删除字段 ${entry.key}`" @select="removeEntry(index)"><Trash2 class="size-3.5" />删除分组</DropdownMenuItem></DropdownMenuContent>
           </DropdownMenu>

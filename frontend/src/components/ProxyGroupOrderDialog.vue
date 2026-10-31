@@ -336,7 +336,7 @@ onBeforeUnmount(() => {
             <div class="proxy-group-order-actions">
               <Button type="button" variant="ghost" size="icon" class="proxy-group-order-icon" data-order-action="up" :aria-label="`上移 ${group.name}`" title="上移" :disabled="locked || index === 0" @click="move(keyOf(group), index - 1, 'up')"><ArrowUp class="size-4" /></Button>
               <Button type="button" variant="ghost" size="icon" class="proxy-group-order-icon" data-order-action="down" :aria-label="`下移 ${group.name}`" title="下移" :disabled="locked || index === draft.length - 1" @click="move(keyOf(group), index + 1, 'down')"><ArrowDown class="size-4" /></Button>
-              <DropdownMenu>
+              <DropdownMenu :modal="true">
                 <DropdownMenuTrigger as-child>
                   <Button type="button" variant="ghost" size="icon" class="proxy-group-order-icon" data-order-action="more" :aria-label="`更多操作 ${group.name}`" title="更多操作" :disabled="locked"><Ellipsis class="size-4" /></Button>
                 </DropdownMenuTrigger>
