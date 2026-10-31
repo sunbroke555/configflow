@@ -184,6 +184,11 @@ def _rule_match(snapshot, family, row, packet):
         elif key == 'tcp-flags' and packet.get('tcp-flags') is not None:
             flags = set(packet['tcp-flags'])
             result = all((flag[1:] not in flags) if flag.startswith('!') else (flag in flags) for flag in str(value).split(','))
+        elif key == 'ipsec-policy' and packet.get('ipsec-policy') is not None:
+            # "in,ipsec" / "out,none": only a packet that states its IPsec use is judged.
+            direction, _, policy = str(value).partition(',')
+            actual = packet['ipsec-policy'].get(direction)
+            result = None if actual is None or policy not in ('ipsec', 'none') else actual == policy
         elif key == 'hop-limit' and packet.get('hop-limit') is not None:
             try:
                 op, limit = str(value).split(':', 1)

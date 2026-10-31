@@ -25,6 +25,16 @@ RUNTIME = {'active', 'inactive', 'immediate-gw', 'belongs-to', 'hw-offloaded', '
 
 
 def settings(config):
+    """Whether the saved Mihomo configuration has an IPv6 Fake-IP range to route.
+
+    Like the IPv4 Fake-IP range, the route follows Mihomo's use of IPv6 and
+    Fake-IP (top-level ``ipv6``, default on, and DNS ``fake-ip`` with a
+    ``fake-ip-range6``), not ``dns.ipv6``: both IPv6 modes publish it, so a
+    mode switch never needs the router again. ``dns.ipv6`` only decides whether
+    clients receive these addresses; only then must the range be present and
+    TUN be on to receive the connections. The keys stay as they were, since
+    automatic rule sync fingerprints this result.
+    """
     result = {'enabled': False, 'cidr': '', 'tun_enabled': False, 'error': ''}
     try:
         raw = (config.get('mihomo') or {}).get('custom_config') or ''
@@ -37,8 +47,10 @@ def settings(config):
         for name, value in [('ipv6', document.get('ipv6', True)), ('dns.ipv6', dns.get('ipv6', False))]:
             if type(value) is not bool:
                 raise ValueError(name + ' 必须填写 true 或 false')
+        clients = dns.get('ipv6') is True
         result['enabled'] = (document.get('ipv6', True) is True and dns.get('enable') is True
-                             and dns.get('ipv6') is True and dns.get('enhanced-mode') == 'fake-ip')
+                             and dns.get('enhanced-mode') == 'fake-ip'
+                             and (clients or dns.get('fake-ip-range6') not in (None, '')))
         if not result['enabled']:
             return result
         network = ipaddress.IPv6Network(dns.get('fake-ip-range6'), strict=False)
@@ -47,7 +59,7 @@ def settings(config):
         result['cidr'] = str(network)
         tun = document.get('tun') or {}
         result['tun_enabled'] = isinstance(tun, dict) and tun.get('enable') is True
-        if not result['tun_enabled']:
+        if clients and not result['tun_enabled']:
             raise ValueError('IPv6 Fake-IP 需要 Mihomo 开启 TUN；请先检查设备配置')
     except (yaml.YAMLError, ValueError, TypeError, AttributeError) as error:
         result['error'] = ('IPv6 Fake-IP 配置无法确认，请检查 YAML、fake-ip-range6 和 TUN 设置：' + str(error))
@@ -136,50 +148,25 @@ def _correct(row, spec):
             and _same_gateway(row, spec['gateway']))
 
 
-def _invalid_drop(row):
-    states = str(row.get('connection-state') or '')
-    return (row.get('chain') == 'forward' and row.get('action') == 'drop' and enabled(row)
-            and 'invalid' in states.split(',') and not states.startswith('!'))
-
-
 def hairpin(driver, lan, cidr):
     """Warn when the forward chain drops the hairpin's later packets as invalid.
 
     Shared by IPv6 Fake-IP and IPv6 rule-set routes: both send LAN clients to
     Mihomo through the router's LAN port, so one same-port accept covers both.
-
-    Clients reach Mihomo through the router's own LAN port, but Mihomo answers
-    them directly. RouterOS then sees only the SYN; the client's next packets
-    are ``invalid`` and a default ``drop invalid`` stalls every new connection
-    (VM151, RouterOS 7.25: 6.7-7.4 s each). ICMPv6 redirects (sent only for an
-    LLA next hop, about one per second, ignored by forwarding Linux clients)
-    ease but do not remove the stall, so the next hop never silences this.
+    ICMPv6 redirects (sent only for an LLA next hop, about one per second,
+    ignored by forwarding Linux clients) ease but do not remove the stall, so
+    the next hop never silences this. See ``forward_hint`` (shared with IPv4).
     Read-only: returns (warning, command).
     """
-    from urllib.parse import quote
-    from backend.routers.ipv6_policy import evaluate_chain
-    try:
-        rows = driver._list(FILTER)
-        rules = {'filter': rows, 'interface_lists': driver._list('/interface/list'),
-                    'interface_members': driver._list('/interface/list/member'),
-                    'interfaces': driver._list('/interface'), 'address_lists': []}
-        names = {str(row[field]).lstrip('!') for row in rows if row.get('chain') == 'forward'
-                 for field in ('src-address-list', 'dst-address-list') if row.get(field)}
-        for name in sorted(names):
-            rules['address_lists'].extend(driver._list(ADDRESS_LISTS + '?list=' + quote(name, safe='')))
-    except RouterError:
+    from backend.routers.forward_hint import check
+    result = check(driver, 6, lan, [cidr])
+    if result['status'] == 'unknown':
         return '未能读取 RouterOS IPv6 防火墙，无法确认转给 Mihomo 的连接是否会被 forward 链丢弃', ''
-    packet = {'in-interface': lan, 'out-interface': lan, 'dst-address': cidr, 'protocol': 'tcp',
-              'connection-state': 'invalid'}
-    if evaluate_chain(rules, 6, 'filter', 'forward', packet)['decision'] != 'drop':
+    if result['status'] != 'drop':
         return '', ''
-    drop = next((row for row in rows if _invalid_drop(row)), None)
-    place = f' place-before={drop[".id"]}' if drop and drop.get('.id') else ''
-    command = (f'/ipv6 firewall filter add chain=forward action=accept in-interface={lan} out-interface={lan} '
-               f'comment="LAN to Mihomo via router"{place}')
     return ('IPv6 防火墙 forward 链会丢弃状态无效（invalid）的连接：设备经 ROS 同一 LAN 口转给 Mihomo 时，回程不经过 ROS，'
             '后续数据包被判为 invalid，每个新连接会卡住约 7 秒。请在「drop invalid」之前放行同口转发（下方命令），'
-            '一条命令同时覆盖 IPv6 Fake-IP 和 IPv6 规则集路由；ConfigFlow 不修改防火墙，路由照常发布。'), command
+            '一条命令同时覆盖 IPv6 Fake-IP 和 IPv6 规则集路由；ConfigFlow 不修改防火墙，路由照常发布。'), result['command']
 
 
 def inspect(config, router, agent, host, driver):

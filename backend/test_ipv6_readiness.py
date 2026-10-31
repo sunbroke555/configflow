@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from backend.agents import ipv6_readiness as bridge
+from backend.agents.oxidns_monitor import MonitorError
 from backend.routers import ipv6_readiness as ros
 from backend.routers.base import RouterError
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401
@@ -184,6 +185,35 @@ def test_existing_route_cannot_hide_disabled_tun_or_overlapping_lan():
     assert not router.writes
 
 
+def test_route_is_expected_with_dns_ipv6_off_and_tun_matters_only_once_clients_use_it():
+    """「Mihomo 用 IPv6，客户端走 IPv4」: the route is published like IPv4's, without an error."""
+    nodes = YAML.replace('  ipv6: true', '  ipv6: false')
+    for tun in (True, False):
+        source = nodes if tun else nodes.replace('tun:\n  enable: true', 'tun:\n  enable: false')
+        configuration = bridge.configuration({'mihomo': {'custom_config': source}})[0]
+        assert configuration['fake_ipv6_route'] is True and configuration['fake_ipv6_enabled'] is False
+        router = Router()
+        result = ros.inspect(router, ROUTER, AGENT, host_status(), configuration, '192.168.0.2')
+        fake = next(c for c in result['checks'] if c['id'] == 'fake_ipv6')
+        assert result['plan']['dst-address'] == 'fc00::/64' and result['route_publication_required']
+        assert fake['status'] == 'warning' and 'DNS IPv6 关闭' in fake['message']
+        assert ('开启 TUN' in fake['message']) is not tun
+        assert result['status'] != 'error' and not router.writes
+        # The client Fake-IP trace (NAT, forward drops) needs clients that use the range.
+        assert not any(c['id'].startswith('fake6') for c in result['checks'])
+        # Already published: nothing to report while clients do not use the range.
+        router.rows[ros.ROUTES].append({'.id': '*A', 'dst-address': 'fc00::/64', 'gateway': 'fe80::3%lan4', 'active': 'true'})
+        result = ros.inspect(router, ROUTER, AGENT, host_status(), configuration, '192.168.0.2')
+        fake = next(c for c in result['checks'] if c['id'] == 'fake_ipv6')
+        assert fake['status'] == 'ok' and result['plan'] is None
+        assert not any(c['status'] == 'error' for c in result['checks'])
+    # Without a range there is nothing to route.
+    missing = bridge.configuration({'mihomo': {'custom_config': nodes.replace('  fake-ip-range6: fc00::1/64\n', '')}})[0]
+    assert missing['fake_ipv6_route'] is False
+    result = ros.inspect(Router(), ROUTER, AGENT, host_status(), missing, '192.168.0.2')
+    assert result['plan'] is None and next(c for c in result['checks'] if c['id'] == 'fake_ipv6')['status'] == 'ok'
+
+
 def test_existing_unscoped_gateway_must_not_ignore_resolved_wrong_interface():
     router = Router()
     router.rows[ros.ROUTES].append({'.id': '*A', 'dst-address': 'fc00::/64', 'gateway': 'fdda::3',
@@ -220,6 +250,46 @@ def test_peer_dns_and_nat_are_advisories_not_mutations():
     assert next(c for c in result['checks'] if c['id'] == 'dns')['status'] == 'warning'
     assert next(c for c in result['checks'] if c['id'] == 'nat')['status'] == 'unknown'
     assert not router.writes
+
+
+def test_same_port_forward_hint_reuses_the_rows_already_read():
+    """#452's hint (drop invalid before a same-port accept) without another RouterOS read."""
+    router = Router()
+    router.rows['/ipv6/firewall/filter'] = [
+        {'.id': '*4', 'chain': 'forward', 'action': 'accept', 'connection-state': 'established,related,untracked'},
+        {'.id': '*5', 'chain': 'forward', 'action': 'drop', 'connection-state': 'invalid'}]
+    reads = []
+    original = router._list
+    router._list = lambda path: reads.append(path) or original(path)
+    result = inspect_router(router)
+    hint = next(c for c in result['checks'] if c['id'] == 'forward_hairpin')
+    assert hint['status'] == 'warning'
+    assert 'drop invalid' in hint['message']
+    assert hint['command'] == ('/ipv6 firewall filter add chain=forward action=accept in-interface=lan4 '
+                               'out-interface=lan4 comment="LAN to Mihomo via router" place-before=*5')
+    assert reads.count('/ipv6/firewall/filter') == 1 and reads.count('/interface') == 1
+    assert not router.writes
+    # A summary of readiness counts only router errors; the hint stays advisory.
+    assert result['status'] == 'warning'
+
+
+def test_same_port_forward_hint_is_silent_without_a_drop_and_unknown_when_unread():
+    router = Router()
+    assert not any(c['id'] == 'forward_hairpin' for c in inspect_router(router)['checks'])
+    router.fail_path = '/ipv6/firewall/filter'
+    hint = next(c for c in inspect_router(router)['checks'] if c['id'] == 'forward_hairpin')
+    assert hint['status'] == 'unknown' and 'command' not in hint
+
+
+def test_same_port_forward_hint_covers_rule_set_routes_without_fake_ip():
+    router = Router()
+    router.rows['/ipv6/firewall/filter'] = [{'.id': '*5', 'chain': 'forward', 'action': 'drop', 'connection-state': 'invalid'}]
+    redir = bridge.configuration({'mihomo': {'custom_config': YAML.replace('fake-ip\n', 'redir-host\n')}})[0]
+    result = ros.inspect(router, ROUTER, AGENT, host_status(), redir, '192.168.0.2')
+    assert next(c for c in result['checks'] if c['id'] == 'forward_hairpin')['command'].endswith('place-before=*5')
+    off = bridge.configuration({'mihomo': {'custom_config': YAML.replace('ipv6: true\ndns', 'ipv6: false\ndns')}})[0]
+    result = ros.inspect(router, ROUTER, AGENT, host_status(), off, '192.168.0.2')
+    assert not any(c['id'] == 'forward_hairpin' for c in result['checks'])
 
 
 def test_route_add_reads_back_and_owned_undo_preserves_others():
@@ -364,7 +434,7 @@ def test_api_preserves_draft_and_ipv4_and_repeated_prepare_is_idempotent(environ
         report = response.get_json()
     assert router.writes == []
     assert report['changed_routes'] == 0
-    assert '上级路由差异报告' in report['message']
+    assert '上游路由差异报告' in report['message']
     assert manager.repository.get_profile('v6') == before
     assert all(w[1].startswith('/ipv6/route') for w in router.writes)
 
@@ -487,8 +557,8 @@ def test_router_route_order_and_lifetime_changes_keep_prepare_valid(environment)
     report = client.get(path, headers=headers).get_json()
     router.rows[ros.ROUTES][-1]['expires-after'] = '4m59s'
     router.rows[ros.ROUTES].reverse()
-    fresh = client.get(path, headers=headers).get_json()
-    assert fresh['check_token'] == report['check_token']
+    fresh = client.get(path + '?refresh=1', headers=headers).get_json()
+    assert fresh['cached'] is False and fresh['check_token'] == report['check_token']
     response = client.post(path + '/prepare', headers=headers, json={
         'interface': report['prepare_interface'], 'check_token': report['check_token']})
     assert response.status_code == 200, response.get_json()
@@ -506,3 +576,86 @@ def test_real_target_change_still_blocks_prepare(environment, changed):
         'interface': report['prepare_interface'], 'check_token': report['check_token']})
     assert response.status_code == 409, response.get_json()
     assert not router.writes and not any(operation == 'prepare' for operation, _ in calls)
+
+
+def test_opening_again_shows_the_last_check_until_what_it_reads_changes(environment):
+    """Like the IPv4 forwarding row: no device or router is contacted while nothing changed."""
+    client, manager, agent, headers, path, router, calls, _ = environment
+    reads = []
+    original = router._list
+    router._list = lambda table: reads.append(table) or original(table)
+    first = client.get(path, headers=headers).get_json()
+    assert first['cached'] is False and first['checked_at'] and len(calls) == 1
+    count = len(reads)
+
+    def again(suffix=''):
+        return client.get(path + suffix, headers=headers).get_json()
+    # A heartbeat (metrics, timestamps) is not a change.
+    manager.update_heartbeat(agent['id'], {'metrics': {'cpu': 3}})
+    cached = again()
+    assert cached['cached'] is True and cached['checked_at'] == first['checked_at']
+    assert cached['check_token'] == first['check_token'] and cached['config_revision'] == first['config_revision']
+    assert len(calls) == 1 and len(reads) == count
+    # The user's 「重新检查」.
+    assert again('?refresh=1')['cached'] is False and len(calls) == 2
+    # A saved draft (also the save before a publish).
+    config = manager.repository.get_profile('v6')
+    manager.repository.save_profile('v6', {**config, 'mihomo': {'custom_config': YAML.replace('fc00::1/64', 'fd00::1/64')}})
+    assert again()['cached'] is False and len(calls) == 3
+    assert again()['cached'] is True and len(calls) == 3
+    # The device record: a new Agent version, a publication, a router record.
+    manager.update_heartbeat(agent['id'], {'version': '1.8.51-go'})
+    assert again()['cached'] is False and len(calls) == 4
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        latest_deployment={'deployment_id': 'd2', 'status': 'succeeded'}))
+    assert again()['cached'] is False and len(calls) == 5
+    config = manager.repository.get_profile('v6')
+    routers = [{**item, 'name': 'Renamed'} for item in config['routers']['items']]
+    manager.repository.save_profile('v6', {**config, 'routers': {'items': routers}})
+    assert again()['routers'][0]['name'] == 'Renamed' and len(calls) == 6
+    # Kept privately under the data directory, without router credentials.
+    stored = list((manager.repository.data_dir / '.ipv6-readiness').glob('*.json'))
+    assert len(stored) == 1 and 'private' not in stored[0].read_text()
+
+
+def test_a_failed_recheck_keeps_the_last_result_and_says_why(environment, monkeypatch):
+    client, manager, agent, headers, path, router, calls, _ = environment
+    first = client.get(path, headers=headers).get_json()
+
+    def unreachable(*_args, **_kwargs):
+        raise MonitorError('AGENT_UNREACHABLE', 502, '无法连接 Agent 进行 IPv6 检查')
+    monkeypatch.setattr(bridge, '_request', unreachable)
+    response = client.get(path + '?refresh=1', headers=headers)
+    data = response.get_json()
+    assert response.status_code == 200 and data['cached'] is True and data['stale'] is False
+    assert data['checked_at'] == first['checked_at'] and data['check_token'] == first['check_token']
+    assert data['refresh_error']['message'] == '无法连接 Agent 进行 IPv6 检查'
+    # Offline: the device is not contacted, the last result stays and is marked as outdated.
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        last_heartbeat='2026-01-01T00:00:00'))
+    monkeypatch.setattr(bridge, '_request', lambda *_: pytest.fail('an offline device is not contacted'))
+    data = client.get(path, headers=headers).get_json()
+    assert data['stale'] is True and data['refresh_error']['code'] == 'AGENT_OFFLINE'
+    assert data['checks'] == first['checks']
+
+
+def test_without_a_last_result_a_failed_check_is_an_error(environment, monkeypatch):
+    client, _, _, headers, path, *_ = environment
+
+    def unreachable(*_args, **_kwargs):
+        raise MonitorError('AGENT_UNREACHABLE', 502, '无法连接 Agent 进行 IPv6 检查')
+    monkeypatch.setattr(bridge, '_request', unreachable)
+    response = client.get(path, headers=headers)
+    assert response.status_code == 502 and response.get_json()['success'] is False
+
+
+def test_the_check_after_preparing_becomes_the_last_result(environment):
+    client, _, _, headers, path, router, calls, _ = environment
+    report = client.get(path, headers=headers).get_json()
+    prepared = client.post(path + '/prepare', headers=headers, json={
+        'interface': report['prepare_interface'], 'check_token': report['check_token']}).get_json()
+    assert prepared['success'] is True and prepared['checked_at']
+    count = len(calls)
+    again = client.get(path, headers=headers).get_json()
+    assert again['cached'] is True and again['checked_at'] == prepared['checked_at'] and len(calls) == count
+    assert 'message' not in again

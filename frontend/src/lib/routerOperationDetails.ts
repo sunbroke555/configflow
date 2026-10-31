@@ -27,6 +27,18 @@ const pathNames: Record<string, string> = {
 const guardPathNames: Record<string, string> = {
   '/ip/firewall/address-list': '放行地址', '/ip/firewall/nat': 'NAT', '/ip/firewall/filter': '防火墙', '/tool/netwatch': 'Netwatch'
 }
+const pdGuardPaths: Record<string, string> = {
+  '/system/script': '脚本', '/system/scheduler': '定时任务', '/ipv6/dhcp-client': 'IPv6 DHCP 客户端',
+  '/ipv6/firewall/address-list': '前缀记录', '/ipv6/nd/prefix': '弃用前缀通告'
+}
+const pickKeys = (from: unknown, keys: unknown): Fields => {
+  const source = record(from)
+  return Object.fromEntries(Object.keys(record(keys)).map(key => [key, source[key] ?? '']))
+}
+// Multi-line script text is shown as-is so the preview reads like the router will.
+const pdGuardValues = (value: unknown) => Object.entries(record(value))
+  .filter(([key, item]) => !/password|secret|token|authorization/i.test(key) && (item === null || typeof item !== 'object'))
+  .map(([key, item]) => String(item ?? '').includes('\n') ? `${key}:\n${String(item)}` : `${key}: ${text(item)}`).join('\n')
 const safeFields = (value: unknown): DetailRow[] => Object.entries(record(value))
   .filter(([key, value]) => !/password|secret|token|authorization/i.test(key) && (value === null || typeof value !== 'object' || Array.isArray(value)))
   .map(([key, value]) => ({ label: labels[key] ? `${labels[key]} · ${key}` : key, value: text(value) }))
@@ -53,7 +65,7 @@ const groupRefs = (op: RouterPlanOperation): DetailRow[] => strings(op.groups).m
 const groupNote = 'iKuai 规则只引用 ConfigFlow 管理的 IP 分组，不再逐条填写网段；增删网段时只改分组内容。'
 export function hasOperationDetails(op: RouterPlanOperation) {
   return ['ros_policy_replace', 'dns_guard_replace', 'return_routing_apply', 'route_add', 'route_delete', 'route_comment',
-    'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'ipv6_dns_update', 'policy_route_add', 'policy_route_update',
+    'nat_add', 'nat_update', 'nat_list_sync', 'dhcp_dns_update', 'ipv6_dns_update', 'ipv6_pd_guard_sync', 'policy_route_add', 'policy_route_update',
     'policy_route_delete', 'ikuai_group_add', 'ikuai_group_update', 'ikuai_group_delete'].includes(op.kind || '')
 }
 export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
@@ -154,6 +166,25 @@ export function operationDetails(op: RouterPlanOperation): DetailGroup[] {
     ])
     add('发布改动', [{ label: 'DNS 下发 · advertise-dns', before: text(before['advertise-dns']), value: text(after['advertise-dns']) }],
       '只关闭此 LAN 的 DNS 下发；IPv6 地址和默认网关继续通告。')
+  } else if (op.kind === 'ipv6_pd_guard_sync') {
+    const spec = record(op.spec)
+    if (op.spec) {
+      add('自动识别的参数', [
+        { label: '监控 LAN', value: text(spec.lan) }, { label: '地址池', value: text(spec.pool) },
+        { label: 'DHCP 客户端', value: text(spec.client_interface) }, { label: '旧前缀弃用通告（秒）', value: text(spec.hold) }
+      ])
+    }
+    const changes = list(op.changes).map(record)
+    const object = (change: Fields) => `${pdGuardPaths[String(change.path)] || text(change.path)}${change.id ? ` · ${text(change.id)}` : ''}`
+    add('新建', changes.filter(change => change.method === 'PUT').map(change => ({ label: object(change), value: pdGuardValues(change.values) })),
+      '脚本内容按 ConfigFlow 模板生成，参数为上面自动识别的值。')
+    add('修改', changes.filter(change => change.method === 'PATCH').map(change => ({
+      label: object(change), before: pdGuardValues(pickKeys(change.expected, change.values)), value: pdGuardValues(change.values)
+    })), '只改写列出的字段；dhcp-client 只改 script 字段。')
+    add('删除', changes.filter(change => change.method === 'DELETE').map(change => ({ label: object(change), value: pdGuardValues(change.expected) })),
+      op.enabled ? '脚本改为监控其他 LAN 或地址池时，清除旧的前缀记录，由脚本重新记录。'
+        : '只撤回 ConfigFlow 安装或更新过的对象，以及脚本留下的前缀记录和弃用通告；沿用的手动安装不在此列表中。')
+    if (!changes.length) add('管理记录', [{ label: '路由器', value: '不写入' }], '路由器上的配置不变，只更新 ConfigFlow 的管理记录。')
   } else if (op.kind === 'nat_add') {
     add('来源范围', strings(op.src).map(value => ({ label: '来源', value })))
     add('目的网段', strings(op.dst).map(value => ({ label: '目的', value })))

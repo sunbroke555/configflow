@@ -202,7 +202,8 @@ RULE_DNS_FIELDS = ('rule_actions', 'rule_dns_follow', 'rule_dns_parked')
 ROUTER_IDENTITY_FIELDS = ('type', 'endpoint')
 ROUTER_CONNECTION_FIELDS = (*ROUTER_IDENTITY_FIELDS, 'username', 'password', 'verify_tls')
 # Device ownership receipts; only a publication under the router's lock may change them.
-ROUTER_MANIFEST_FIELDS = ('ros_policy_state', 'dns_guard_state', 'ipv6_fakeip_state', 'ipv6_routes_state')
+ROUTER_MANIFEST_FIELDS = ('ros_policy_state', 'dns_guard_state', 'ipv6_fakeip_state', 'ipv6_routes_state',
+                          'ipv6_pd_guard_state')
 
 def _items_by_id(items, label):
     if not isinstance(items, list):
@@ -912,7 +913,8 @@ class ProfileRepository:
             # connection change still takes the publication lock below.
             for field, label in (('ros_policy_state', '策略路由'), ('dns_guard_state', '强制 DNS 规则'),
                                  ('ipv6_fakeip_state', 'IPv6 Fake-IP 路由'),
-                                 ('ipv6_routes_state', 'IPv6 规则集路由')):
+                                 ('ipv6_routes_state', 'IPv6 规则集路由'),
+                                 ('ipv6_pd_guard_state', 'IPv6 前缀变化保护')):
                 field_changed = new is None or old.get(field) != new.get(field)
                 if old.get(field) and (identity_changed or (field_changed and key != policy_router)):
                     profile_id, router_id = key
@@ -1276,7 +1278,8 @@ class ProfileRepository:
             profile['updated_at'] = _now()
 
     def save_router_publication(self, profile_id, expected_router, *, manifest=_MISSING, dns_guard=_MISSING,
-                                ipv6_fakeip=_MISSING, ipv6_routes=_MISSING, last_release=_MISSING):
+                                ipv6_fakeip=_MISSING, ipv6_routes=_MISSING, ipv6_pd_guard=_MISSING,
+                                last_release=_MISSING):
         """Persist verified readback/rollback under the caller's held job_lock.
 
         This is the only existing-record write allowed to replace or clear an
@@ -1292,7 +1295,8 @@ class ProfileRepository:
                                       for field in ROUTER_CONNECTION_FIELDS):
                 raise ProfileInUse('路由器连接已变化，无法保存发布回读记录')
             for field, value in (('ros_policy_state', manifest), ('dns_guard_state', dns_guard),
-                                 ('ipv6_fakeip_state', ipv6_fakeip), ('ipv6_routes_state', ipv6_routes)):
+                                 ('ipv6_fakeip_state', ipv6_fakeip), ('ipv6_routes_state', ipv6_routes),
+                                 ('ipv6_pd_guard_state', ipv6_pd_guard)):
                 if value is _MISSING:
                     continue
                 if value:

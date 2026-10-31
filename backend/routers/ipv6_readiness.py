@@ -7,7 +7,7 @@ import hashlib
 import ipaddress
 import json
 import secrets
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from backend.routers.base import RouterError
 from backend.routers.ipv6_policy import POLICY_TABLES, policy_checks
@@ -107,6 +107,46 @@ def _route_evidence(rows):
                   key=lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False))
 
 
+class _SnapshotReads:
+    """Serve ``ipv6_fakeip.hairpin`` the rows this inspection already read.
+
+    The same-port forward hint then costs no further RouterOS request; a table
+    that failed to read stays unreadable, so the hint reports it as unknown.
+    """
+    PATHS = {'/ipv6/firewall/filter': 'filter', '/interface/list': 'interface_lists',
+             '/interface/list/member': 'interface_members', '/interface': 'interfaces'}
+
+    def __init__(self, snapshot, errors):
+        self.snapshot, self.errors = snapshot, errors
+
+    def _list(self, path):
+        base, marker, name = path.partition('?list=')
+        key = 'address_lists' if marker and base == '/ipv6/firewall/address-list' else self.PATHS.get(path)
+        if key is None or key in self.errors or key not in self.snapshot:
+            raise RouterError('未读取 ' + path)
+        rows = self.snapshot[key]
+        return [row for row in rows if row.get('list') == unquote(name)] if marker else rows
+
+
+def _forward_hint(snapshot, errors, lan, fake, configuration):
+    """#452's same-port forward hint for this router, from the rows already read.
+
+    Clients reach Mihomo through the router's own LAN port for IPv6 Fake-IP and
+    for the rule-set routes (published while Mihomo uses IPv6). Without Fake-IP
+    a public destination stands in for those rule-set networks. Only reported
+    when there is something to do: a drop to fix (with the command) or rows
+    that could not be read. Advisory, so the readiness summary does not count it.
+    """
+    if not lan or configuration.get('ipv6') is not True:
+        return None
+    from backend.routers.ipv6_fakeip import hairpin
+    warning, command = hairpin(_SnapshotReads(snapshot, errors), lan, fake or '2000::/3')
+    if not warning:
+        return None
+    return {**check('forward_hairpin', 'IPv6 同口转发', 'warning' if command else 'unknown', warning),
+            **({'command': command} if command else {})}
+
+
 def inspect(driver, router, agent, host, configuration, dns_target=None, policy_context=None):
     snapshot, errors = {}, {}
     for key, path in TABLES.items():
@@ -135,7 +175,10 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
         errors['dns'] = '无法读取 ROS DNS'
     checks = [check('read_' + key, key, 'unknown', message) for key, message in errors.items()]
     lan = _lan(snapshot, agent.get('host', ''))
-    fake = configuration.get('fake_ipv6_range') if configuration.get('fake_ipv6_enabled') else None
+    # The route is published in both IPv6 modes; clients use it only with dns.ipv6.
+    used = bool(configuration.get('fake_ipv6_enabled'))
+    fake = (configuration.get('fake_ipv6_range')
+            if configuration.get('fake_ipv6_route', used) else None)
     existing = [row for row in snapshot.get('routes', [])
                 if fake and _network(row.get('dst-address')) == _network(fake)]
     gateway = _gateway(host, snapshot, lan, existing)
@@ -162,6 +205,9 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
     checks.append(check('dns', 'DNS 路径', 'warning' if dns_details else 'ok',
                         '需要核对 DNS 来源，保留现有设置' if dns_details else '未发现需要自动更改 DNS 的依据', dns_details))
     checks.extend(policy_checks(snapshot, errors, agent, host, configuration, lan, policy_context))
+    hint = _forward_hint(snapshot, errors, lan, fake, configuration)
+    if hint:
+        checks.append(hint)
     plan = None
     if fake:
         target = ipaddress.IPv6Network(fake)
@@ -172,21 +218,25 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
                      and network != target and network.prefixlen >= target.prefixlen and network.overlaps(target)]
         overlaps_lan = any(network and network.version == 6 and network.overlaps(target)
                            for network in (_network(r.get('address')) for r in snapshot.get('addresses', [])))
-        if not configuration.get('tun_enabled'):
+        # Receiving matters only once DNS hands clients these addresses; until
+        # then a missing TUN is a note on the route, not an error.
+        idle = '' if used else ('；DNS IPv6 关闭，客户端暂不使用此网段' + (
+            '，选择「客户端也走 IPv6」前需开启 TUN' if not configuration.get('tun_enabled') else ''))
+        if used and not configuration.get('tun_enabled'):
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 接收', 'error', '配置会返回 IPv6 Fake-IP，但尚未开启 TUN，现有路由不能代替接收能力'))
         elif overlaps_lan:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'error', 'IPv6 Fake-IP 与路由器现有地址网段重叠，请先调整网段'))
         elif (rows and gateway and len(rows) == 1 and enabled(rows[0]) and yes(rows[0].get('active'))
               and _same_gateway(rows[0], gateway) and not conflicts
               and not any(yes(rows[0].get(key)) for key in ('blackhole', 'unreachable', 'prohibit', 'invalid', 'dynamic', 'connect'))):
-            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', f'{fake} 已指向这台 Mihomo，沿用现有路由'))
+            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', f'{fake} 已指向这台 Mihomo，沿用现有路由{idle}'))
         elif rows or conflicts or overlaps_lan:
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'error', '已有路由未能确认匹配，或 Fake-IP 与现有网段冲突；请核对，自动配置不会覆盖'))
         elif any(key in READINESS_TABLES or key == 'dns' for key in errors) or not gateway:
-            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', '缺少对应路由，但未确认唯一、稳定的同网段下一跳，不能自动添加'))
+            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少对应路由，但未确认唯一、稳定的同网段下一跳，不能自动添加{idle}'))
         else:
             plan = {'dst-address': fake, 'gateway': gateway, 'routing-table': 'main', 'disabled': 'false', 'distance': '1'}
-            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少 {fake} → {gateway}；请到上级路由差异报告预览并发布。'))
+            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少 {fake} → {gateway}{idle}；请到上游路由差异报告预览并发布。'))
     else:
         checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由'))
     dependencies = {'wan': ('routes',), 'ra': ('nd', 'ipv4_addresses'), 'dns': ('dns', 'dhcp', 'nd')}

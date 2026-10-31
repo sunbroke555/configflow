@@ -53,7 +53,7 @@ afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()); vi.r
 describe('Mihomo per-device IPv6 workflow', () => {
   it('inspects the bound target without mutating the host or claiming node connectivity', async () => {
     const wrapper = await mount()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
     expect(agentApi.prepareIPv6).not.toHaveBeenCalled()
     expect(agentApi.verifyIPv6).not.toHaveBeenCalled()
     expect(wrapper.text()).not.toContain('主路由 · IPv6 Fake-IP 路由')
@@ -90,13 +90,32 @@ describe('Mihomo per-device IPv6 workflow', () => {
     expect(wrapper.text()).toContain('原目标设备')
   })
 
-  it('can refresh an offline target without substituting another device', async () => {
+  it('shows the last check of an offline target and can refresh it without substituting another device', async () => {
     vi.mocked(agentApi.summaries).mockResolvedValueOnce(response([{ ...gateway, status: 'offline' }]))
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValueOnce(response(report({ checked_at: new Date(Date.now() - 12 * 60000).toISOString(),
+      cached: true, stale: true, refresh_error: { code: 'AGENT_OFFLINE', message: '设备离线，上线后重新检查', at: '' } })))
     const wrapper = await mount()
-    expect(agentApi.ipv6Readiness).not.toHaveBeenCalled()
+    // The server answers from its last result; an offline device is not contacted.
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
+    expect(wrapper.get('[data-ipv6-readiness-recheck-failed]').text()).toBe('这次未能重新检查：设备离线，上线后重新检查。以下是设备或配置变化前的结果。')
+    expect(wrapper.get('[data-ipv6-readiness-checked]').text()).toContain('检查于 12 分钟前')
+    expect(button(wrapper, '补齐缺少的配置').attributes('disabled')).toBeDefined()
     await button(wrapper, '重新读取设备').trigger('click')
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
+    expect(agentApi.ipv6Readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: false })
+  })
+
+  it('reuses the last check on opening, says when it was taken, and checks again on request', async () => {
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValueOnce(response(report({ checked_at: new Date(Date.now() - 3 * 3600000).toISOString(), cached: true })))
+    const wrapper = await mount()
+    expect(wrapper.get('[data-ipv6-readiness-checked]').text()).toBe('检查于 3 小时前。路由器或主机上的手动修改不会自动发现，请点「重新检查」。')
+    expect(wrapper.find('[data-ipv6-readiness-recheck-failed]').exists()).toBe(false)
+    vi.mocked(agentApi.ipv6Readiness).mockResolvedValueOnce(response(report({ checked_at: new Date().toISOString(), cached: false })))
+    await button(wrapper, '重新检查').trigger('click')
+    await flushPromises()
+    expect(agentApi.ipv6Readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: true })
+    expect(wrapper.get('[data-ipv6-readiness-checked]').text()).toBe('刚刚检查。路由器或主机上的手动修改不会自动发现，请点「重新检查」。')
   })
 
   it('requires an explicit choice when multiple devices belong to the profile', async () => {
@@ -105,7 +124,7 @@ describe('Mihomo per-device IPv6 workflow', () => {
     expect(agentApi.ipv6Readiness).not.toHaveBeenCalled()
     wrapper.getComponent(Select).vm.$emit('update:modelValue', 'gw')
     await flushPromises()
-    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
+    expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound', { refresh: false })
   })
 
   it('invalidates a check when the YAML draft changes and requires a new check after saving', async () => {
@@ -119,6 +138,7 @@ describe('Mihomo per-device IPv6 workflow', () => {
     await button(wrapper, '重新检查').trigger('click')
     await flushPromises()
     expect(agentApi.ipv6Readiness).toHaveBeenCalledTimes(2)
+    expect(agentApi.ipv6Readiness).toHaveBeenLastCalledWith('gw', 'bound', { refresh: true })
   })
 
   it('does not inspect an unsaved draft when opening the panel', async () => {

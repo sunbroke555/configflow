@@ -1,8 +1,12 @@
 """Profile-bound IPv6 readiness: saved YAML, host preparation and RouterOS checks."""
 from contextlib import ExitStack
+from datetime import datetime
 import hashlib
 import ipaddress
 import json
+import os
+from pathlib import Path
+import tempfile
 import threading
 
 import requests
@@ -74,15 +78,18 @@ def configuration(config):
                 errors.append('IPv6 Fake-IP 应使用 ULA 网段，不能覆盖公网或链路本地地址')
             fake = str(network)
         tun = document.get('tun') or {}
+        # The upstream route follows Mihomo's IPv6 Fake-IP range in both IPv6
+        # modes (see ipv6_fakeip.settings); clients use it only with dns.ipv6.
+        route = (document.get('ipv6', True) is True and dns.get('enable') is True
+                 and dns.get('enhanced-mode') == 'fake-ip' and bool(fake))
         result = {'ipv6': document.get('ipv6', True), 'dns_ipv6': dns.get('ipv6', False),
                   'ipv6_explicit': 'ipv6' in document, 'dns_ipv6_explicit': 'ipv6' in dns,
                   'fake_ipv6_range': fake, 'tun_enabled': isinstance(tun, dict) and tun.get('enable') is True,
-                  'fake_ipv6_enabled': document.get('ipv6', True) is True and dns.get('enable') is True
-                  and dns.get('ipv6') is True and dns.get('enhanced-mode') == 'fake-ip' and bool(fake),
+                  'fake_ipv6_route': route, 'fake_ipv6_enabled': route and dns.get('ipv6') is True,
                   'errors': errors, 'source': 'saved_draft'}
         return result, document
     except (yaml.YAMLError, ValueError, TypeError, AttributeError):
-        return {'ipv6': None, 'dns_ipv6': None, 'fake_ipv6_range': None, 'fake_ipv6_enabled': False,
+        return {'ipv6': None, 'dns_ipv6': None, 'fake_ipv6_range': None, 'fake_ipv6_route': False, 'fake_ipv6_enabled': False,
                 'tun_enabled': False, 'errors': ['无法解析 IPv6 设置，请检查基础 YAML 的类型与 IPv6 Fake-IP 网段'],
                 'source': 'saved_draft'}, {}
 
@@ -255,6 +262,106 @@ def inspect(manager, agent_id, profile_id):
     return _inspect(manager, _agent(manager, agent_id, profile_id), profile_id)
 
 
+# The last device check, reused while nothing it reads has changed: like the
+# Agent page's IPv4 forwarding row, opening the settings shows it instead of
+# contacting the device and every linked router again. One private file per
+# Agent under the data directory: it survives restarts and keeps a check result
+# out of the Agent records that every page lists and every heartbeat rewrites.
+LAST_CHECK_DIR = '.ipv6-readiness'
+DEPLOYMENT_FIELDS = ('deployment_id', 'status', 'config_version', 'config_revision')
+
+
+def _now():
+    return datetime.now().astimezone().isoformat(timespec='seconds')
+
+
+def check_key(manager, agent, profile_id, config):
+    """Digest of what a device check depends on that ConfigFlow itself records.
+
+    The Agent record (binding, address, online state, version), its last
+    publication, the saved profile (Mihomo YAML, linked router records, nodes)
+    and the chosen verification client. Heartbeats, metrics and runtime state
+    are left out; edits made directly on a router or the host are not seen, so
+    the page offers 「重新检查」 for those.
+    """
+    from .manager import online_status
+    settings = agent.get('ipv6_verification_settings') or {}
+    client = manager.get_agent_by_id(settings['client_agent_id']) if settings.get('client_agent_id') else None
+    latest = agent.get('latest_deployment') or {}
+    return _digest({
+        'profile': profile_id,
+        'agent': {**{key: agent.get(key) for key in PREPARE_AGENT_FIELDS}, 'status': online_status(agent),
+                  'version': agent.get('version'), 'verification': settings},
+        'deployment': {**{key: latest.get(key) for key in DEPLOYMENT_FIELDS},
+                       'config_revision': agent.get('config_revision'), 'config_version': agent.get('config_version')},
+        'config': _prepare_config(config),
+        'client': {key: client.get(key) for key in ('id', 'host', 'profile_id', 'enabled')} if client else None,
+    })
+
+
+def _last_path(manager, agent_id):
+    return (Path(manager.repository.data_dir) / LAST_CHECK_DIR
+            / (hashlib.sha256(agent_id.encode()).hexdigest() + '.json'))
+
+
+def _last(manager, agent_id, profile_id):
+    try:
+        record = json.loads(_last_path(manager, agent_id).read_text())
+    except (OSError, ValueError):
+        return None
+    if (not isinstance(record, dict) or record.get('agent_id') != agent_id or record.get('profile_id') != profile_id
+            or not isinstance(record.get('result'), dict) or not isinstance(record.get('key'), str)):
+        return None
+    return record
+
+
+def remember(manager, agent, profile_id, config, result):
+    """Keep a fresh check (or the check after preparing) as this Agent's last result."""
+    path = _last_path(manager, agent['id'])
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = {'agent_id': agent['id'], 'profile_id': profile_id, 'key': check_key(manager, agent, profile_id, config),
+              'checked_at': _now(), 'result': {key: value for key, value in result.items()
+                                               if key not in ('checked_at', 'cached', 'refresh_error', 'stale', 'message', 'changed_routes')}}
+    descriptor, temporary = tempfile.mkstemp(prefix='.write-', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            json.dump(record, stream, ensure_ascii=False, default=str)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return record['checked_at']
+
+
+def status(manager, agent_id, profile_id, config, revision, refresh=False):
+    """The last check while its key is unchanged, otherwise (or on ``refresh``) a new one.
+
+    A check that cannot reach the device keeps the last result and says so
+    (``refresh_error``); ``stale`` marks a result whose inputs have changed.
+    Concurrent requests for one Agent wait for each other and reuse the result.
+    """
+    from .manager import online_status
+    with _lock(agent_id):
+        agent = _agent(manager, agent_id, profile_id)
+        key = check_key(manager, agent, profile_id, config)
+        last = _last(manager, agent_id, profile_id)
+        if last and last['key'] == key and not refresh:
+            # Same content; a later save of identical YAML only moved the revision.
+            return {**last['result'], 'config_revision': revision, 'checked_at': last['checked_at'], 'cached': True}
+        try:
+            if online_status(agent) == 'offline':
+                raise MonitorError('AGENT_OFFLINE', 409, '设备离线，上线后重新检查')
+            data = _inspect(manager, agent, profile_id, config)
+        except MonitorError as error:
+            if not last:
+                raise
+            return {**last['result'], 'checked_at': last['checked_at'], 'cached': True, 'stale': last['key'] != key,
+                    'refresh_error': {'code': error.code, 'message': error.message, 'at': _now()}}
+        data['config_revision'] = revision
+        checked_at = remember(manager, agent, profile_id, config, data)
+        return {**data, 'checked_at': checked_at, 'cached': False}
+
+
 def prepare(manager, agent_id, profile_id, body):
     if not isinstance(body, dict) or set(body) != {'interface', 'check_token'}:
         raise MonitorError('INVALID_REQUEST', 400, '请提供检查结果对应的网卡与 check_token')
@@ -286,12 +393,15 @@ def prepare(manager, agent_id, profile_id, body):
         except MonitorError as error:
             raise MonitorError('PREPARE_FAILED', 502, '主机配置补齐失败，请重新检查：' + str(error)) from None
         result = _inspect(manager, agent, profile_id, config)
-        result['message'] = '已补齐可自动处理的主机配置；ROS 路由请到上级路由差异报告预览并发布。'
+        result['message'] = '已补齐可自动处理的主机配置；ROS 路由请到上游路由差异报告预览并发布。'
         result['changed_routes'] = 0
         if prepared_host:
             for item in prepared_host.get('checks', []):
                 if item.get('id') == 'tun_recovery':
                     result['checks'].append(ros.check('prepare_tun_recovery', 'TUN 启动恢复', 'warning', item.get('message', '请重新核对 TUN IPv6')))
+        # The host changed: this check, not the one before preparing, is the last result.
+        result['checked_at'] = remember(manager, agent, profile_id, config, result)
+        result['cached'] = False
         return result
 
 

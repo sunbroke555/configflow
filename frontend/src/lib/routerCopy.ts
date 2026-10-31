@@ -45,4 +45,7 @@ export const routerCopy = {
   dnsGuardBypass: optionCopy('这些设备保持原有 DNS，不被劫持。',
     '测试机或确需直连公共 DNS 的设备。',
     '每行一个 IPv4 地址或网段。OxiDNS 与 Mihomo 网关自动放行，无需填写；设备地址最好在 DHCP 中固定。'),
+  ipv6PdGuard: optionCopy('运营商换了 IPv6 前缀后，让设备尽快改用新地址。',
+    '宽带通过 PPPoE / DHCPv6 获取前缀（PD），重拨或重启后前缀会变化时开启。仅 RouterOS，默认关闭。',
+    '在路由器上安装脚本 cf-pd-watch、每 30 秒检查一次的定时任务 cf-pd-poll，以及 IPv6 DHCP 客户端上的钩子（前缀更新后每秒检查一次，共 10 次）。发现 LAN 前缀变化时，把旧前缀以「首选时间 0」继续通告 1 小时，设备随即改用新地址；旧前缀重新生效时会恢复通告。监控的地址池、LAN 和 DHCP 客户端由 ConfigFlow 自动识别，无法唯一确定时本项跳过，其他改动照常发布。已有内容一致的手动安装直接沿用，不改写，关闭开关时也不删除；ConfigFlow 安装或更新过的对象在关闭开关并发布后撤回。'),
 }

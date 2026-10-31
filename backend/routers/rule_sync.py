@@ -43,6 +43,8 @@ def controls(config, router):
         # Added only while enabled, so existing baselines keep their digest. The
         # guard's manifest changes only through a manual release, not settings.
         fields.append('dns_guard')
+    if (router.get('ipv6_pd_guard') or {}).get('enabled') is True:
+        fields.append('ipv6_pd_guard')  # same digest rule as dns_guard
     dns_agent = _agent(router.get('dns_agent_id'))
     value = {
         'router': {key: router.get(key) for key in fields},
@@ -306,6 +308,8 @@ def sync(profile_id, router_id, download=None, trigger='schedule'):
                 # pending change needs the manual preview to apply it.
                 if (state.ipv6_dns_plan or {}).get('ops') and not (state.ipv6_dns_plan or {}).get('blockers'):
                     raise RouterError('IPv6 DNS 下发有待关闭的差异，请先手动预览发布')
+                if (state.ipv6_pd_guard_plan or {}).get('ops') and not (state.ipv6_pd_guard_plan or {}).get('blockers'):
+                    raise RouterError('IPv6 前缀变化保护有待安装、更新或撤回的差异，请先手动预览发布')
                 ipv6_note = _ipv6_routes_delta(state, plan)
                 writes_started = True
                 outcome = apply_delta(driver, desired, plan, baseline, ensure_current)

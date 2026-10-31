@@ -56,10 +56,11 @@ function groupFor(check: IPv6ReadinessCheck): GroupId {
   return 'node'
 }
 
-function issueFor(check: IPv6SummaryCheck, canPrepare = false): string {
+// Also used by the IPv6 step list, so a host problem reads the same in both places.
+export function issueFor(check: IPv6SummaryCheck, canPrepare = false): string {
   const id = check.id
   if (publicationIds.has(id)) return `尚未确认设备使用的是当前保存配置。${publishAction}`
-  if (id === 'host_default_route') return 'Mihomo 尚未找到 IPv6 出口，请检查上级路由和自动获取网关设置。'
+  if (id === 'host_default_route') return 'Mihomo 尚未找到 IPv6 出口，请检查上游路由和自动获取网关设置。'
   if (id === 'host_address') return 'Mihomo 尚未取得可用的 IPv6 地址，请检查设备网络。'
   if (id === 'host_forwarding_ra') return canPrepare
     ? 'IPv6 转发和自动获取网关设置未齐全，可点击「补齐缺少的配置」。'
@@ -71,7 +72,7 @@ function issueFor(check: IPv6SummaryCheck, canPrepare = false): string {
     ? 'Mihomo 的 IPv6 接收尚未恢复，可点击「补齐缺少的配置」。'
     : 'Mihomo 的 IPv6 接收尚未恢复，请打开「检查设备」重新检查并处理。'
   if (id.startsWith('router_')) {
-    if (/_(?:fake[46]_|fake_ipv6)/.test(id)) return '客户端分流路由或相关规则存在问题，请到「上级路由」检查差异后再验证。'
+    if (/_(?:fake[46]_|fake_ipv6)/.test(id)) return '客户端分流路由或相关规则存在问题，请到「上游路由」检查差异后再验证。'
     if (id.endsWith('_dns')) return '路由器 DNS 配置存在问题，请检查是否使用预期的 DNS。'
     if (id.endsWith('_wan')) return '路由器 IPv6 出口存在问题，请检查上网设置。'
     return '路由器有规则阻断相关通信，请检查防火墙或 NAT 设置后重新验证。'
@@ -214,8 +215,8 @@ export function buildMihomoIPv6Summary({ readiness, verification, preferVerifica
     }
     for (const check of staticAdvisories) {
       const message = /_(?:fake[46]_|fake_ipv6)/.test(check.id)
-        ? '本次连接已通过；分流路由检查仍有差异，请到「上级路由」核对。'
-        : '本次连接已通过；路由器规则检查仍有差异，请到「上级路由」核对。'
+        ? '本次连接已通过；分流路由检查仍有差异，请到「上游路由」核对。'
+        : '本次连接已通过；路由器规则检查仍有差异，请到「上游路由」核对。'
       if (!group.issues.includes(message)) group.issues.push(message)
     }
     // Components display either issues or the note. An unknown result with its

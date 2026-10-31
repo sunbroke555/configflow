@@ -9,6 +9,8 @@ import MihomoIPv6CheckSummary from './MihomoIPv6CheckSummary.vue'
 import type { IPv6Verification, IPv6VerificationResult, MihomoIPv6Readiness } from '@/types/mihomoIPv6'
 
 const props = defineProps<{ open: boolean; agentId: string; profileId: string; configRevision?: number; deploymentId?: string; auto?: boolean; disabled?: boolean; readiness?: MihomoIPv6Readiness }>()
+// Lets an embedding view (the IPv6 step list) follow the result shown here.
+const emit = defineEmits<{ result: [value: { verification: IPv6Verification | null; fresh: boolean }] }>()
 const verification = ref<IPv6Verification | null>(null)
 const pending = ref(false)
 const starting = ref(false)
@@ -36,7 +38,11 @@ function accept(data: IPv6VerificationResult, session: number, required = false)
     verification.value = null
     return false
   }
-  if (value.config_revision !== props.configRevision || (props.deploymentId && value.deployment_id !== props.deploymentId)) {
+  // A saved result of an older draft is only stale: with the current readiness
+  // the summary asks for a new verification. A run started here, or the result
+  // of one publication, must match exactly.
+  if ((value.config_revision !== props.configRevision || (props.deploymentId && value.deployment_id !== props.deploymentId))
+    && (required || props.deploymentId || !props.readiness)) {
     throw new Error('验收结果对应其他配置版本，请重新检查当前配置后再验证。')
   }
   if (!['running', 'ok', 'warning', 'error'].includes(value.status) || !['mihomo_runtime', 'client_path'].includes(value.scope)
@@ -101,6 +107,10 @@ watch(() => [props.open, props.agentId, props.profileId, props.configRevision, p
   if (!props.open || !props.agentId || !validRevision.value) return
   if (props.auto) void start()
   else void read(session)
+}, { immediate: true })
+// Report only settled reads, so a re-read does not flash an empty result.
+watch([verification, freshVerification, pending], ([value, fresh, reading]) => {
+  if (!reading) emit('result', { verification: value, fresh })
 }, { immediate: true })
 onUnmounted(() => { disposed = true; generation++; clearTimeout(timer) })
 </script>

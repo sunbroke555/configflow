@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 ROUTER_TYPES = ('ikuai', 'routeros')
 EDITABLE_FIELDS = ('name', 'type', 'endpoint', 'username', 'verify_tls', 'proxy_gateway_agent_id', 'dns_agent_id',
                    'ip_rule_sets', 'manage_return_routing', 'ros_policy_rule_sets', 'auto_rule_sync', 'rule_sync_interval',
-                   'dns_guard')
+                   'dns_guard', 'ipv6_pd_guard')
 
 
 class RouterValidationError(ValueError):
@@ -40,6 +40,8 @@ def public_view(router: Dict[str, Any]) -> Dict[str, Any]:
     result['ros_policy_rule_sets'] = list(router.get('ros_policy_rule_sets') or [])
     result['ip_rule_sets'] = static_rule_sets(router)
     result['dns_guard'] = guard_settings(router)
+    from backend.routers.ipv6_pd_guard import settings_of
+    result['ipv6_pd_guard'] = settings_of(router)
     result['has_password'] = bool(router.get('password'))
     return result
 
@@ -107,6 +109,15 @@ def normalize(payload: Dict[str, Any], existing: Optional[Dict[str, Any]] = None
         router['dns_guard'] = guard
     if existing and existing.get('dns_guard_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
         raise RouterValidationError('请先关闭强制 DNS 并发布撤销，再修改路由器类型或管理地址')
+    from backend.routers import ipv6_pd_guard
+    try:
+        pd_guard = ipv6_pd_guard.normalize_settings(router.get('ipv6_pd_guard'), router['type'])
+    except ipv6_pd_guard.SettingsError as error:
+        raise RouterValidationError(str(error)) from None
+    if pd_guard['enabled'] or 'ipv6_pd_guard' in router:
+        router['ipv6_pd_guard'] = pd_guard
+    if existing and existing.get('ipv6_pd_guard_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
+        raise RouterValidationError('请先关闭 IPv6 前缀变化保护并发布撤回，再修改路由器类型或管理地址')
     if existing and existing.get('ipv6_fakeip_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
         raise RouterValidationError('请先关闭 IPv6 Fake-IP 并发布撤销，再修改路由器类型或管理地址')
     if existing and existing.get('ipv6_routes_state') and any(router.get(key) != existing.get(key) for key in ('type', 'endpoint')):
@@ -136,7 +147,7 @@ def redact_routers(routers: Any) -> Any:
         if isinstance(item, dict):
             clean = {key: value for key, value in item.items()
                      if key not in ('password', 'last_probe', 'last_release', 'ros_policy_state', 'dns_guard_state', 'ipv6_fakeip_state',
-                                     'ipv6_routes_state')}
+                                     'ipv6_routes_state', 'ipv6_pd_guard_state')}
             if clean.get('username'):
                 clean['username'] = '[REDACTED]'
             if clean.get('endpoint'):
