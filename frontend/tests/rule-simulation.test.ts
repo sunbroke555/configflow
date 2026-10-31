@@ -74,6 +74,7 @@ beforeEach(() => {
     }
     return response(config, [])
   }
+  // 默认按系统要求减少动效：模拟直接出结果、不扫描；扫描路径见下方 stubMotion(false) 的用例
   vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
     matches: query.includes('prefers-reduced-motion'), media: query, onchange: null,
     addListener: vi.fn(), removeListener: vi.fn(),
