@@ -89,7 +89,7 @@ _repository: Optional[ProfileRepository] = None
 _CONFIG_CACHE: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
     'configflow_profile_cache', default=None
 )
-_CONFIG_BASELINES: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
+_CONFIG_BASELINES: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
     'configflow_profile_baselines', default=None
 )
 # 本请求已校验过的配置空间：(请求对象, 仓库, 提交数, {请求键: ID})。请求边界清除；
@@ -148,6 +148,29 @@ def resolved_profiles(request_object) -> Dict[Optional[str], str]:
     return memo[3]
 
 
+class _LazyBaseline:
+    """三方合并基线的来源：读取时的已提交文档，保存时才解析。
+
+    已提交的文档从不被原地修改（写事务先深拷贝再改），所以保留引用就能在
+    保存时得到与读取时完全相同的基线，纯读请求不必为它再深拷贝一份配置。
+    """
+    __slots__ = ('build',)
+
+    def __init__(self, build):
+        self.build = build
+
+
+def _set_baseline(key: str, value) -> None:
+    baselines = dict(_CONFIG_BASELINES.get() or {})
+    baselines[key] = value
+    _CONFIG_BASELINES.set(baselines)
+
+
+def _baseline(key: str):
+    value = (_CONFIG_BASELINES.get() or {}).get(key)
+    return value.build() if isinstance(value, _LazyBaseline) else value
+
+
 def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
     """Get a request-scoped compatibility view of a profile."""
     from backend.common.profile_context import resolve_profile_id
@@ -156,12 +179,15 @@ def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
     resolved_id = resolve_profile_id(profile_id)
     cache = _cache()
     if resolved_id not in cache:
-        cache[resolved_id] = get_repository().get_compat_config(resolved_id)
+        repository = get_repository()
+        config, source = repository.get_compat_config_with_source(resolved_id)
+        cache[resolved_id] = config
         baselines = _CONFIG_BASELINES.get()
         if baselines is None:
             baselines = {}
             _CONFIG_BASELINES.set(baselines)
-        baselines[resolved_id] = copy.deepcopy(cache[resolved_id])
+        baselines[resolved_id] = (_LazyBaseline(lambda: repository.compat_config_from(source, resolved_id))
+                                  if source is not None else copy.deepcopy(config))
     return cache[resolved_id]
 
 
@@ -195,7 +221,7 @@ def save_config(config: Optional[Dict[str, Any]] = None, profile_id: Optional[st
     resolved_id = resolve_profile_id(profile_id)
     if config is None:
         config = get_config(resolved_id)
-    baseline = (_CONFIG_BASELINES.get() or {}).get(resolved_id)
+    baseline = _baseline(resolved_id)
     get_repository().save_profile(resolved_id, config, baseline=baseline)
     reset_config_context()
     return True
@@ -207,7 +233,7 @@ def save_config_with_publish_guard(config: Dict[str, Any], service_type: str,
     from backend.common.profile_context import resolve_profile_id
 
     resolved_id = resolve_profile_id(profile_id)
-    baseline = (_CONFIG_BASELINES.get() or {}).get(resolved_id)
+    baseline = _baseline(resolved_id)
     _, revision = get_repository().save_profile(
         resolved_id, config, baseline=baseline, include_config_revision=True)
     reset_config_context()
@@ -260,16 +286,15 @@ def safe_import_config(new_data: Dict[str, Any], profile_id: Optional[str] = Non
 
 
 def get_shared_config() -> Dict[str, Any]:
-    result = get_repository().get_shared()
-    baselines = dict(_CONFIG_BASELINES.get() or {})
-    baselines['@shared'] = copy.deepcopy(result)
-    _CONFIG_BASELINES.set(baselines)
+    result, source = get_repository().get_shared_with_source()
+    _set_baseline('@shared', _LazyBaseline(lambda: copy.deepcopy(source)) if source is not None
+                  else copy.deepcopy(result))
     return result
 
 
 def save_shared_config(config: Dict[str, Any], baseline=None) -> bool:
     if baseline is None:
-        baseline = (_CONFIG_BASELINES.get() or {}).get('@shared')
+        baseline = _baseline('@shared')
     get_repository().save_shared(config, baseline=baseline)
     reset_config_context()
     return True
@@ -300,16 +325,15 @@ def update_shared_and_config_transaction(shared_updater, updater, profile_ids=No
 
 def get_system_config() -> Dict[str, Any]:
     """Return the global system section, including settings, backup and agents."""
-    result = get_repository().get_system()
-    baselines = dict(_CONFIG_BASELINES.get() or {})
-    baselines['@system'] = copy.deepcopy(result)
-    _CONFIG_BASELINES.set(baselines)
+    result, source = get_repository().get_system_with_source()
+    _set_baseline('@system', _LazyBaseline(lambda: copy.deepcopy(source)) if source is not None
+                  else copy.deepcopy(result))
     return result
 
 
 def save_system_config(config: Dict[str, Any], baseline=None) -> bool:
     if baseline is None:
-        baseline = (_CONFIG_BASELINES.get() or {}).get('@system')
+        baseline = _baseline('@system')
     get_repository().save_system(config, baseline=baseline)
     reset_config_context()
     return True

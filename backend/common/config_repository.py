@@ -966,6 +966,18 @@ class ProfileRepository:
             configuration_committed(self, previous, document)
 
     @contextmanager
+    def _committed_source(self):
+        """产出 (document, committed)。
+
+        committed 为真时 document 是已提交的一代：写事务只修改它的深拷贝，提交后
+        生成新的 Entry，所以调用方可以长期持有这个引用作为三方合并基线的来源，
+        但绝不能修改它。事务内读到的是仍会被修改的工作副本，committed 为假。
+        """
+        committed = getattr(self._local, 'document', None) is None
+        with self._document() as document:
+            yield document, committed
+
+    @contextmanager
     def _write_locked(self, *, locked_routers=(), policy_router=None, meta=None):
         """One write transaction; the caller holds .config.lock.
 
@@ -1334,6 +1346,11 @@ class ProfileRepository:
         with self._document() as document:
             return copy.deepcopy(document['shared'])
 
+    def get_shared_with_source(self):
+        """共享资源副本，以及它所读的已提交 shared 节（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return copy.deepcopy(document['shared']), (document['shared'] if committed else None)
+
     def create_rule_library_item(self, rule, content):
         """Commit a new source and its prepared cache, never replace an existing ID.
 
@@ -1447,6 +1464,11 @@ class ProfileRepository:
         with self._document() as document:
             return copy.deepcopy(document['system'])
 
+    def get_system_with_source(self):
+        """系统节副本，以及它所读的已提交 system 节（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return copy.deepcopy(document['system']), (document['system'] if committed else None)
+
     def update_system_transaction(self, updater):
         with self._document(write=True) as document:
             current = document['system']
@@ -1506,6 +1528,15 @@ class ProfileRepository:
     def get_compat_config(self, profile_id, *, resource_roots=None):
         with self._document() as document:
             return self._resolve_profile(document, profile_id, resource_roots)
+
+    def get_compat_config_with_source(self, profile_id):
+        """兼容视图，以及解析它的已提交文档（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return self._resolve_profile(document, profile_id), (document if committed else None)
+
+    def compat_config_from(self, document, profile_id):
+        """用 get_compat_config_with_source 返回的文档重新解析，结果与当时的视图相同。"""
+        return self._resolve_profile(document, profile_id)
 
     def export_profile(self, profile_id):
         return self.get_profile(profile_id)

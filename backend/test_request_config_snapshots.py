@@ -1,5 +1,7 @@
 """Per-request config reads: validate a profile once and copy no whole document, with the same semantics."""
 
+import copy
+
 import pytest
 from flask import Flask
 
@@ -22,6 +24,73 @@ def repository(tmp_path):
 @pytest.fixture
 def app():
     return Flask(__name__)
+
+
+def test_reads_and_saves_never_modify_the_committed_document(repository):
+    repository.update_shared_transaction(lambda shared: shared.update(
+        nodes=[{'id': 'n', 'name': 'Node'}],
+        rule_library=[{'id': 'r', 'name': 'Rule', 'enabled': {'custom': []}}],
+    ))
+    repository.update_profile_fields('default', {
+        'proxy_groups': [{'id': 'g', 'name': 'Group', 'type': 'select', 'manual_nodes': ['n']}],
+        'rule_configs': [{'id': 'rule', 'itemType': 'ruleset', 'library_rule_id': 'r'}],
+    })
+    entry = repository._read_entry()
+    before = copy.deepcopy(entry.document)
+
+    config = config_module.get_config('default')
+    config['proxy_groups'][0]['name'] = 'Changed'
+    config['rule_configs'][0]['library_enabled']['custom'].append('Changed')
+    shared = config_module.get_shared_config()
+    shared['nodes'][0]['name'] = 'Changed'
+    system = config_module.get_system_config()
+    system['system_config']['server_domain'] = 'https://changed.example'
+    config_module.save_config(config, 'default')
+    config_module.save_shared_config(shared)
+    config_module.save_system_config(system)
+
+    assert repository._read_entry() is not entry
+    assert entry.document == before
+    assert repository.get_profile('default')['proxy_groups'][0]['name'] == 'Changed'
+    assert repository.get_shared()['nodes'][0]['name'] == 'Changed'
+
+
+def test_profile_baseline_is_the_read_view_and_keeps_concurrent_edits(repository):
+    config = config_module.get_config('default')
+    read_view = copy.deepcopy(config)
+    config['mihomo']['custom_config'] = 'mixed-port: 7901'
+    repository.update_profile_fields('default', {'proxy_groups': [{'id': 'g', 'name': 'Concurrent', 'type': 'select'}]})
+
+    assert config_module._baseline('default') == read_view
+    config_module.save_config(config, 'default')
+    saved = repository.get_profile('default')
+    assert saved['mihomo']['custom_config'] == 'mixed-port: 7901'
+    assert saved['proxy_groups'] == [{'id': 'g', 'name': 'Concurrent', 'type': 'select'}]
+
+
+def test_shared_baseline_keeps_concurrent_edits(repository):
+    shared = config_module.get_shared_config()
+    shared['nodes'] = [{'id': 'mine', 'name': 'Mine'}]
+    repository.update_shared_transaction(lambda current: current.update(
+        subscriptions=[{'id': 's', 'name': 'Concurrent', 'url': 'https://example.test/s'}]))
+    config_module.save_shared_config(shared)
+    saved = repository.get_shared()
+    assert saved['nodes'] == [{'id': 'mine', 'name': 'Mine'}]
+    assert [item['id'] for item in saved['subscriptions']] == ['s']
+
+
+def test_transaction_reads_keep_an_eager_baseline(repository):
+    seen = {}
+
+    def update(profile):
+        seen['view'] = config_module.get_config('default')
+        seen['baseline'] = config_module._CONFIG_BASELINES.get()['default']
+        profile['name'] = 'Changed in transaction'
+
+    repository.update_profile_transaction('default', update)
+    # The transaction's working copy may still change: never keep it as a baseline source.
+    assert type(seen['baseline']) is dict
+    assert seen['baseline'] == seen['view'] and seen['baseline'] is not seen['view']
 
 
 def test_request_reuses_the_validated_profile(repository, app, monkeypatch):
