@@ -269,8 +269,23 @@
           </AgentRuleSync>
 
           <footer class="mt-auto flex items-center gap-2 border-t border-border pt-3.5 max-sm:pt-2">
+            <span v-if="syncOf(agent).diffable" class="mr-auto flex min-w-0 flex-1">
+              <!-- 服务端给出比较结论时可点开「待推送的变更」窗口；手机触区 44px。 -->
+              <button
+                type="button"
+                :class="cn('-mx-1 inline-flex min-w-0 max-w-full cursor-pointer items-center gap-0.5 rounded-sm px-1 text-[12px] transition-colors hover:bg-accent max-md:min-h-11', syncTone(agent))"
+                :title="syncOf(agent).title"
+                :aria-label="`${syncOf(agent).label}，查看「${agent.name}」这次推送会改动的内容`"
+                data-sync-diff
+                @click="pushDiffAgentId = agent.id"
+              >
+                <span class="truncate">{{ syncOf(agent).label }}</span>
+                <ChevronRight class="size-3.5 shrink-0 opacity-70" aria-hidden="true" />
+              </button>
+            </span>
             <span
-              :class="cn('mr-auto min-w-0 flex-1 truncate text-[12px]', syncOf(agent).tone === 'success' ? 'text-success-accent' : syncOf(agent).tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground')"
+              v-else
+              :class="cn('mr-auto min-w-0 flex-1 truncate text-[12px]', syncTone(agent))"
               :title="syncOf(agent).title"
             >
               {{ syncOf(agent).label }}
@@ -292,7 +307,7 @@
               v-if="agent.status === 'online'"
               variant="outline"
               size="sm"
-              :disabled="pushingIds.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id) || deployments[agent.id]?.status === 'rollback_failed'"
+              :disabled="pushBlocked(agent)"
               @click="pushConfig(agent)"
             >
               <Loader2 v-if="pushingIds.has(agent.id) || deploymentBusy(agent.id)" class="size-3.5 animate-spin" />
@@ -350,6 +365,16 @@
       @close="closeAgentSettings"
     />
     <DockerAgentUpdateDialog v-if="dockerUpdateAgent" :agent="dockerUpdateAgent" @close="dockerUpdateAgent = null" @refresh="loadAgents" />
+    <AgentPushDiff
+      v-if="pushDiffAgent"
+      :agent="pushDiffAgent"
+      :can-push="!pushBlocked(pushDiffAgent)"
+      :pushing="pushingIds.has(pushDiffAgent.id) || deploymentBusy(pushDiffAgent.id)"
+      :offline="pushDiffAgent.status !== 'online'"
+      @close="pushDiffAgentId = null"
+      @refresh="loadAgents"
+      @push="pushFromDiff(pushDiffAgent)"
+    />
     <AgentDeploymentHistory v-if="deploymentHistoryAgent" :agent="deploymentHistoryAgent" :progress="deployments[deploymentHistoryAgent.id]" :busy="deploymentBusy(deploymentHistoryAgent.id)" :blocked="upgradeBusy(deploymentHistoryAgent.id) || pushingIds.has(deploymentHistoryAgent.id) || rollbackConfirming" @close="deploymentHistoryAgentId = null" @rollback="requestRollback(deploymentHistoryAgent, $event)" />
 
     <GatewayInstallWizard
@@ -925,6 +950,7 @@ import GatewayInstallWizard from '@/components/agents/GatewayInstallWizard.vue'
 import {
   ChartLine,
   ChevronDown,
+  ChevronRight,
   CircleCheck,
   Copy,
   Download,
@@ -988,6 +1014,7 @@ import type { Agent } from '@/types'
 import { useProfileStore } from '@/stores/profile'
 import { createDeploymentId, deploymentNeedsNotice, useAgentDeployments, type AgentDeployment } from '@/composables/useAgentDeployments'
 import AgentDeploymentHistory from '@/components/agents/AgentDeploymentHistory.vue'
+import AgentPushDiff from '@/components/agents/AgentPushDiff.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentFailureDetails from '@/components/agents/AgentFailureDetails.vue'
 import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
@@ -2493,6 +2520,18 @@ const pushOne = async (agent: Agent, quiet = false): Promise<PushOutcome> => {
   }
 }
 
+// 卡片「推送」与「待推送的变更」窗口里的「推送」共用同一可用条件。
+const pushBlocked = (agent: Agent) => pushingIds.value.has(agent.id) || upgradeBusy(agent.id) || deploymentBusy(agent.id)
+  || deployments[agent.id]?.status === 'rollback_failed'
+const pushDiffAgentId = ref<string | null>(null)
+const pushDiffAgent = computed(() => agents.value.find(agent => agent.id === pushDiffAgentId.value))
+// 关闭窗口后沿用卡片的推送流程，进度显示在卡片上。
+const pushFromDiff = (agent: Agent) => {
+  if (agent.status !== 'online' || pushBlocked(agent)) return
+  pushDiffAgentId.value = null
+  void pushConfig(agent)
+}
+
 const pushConfig = async (agent: Agent) => {
   if (deploymentBusy(agent.id)) return
   if ((await pushOne(agent)) === 'done') {
@@ -2770,6 +2809,10 @@ const activeProfileName = computed(
 )
 
 const syncOf = (agent: Agent) => getAgentConfigSync(agent, revisionOf(agent.profile_id), deployments[agent.id])
+const syncTone = (agent: Agent) => {
+  const tone = syncOf(agent).tone
+  return tone === 'success' ? 'text-success-accent' : tone === 'warning' ? 'text-warning-accent' : 'text-muted-foreground'
+}
 
 const topoColumns = computed<FlowColumn[]>(() => [
   { key: 'hub', title: '配置中心', nodes: [{ id: 'hub', title: 'ConfigFlow', kind: 'hub', fit: true }] },

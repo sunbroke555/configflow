@@ -1331,6 +1331,41 @@ def _prepare_content_bundle(agent, config_data, *, base_url='', deployment_id=No
                                           deployment_id=deployment_id, prefer_cached=True)['bundle']
 
 
+@bp.route('/<agent_id>/push-diff', methods=['GET'])
+@require_auth
+def agent_push_diff(agent_id):
+    """Read-only: what pushing now would change against the last applied bundle.
+
+    Shares the background comparison (and its cache) with the list's sync
+    status; answers ``checking`` until a worker has prepared the candidate.
+    """
+    from backend.agents.content_sync import get_push_diff
+    agent = get_agent_manager().get_agent_by_id(agent_id)
+    if not agent:
+        return jsonify(success=False, message='找不到这台 Agent，请刷新设备列表。'), 404
+    repository = get_repository()
+    profile_id = agent.get('profile_id') or get_default_profile_id()
+    try:
+        config = repository.get_compat_config(profile_id)
+    except ProfileRepositoryError:
+        result = {'status': 'unknown', 'reason': 'profile_unavailable'}
+    else:
+        result = get_push_diff(agent, config, (agent.get('applied_content') or {}).get('base_url', ''),
+                               _prepare_content_bundle, scope=str(repository.data_dir), repository=repository)
+    result = dict(result)
+    result['service_type'] = agent.get('service_type', 'mihomo')
+    if agent.get('applied_content'):
+        result['baseline'] = {'pushed_at': agent.get('pushed_at'), 'config_revision': agent.get('config_revision')}
+    raw = (result.get('config') or {}).get('raw') or {}
+    if raw.get('text'):
+        # Tokens inside the text are already masked; this only replaces a
+        # stored credential still present, instead of blanking the whole diff.
+        raw['text'] = redact_secrets_in_text(raw['text'])
+    response = jsonify(result)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @bp.route('/<agent_id>/rule-sync', methods=['GET', 'PUT'])
 @require_auth
 def agent_rule_sync(agent_id):
