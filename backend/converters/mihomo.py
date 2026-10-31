@@ -309,7 +309,8 @@ def inject_region_probe(mihomo_config: Dict[str, Any], port: int) -> bool:
 
 def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                            sync_lan_hosts: bool = False, *, preflight_providers: bool = True,
-                           region_probe: bool = False, report: Optional[Dict[str, Any]] = None) -> str:
+                           region_probe: bool = False, report: Optional[Dict[str, Any]] = None,
+                           mihomo_core_version: Optional[str] = None) -> str:
     """生成 Mihomo YAML 配置
 
     Args:
@@ -317,7 +318,10 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
             顶层 hosts。仅推送给局域网内 Agent 时为 True；订阅/下载
             配置保持 False，避免漫游设备在外网解析到内网 IP。
         report: 传入字典时写入 ``subscription_hosts``：从订阅合并、忽略的
-            hosts 条目及原因，供预览展示。
+            hosts 条目及原因，供预览展示；有「域名 → 域名」映射时含 ``dns``
+            （被映射的节点域名改由本机 DNS 监听解析、映射目标加入 Fake-IP 过滤的结果）。
+        mihomo_core_version: 目标设备上报的 Mihomo 版本（推送给 Agent 时已知才传）；
+            早于 v1.19.20 时不写 ``proxy-server-nameserver-policy``。
     """
 
     from backend.utils.proxy_chains import lower_proxy_chains
@@ -830,8 +834,16 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
 
     # 订阅自带的 hosts：只合并本配置实际下发节点自己的 server 域名
     from backend.utils.subscription_hosts import log_report, merge_subscription_hosts
+    merged_hosts = {}
     hosts_report = merge_subscription_hosts(mihomo_config, config_data, user_keys=user_host_keys,
-                                            mosdns_keys=mosdns_host_keys, inline_proxies=inline_proxies)
+                                            mosdns_keys=mosdns_host_keys, inline_proxies=inline_proxies,
+                                            merged_out=merged_hosts)
+    # 「域名 → 域名」映射只有节点域名经本机 DNS 监听解析时才生效：只把被映射的节点域名
+    # 交给监听（proxy-server-nameserver-policy）；没有这类映射时不做任何改动
+    from backend.utils.proxy_server_dns import apply_node_dns
+    proxy_dns = apply_node_dns(mihomo_config, merged_hosts, core_version=mihomo_core_version)
+    if proxy_dns is not None:
+        hosts_report['dns'] = proxy_dns
     log_report(logical_config.get('profile_id') or '', hosts_report)
     if report is not None:
         report['subscription_hosts'] = hosts_report

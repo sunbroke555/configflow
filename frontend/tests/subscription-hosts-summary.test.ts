@@ -5,7 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import GenerateStudio from '@/components/generate/GenerateStudio.vue'
 import SubscriptionHostsSummary from '@/components/generate/SubscriptionHostsSummary.vue'
 import { generateApi, ruleSetApi, statsApi } from '@/api'
-import type { SubscriptionHostsReport } from '@/types'
+import type { SubscriptionHostsDns, SubscriptionHostsReport } from '@/types'
 
 vi.mock('@/api', () => ({
   agentApi: { pushConfig: vi.fn(), getDeployment: vi.fn() },
@@ -28,17 +28,121 @@ const report = (overrides: Partial<SubscriptionHostsReport> = {}): SubscriptionH
   ...overrides,
 })
 
+const dns = (overrides: Partial<SubscriptionHostsDns> = {}): SubscriptionHostsDns => ({
+  mapped: 3,
+  applied: true,
+  listener: 'udp://127.0.0.1:1053',
+  policy: [
+    { domain: 'hk.example.net', target: 'hk.example.org', source: 'configflow' },
+    { domain: 'jp.example.net', target: 'jp.example.org', source: 'configflow' },
+    { domain: 'de.example.net', target: 'de.example.org', source: 'configflow' },
+  ],
+  filter: ['+.example.org'],
+  targets_filtered: 3,
+  targets_covered: 0,
+  fake_ip: 'blacklist',
+  skipped: [],
+  warnings: [],
+  notes: [],
+  min_version: 'v1.19.20',
+  ...overrides,
+})
+
+const text = (wrapper: VueWrapper, selector: string) => wrapper.get(selector).text().replace(/\s+/g, ' ').trim()
+
 const wrappers: VueWrapper[] = []
 afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); document.body.innerHTML = ''; vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('subscription hosts summary', () => {
-  it('states merged and ignored counts and explains domain mappings in plain sight', () => {
+  it('states merged and ignored counts; a mapping that ends in an IP needs nothing more', () => {
     const wrapper = mount(SubscriptionHostsSummary, { props: { report: report() } })
     wrappers.push(wrapper)
     expect(wrapper.get('[data-subscription-hosts-counts]').text().replace(/\s+/g, '')).toBe('已合并2条，忽略2条')
     expect(wrapper.get('[data-subscription-hosts-domain-note]').text())
-      .toBe('其中 1 条是「域名 → 域名」：Mihomo 连接节点时不采用这类映射，节点仍连接原域名解析到的地址。')
+      .toBe('其中 1 条是「域名 → 域名」，在 hosts 内最终指向 IP，Mihomo 直接连接这个 IP。')
+    expect(wrapper.find('[data-subscription-hosts-dns]').exists()).toBe(false)
     expect(wrapper.find('#subscription-hosts-items').exists()).toBe(false)
+  })
+
+  it('says which node domains go to the DNS listener and lists the entries read-only on request', async () => {
+    const wrapper = mount(SubscriptionHostsSummary, { props: { report: report({ dns: dns() }) }, attachTo: document.body })
+    wrappers.push(wrapper)
+    expect(wrapper.find('[data-subscription-hosts-domain-note]').exists()).toBe(false)
+    expect(text(wrapper, '[data-subscription-hosts-dns] p'))
+      .toBe('3 个被映射的节点域名改由本机 DNS 监听 127.0.0.1:1053 解析，3 个映射目标已加入 Fake-IP 过滤。')
+    const toggle = wrapper.get('button[aria-controls="subscription-hosts-dns-entries"]')
+    expect(toggle.text()).toBe('查看条目')
+    expect(wrapper.find('#subscription-hosts-dns-entries').exists()).toBe(false)
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    const groups = wrapper.findAll('#subscription-hosts-dns-entries [data-dns-group]')
+    expect(groups.map(group => [group.get('p').text(), group.findAll('li').map(li => li.text().replace(/\s+/g, ' '))])).toEqual([
+      ['proxy-server-nameserver-policy：交给本机 DNS 监听解析',
+        ['hk.example.net → hk.example.org', 'jp.example.net → jp.example.org', 'de.example.net → de.example.org']],
+      ['fake-ip-filter：新增条目', ['+.example.org']],
+    ])
+    // Read-only: nothing to edit or remove here.
+    expect(wrapper.findAll('#subscription-hosts-dns-entries input, #subscription-hosts-dns-entries button')).toHaveLength(0)
+  })
+
+  it('names conflicts, old cores and targets the filter already covered', async () => {
+    const conflict = '你已为 de.example.net 写了 proxy-server-nameserver-policy，保留你的设置；这条映射对该节点不生效'
+    const wrapper = mount(SubscriptionHostsSummary, {
+      props: { report: report({ dns: dns({
+        policy: dns().policy.slice(0, 2).map((item, i) => ({ ...item, source: i ? 'user' : 'configflow' })),
+        filter: [], targets_filtered: 0, targets_covered: 2,
+        skipped: [{ domain: 'de.example.net', target: 'de.example.org', reason: 'policy_conflict' }],
+        warnings: [conflict], outdated_agents: [{ name: '客厅软路由', version: 'v1.19.10' }],
+      }) }) },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+    expect(text(wrapper, '[data-subscription-hosts-dns] p')).toBe(
+      '2 个被映射的节点域名改由本机 DNS 监听 127.0.0.1:1053 解析，2 个映射目标已在 fake-ip-filter 里。'
+      + '其中 1 个是你写的 proxy-server-nameserver-policy，已指向这个监听，保留原值。')
+    const warnings = wrapper.findAll('[data-subscription-hosts-dns-warning]')
+    expect(warnings.map(item => item.text().replace(/\s+/g, ' '))).toEqual([
+      conflict,
+      'Agent「客厅软路由」上报的 Mihomo 内核为 v1.19.10，早于 v1.19.20：推送给它的配置不加 proxy-server-nameserver-policy，映射在这台设备上不生效，升级内核后重新推送。',
+    ])
+    expect(warnings.every(item => item.classes().includes('text-warning-accent'))).toBe(true)
+    await wrapper.get('button[aria-controls="subscription-hosts-dns-entries"]').trigger('click')
+    expect(wrapper.findAll('#subscription-hosts-dns-entries [data-dns-group]').map(group => group.attributes('data-dns-group'))).toEqual(['policy'])
+    expect(wrapper.get('#subscription-hosts-dns-entries li:last-child').text()).toContain('（你写的）')
+  })
+
+  it('says why nothing changed when the mapping cannot apply', () => {
+    const warning = '没有写 proxy-server-nameserver：Mihomo 要求先有它才接受 proxy-server-nameserver-policy，否则拒绝加载配置；ConfigFlow 不替你填写，在基础配置的 dns 里写上（例如公网 DoH）后重新生成'
+    const wrapper = mount(SubscriptionHostsSummary, {
+      props: { report: report({ dns: dns({ applied: false, policy: [], filter: [], targets_filtered: 0, fake_ip: null, warnings: [warning] }) }) },
+    })
+    wrappers.push(wrapper)
+    expect(text(wrapper, '[data-subscription-hosts-dns]')).toBe('其中 3 条「域名 → 域名」映射对节点连接不生效，节点仍连接左侧域名自己的地址：')
+    const shown = wrapper.get('[data-subscription-hosts-dns-warning]')
+    expect(shown.text()).toBe(warning)
+    expect(shown.classes()).toContain('text-warning-accent')
+    expect(wrapper.find('button[aria-controls="subscription-hosts-dns-entries"]').exists()).toBe(false)
+  })
+
+  it('outside Fake-IP only the policy is added, with notes kept visible', async () => {
+    const note = '需要 Mihomo v1.19.20 或更新：更旧的内核会忽略 proxy-server-nameserver-policy，这些节点照旧连接左侧域名自己的地址'
+    const wrapper = mount(SubscriptionHostsSummary, {
+      props: { report: report({ dns: dns({ fake_ip: 'not_needed', filter: [], targets_filtered: 0, notes: [note] }) }) },
+      attachTo: document.body,
+    })
+    wrappers.push(wrapper)
+    expect(text(wrapper, '[data-subscription-hosts-dns] p'))
+      .toBe('3 个被映射的节点域名改由本机 DNS 监听 127.0.0.1:1053 解析。')
+    expect(wrapper.text()).toContain(note)
+    await wrapper.get('button[aria-controls="subscription-hosts-dns-entries"]').trigger('click')
+    expect(wrapper.findAll('#subscription-hosts-dns-entries [data-dns-group]')).toHaveLength(1)
+  })
+
+  it('names real-ip rules in rule mode', async () => {
+    const wrapper = mount(SubscriptionHostsSummary, { props: { report: report({ dns: dns({ fake_ip: 'rule' }) }) }, attachTo: document.body })
+    wrappers.push(wrapper)
+    await wrapper.get('button[aria-controls="subscription-hosts-dns-entries"]').trigger('click')
+    expect(wrapper.get('[data-dns-group="filter"] p').text()).toBe('fake-ip-filter：新增 real-ip 规则')
   })
 
   it('lists each entry with its subscription, value and the reason it was ignored', async () => {

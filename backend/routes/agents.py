@@ -1247,9 +1247,11 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)
     provider_downloads, custom_files, prepared_providers = [], [], []
     if service_type == 'mihomo':
+        from backend.utils.proxy_server_dns import reported_core_version
         config_content = generate_mihomo_config(config_data, base_url=base_url,
                                                 sync_lan_hosts=True, preflight_providers=False,
-                                                region_probe=bool(agent.get('domain_discovery_enabled')))
+                                                region_probe=bool(agent.get('domain_discovery_enabled')),
+                                                mihomo_core_version=reported_core_version(agent))
         try:
             main = yaml.safe_load(config_content)
         except yaml.YAMLError as exc:

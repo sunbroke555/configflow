@@ -13,11 +13,12 @@ domains, for example ``node.example.net: entry.example.net``. Mihomo reads only
 * Hand-written Mihomo ``hosts`` win, then MosDNS hosts synced for LAN Agents,
   then subscriptions in the order of the subscription list.
 
-Mihomo (checked on v1.19.33) uses ``hosts`` for proxy-server addresses only
-when the lookup ends in IP addresses. A domain-to-domain entry changes the
-answers of Mihomo's DNS listener and connection targets, but a node whose
-server is that domain is still dialed at the domain's own DNS address. The
-merge keeps the subscription's semantics either way and reports such entries.
+Mihomo (checked on v1.19.33) follows ``hosts`` for a proxy server inside its
+own lookup only while the chain ends in IP addresses; for a domain-to-domain
+entry it asks DNS for the node's original domain. Its DNS listener treats the
+same entry as a CNAME, so the mapping applies once that node's domain is
+resolved through the listener: ``backend.utils.proxy_server_dns`` routes just
+the mapped node domains there with ``proxy-server-nameserver-policy``.
 """
 import hashlib
 import ipaddress
@@ -371,8 +372,11 @@ def _emit(value):
     return value
 
 
-def merge_subscription_hosts(mihomo_config, config, *, user_keys, mosdns_keys, inline_proxies):
-    """Merge permitted subscription hosts into ``mihomo_config``; returns a report."""
+def merge_subscription_hosts(mihomo_config, config, *, user_keys, mosdns_keys, inline_proxies, merged_out=None):
+    """Merge permitted subscription hosts into ``mihomo_config``; returns a report.
+
+    ``merged_out`` receives the merged ``{domain: value}`` (values as stored).
+    """
     used, subscriptions, index_of = _used_domains(mihomo_config, config, inline_proxies)
     hosts = mihomo_config.get('hosts')
     hosts = dict(hosts) if isinstance(hosts, dict) else {}
@@ -429,6 +433,8 @@ def merge_subscription_hosts(mihomo_config, config, *, user_keys, mosdns_keys, i
                                  'ignored': len(index['entries']) - accepted + index['skipped_count']})
     if merged:
         mihomo_config['hosts'] = hosts
+    if merged_out is not None:
+        merged_out.update(merged)
     domain_mapped = sum(1 for value in merged.values() if isinstance(value, str))
     return {'merged': len(merged), 'ignored': ignored, 'domain_mapped': domain_mapped,
             'subscriptions': per_subscription, 'items': items}

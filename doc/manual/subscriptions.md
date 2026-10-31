@@ -91,11 +91,33 @@ Mihomo 从订阅（proxy-provider）里只读取节点，不读这一段。Confi
 
 在[配置生成](generate.md)生成 Mihomo 后，结果区显示「订阅 hosts 已合并 N 条，忽略 M 条」，点「详情」查看每条的来源订阅和忽略原因：
 
-![配置生成结果区的订阅 hosts：合并 2 条、忽略 2 条，并列出忽略原因](../img/guide/subscription-hosts-summary.png)
+![配置生成结果区的订阅 hosts：合并 2 条、忽略 2 条；1 个被映射的节点域名改由本机 DNS 监听解析，1 个映射目标已加入 Fake-IP 过滤，展开了条目和详情](../img/guide/subscription-hosts-summary.png)
 
-**「域名 → 域名」的效果：** Mihomo（实测 v1.19.33）连接节点时，只采用最终指向 IP 的 hosts 条目，与 `dns.use-hosts` 开关无关。`node-2.example.net: 203.0.113.10` 会让节点改连 `203.0.113.10`；`node-1.example.net: entry-1.example.net` 不会改变节点连接的地址，节点仍连接 `node-1.example.net` 自己解析到的地址，和把原订阅直接导入 Mihomo 时一样。这类条目只影响 Mihomo DNS 对该域名的应答，以及以它为目标的连接。结果区会单独写明这类条目的数量。
+### 域名到域名的映射怎样对节点生效
 
-**订阅更新后：** 节点由设备按「订阅同步间隔」自己拉取，但 hosts 写在主配置里，只有重新发布才会更新。订阅更新后 hosts 有变化时，Agent 卡片立即显示「有变更，待推送」，推送后生效；通过配置 URL 使用的客户端在下次更新配置时得到新的 hosts。规则自动同步不会带上 hosts 的变化。
+Mihomo（实测 v1.19.33）连接节点前，会先在 hosts 里顺着映射查找节点域名：最终落到 IP（例如 `node-2.example.net: 203.0.113.10`），就直接连接这个 IP；最终落到一个 hosts 里没有 IP 的域名（例如 `node-1.example.net: entry-1.example.net`），就放弃映射，改用节点原来的域名去问 DNS。Mihomo 自己的 DNS 监听（`dns.listen`）则把「域名 → 域名」当作 CNAME，再完整解析右边的域名。所以只有 `node-1.example.net` 经本机 DNS 监听解析时，节点才会连接 `entry-1.example.net` 的地址。
+
+合并后至少有一条「域名 → 域名」条目最终没有落到 IP 时，ConfigFlow 在生成的配置里只补两处：
+
+| 设置 | 做法 |
+| --- | --- |
+| `dns.proxy-server-nameserver-policy` | 为每个被映射的节点域名加一条「节点域名: 本机 DNS 监听」，例如 `node-1.example.net: udp://127.0.0.1:1053`。监听地址从 `dns.listen` 推导：`0.0.0.0:端口`、`[::]:端口`、`:端口` 写成 `udp://127.0.0.1:端口`，具体 IP 原样使用。其他节点照旧用你的 `proxy-server-nameserver` 解析，不经过监听。 |
+| `dns.fake-ip-filter` | 只在 `enhanced-mode: fake-ip` 时加：只加入映射目标（`entry-1.example.net`），否则监听会把目标解析成假地址，节点就连不上。同一个可注册域名下的多个目标合并成 `+.共同后缀`，公共后缀（包括 `github.io` 这类）不会合并成通配。已被你的过滤条目覆盖的目标不重复加入；没写过 `fake-ip-filter` 时先保留 Mihomo 的默认条目。 |
+
+你手写的 `proxy-server-nameserver` 一律保留原值。下面这些情况不改动，结果区写明原因：没有开启 DNS、没有 `dns.listen`、监听地址不是「IP:端口」、`dns.use-hosts: false`（监听不用 hosts）、`fake-ip-filter` 不是列表、手写的 `proxy-server-nameserver-policy` 不是映射，以及**没有写 `proxy-server-nameserver`**：Mihomo 规定设置了 `proxy-server-nameserver-policy` 就必须有 `proxy-server-nameserver`，否则拒绝加载整份配置，ConfigFlow 不替你填写。
+
+几种特殊情况：
+
+- **你已为同一个节点域名写了 `proxy-server-nameserver-policy`：** 保留你的设置，结果区提示冲突，这条映射对该节点不生效；你写的值本来就指向本机 DNS 监听时不算冲突，照常加入映射目标。通配条目（如 `+.example.net`）覆盖到节点域名也算。`geosite:`、`rule-set:` 条目无法检查，Mihomo 按顺序先匹配它们。
+- **`fake-ip-filter-mode: whitelist`：** 列表里的域名才返回假地址，ConfigFlow 不改动列表。名单覆盖了某个映射目标时，改走本机 DNS 监听会让这个节点拿到假地址，所以这条映射不加 policy，结果区写明原因。
+- **`fake-ip-filter-mode: rule`：** 在最前面加入映射目标的 `DOMAIN,…,real-ip` 或 `DOMAIN-SUFFIX,…,real-ip` 规则。
+- **`redir-host` 等非 Fake-IP 模式：** 只加 policy，不加过滤。
+
+**内核版本：** `proxy-server-nameserver-policy` 从 Mihomo v1.19.20 开始支持。更旧的内核不报错，但会忽略这一项，映射不生效，节点照旧连接左侧域名自己的地址，和没有这项功能时一样。Agent 开启了域名发现时会上报 Mihomo 版本：推送给上报版本早于 v1.19.20 的 Agent 时，ConfigFlow 不加 policy 和过滤，生成结果区点名提示这台 Agent，升级内核后重新推送即可。拿不到版本时（没开域名发现、通过配置 URL 使用的客户端）照常加入，并在结果区注明版本要求。
+
+生成后，结果区写明「N 个被映射的节点域名改由本机 DNS 监听解析，M 个映射目标已加入 Fake-IP 过滤」，点「查看条目」只读列出每个节点域名对应的映射目标和新增的过滤条目。没有这类映射时，生成的配置与以前完全相同。
+
+**订阅更新后：** 节点由设备按「订阅同步间隔」自己拉取；hosts、policy 和映射目标写在主配置里，只有重新发布才会更新。订阅里用同一个被映射域名的新节点不用推送就能用（policy 按域名生效）；订阅更新后 hosts 有变化时，Agent 卡片立即显示「有变更，待推送」，推送后生效；通过配置 URL 使用的客户端在下次更新配置时得到新的 hosts。规则自动同步不会带上 hosts 和 `dns` 段的变化。
 
 ## 常见问题
 
@@ -103,6 +125,7 @@ Mihomo 从订阅（proxy-provider）里只读取节点，不读这一段。Confi
 - **只剩零个节点：**先暂时清空「节点筛选」再更新；筛选在来源这一层过严时，所有使用者都会受影响。
 - **服务商更新了，设备还没变：**分别检查面板的更新任务和设备的来源同步间隔，不要只连续点生成。
 - **订阅里的 hosts 没出现在配置里：**先在「配置生成」结果区的「订阅 hosts」详情里看原因：只有本配置所用节点自己的域名才会合并；已有的订阅要重新更新一次才会保存 hosts。
+- **「域名 → 域名」映射对节点不生效：**看结果区「订阅 hosts」下方的原因，常见的是没有写 `proxy-server-nameserver`、没有开启 DNS 或 `dns.listen`，或你自己为这个节点域名写了 `proxy-server-nameserver-policy`；设备上的 Mihomo 早于 v1.19.20 时会忽略 policy。做法见[域名到域名的映射怎样对节点生效](#域名到域名的映射怎样对节点生效)。
 - **删除被阻止：**根据提示进入对应配置空间、聚合或节点库解除引用；不要试图靠切换当前配置绕过共享资源保护。
 
 下一步：[策略组](proxy-groups.md)；要把多个来源合在一起，读 [订阅聚合](subscription-aggregation.md)。
