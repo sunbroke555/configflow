@@ -40,6 +40,7 @@
           :open="customConfigDialogVisible"
           :profile-id="profileId"
           :preferred-agent-id="agentSettings?.agentId"
+          :initial-targets="agentSettings?.targets"
           :service-type="currentConfigType"
           :disabled="disabled"
           :save="() => saveCustomConfig(false)"
@@ -76,6 +77,7 @@
       :profile-id="profileId"
       :initial-tab="oxidnsInitialTab"
       :preferred-agent-id="agentSettings?.agentId"
+      :initial-targets="agentSettings?.targets"
       :context-label="settingsContextLabel"
       :back-label="settingsBackLabel"
     />
@@ -580,6 +582,7 @@
             :open="mosdnsSettingsDialogVisible"
             :profile-id="profileId"
             :preferred-agent-id="agentSettings?.agentId"
+            :initial-targets="agentSettings?.targets"
             service-type="mosdns"
             :disabled="disabled"
             :save="() => saveMosdnsSettings(false)"
@@ -1920,22 +1923,30 @@ const showMosdnsSettingsDialog = async () => {
   mosdnsOxidnsDns.value = null
   void loadMosdnsOxidnsDns()
   try {
-    // 加载规则集列表和规则列表
-    await Promise.all([loadRuleSets(), loadRules()])
+    // 规则集列表、规则列表与 MosDNS 各项设置互不依赖，一次并行读取
+    const [, , customConfigResponse, rulesetResponse, customMatchResponse, dnsResponse, logResponse, apiResponse, cacheResponse] = await Promise.all([
+      loadRuleSets(),
+      loadRules(),
+      customConfigApi.getMosdns(profileId),
+      api.get('/mosdns/rulesets', profileOptions),
+      api.get('/mosdns/custom-matches', profileOptions),
+      api.get('/mosdns/dns-servers', profileOptions),
+      api.get('/mosdns/log-settings', profileOptions),
+      api.get('/mosdns/api-settings', profileOptions),
+      api.get('/mosdns/cache-settings', profileOptions)
+    ])
+    if (!pageActive) return
 
     // 加载自定义配置
-    const customConfigResponse = await customConfigApi.getMosdns(profileId)
     mosdnsCustomConfig.value = customConfigResponse.data.config || ''
 
     // 加载规则集配置
-    const rulesetResponse = await api.get('/mosdns/rulesets', profileOptions)
     mosdnsDirectRulesets.value = rulesetResponse.data.direct_rulesets || []
     mosdnsProxyRulesets.value = rulesetResponse.data.proxy_rulesets || []
     mosdnsDirectRules.value = rulesetResponse.data.direct_rules || []
     mosdnsProxyRules.value = rulesetResponse.data.proxy_rules || []
 
     // 加载自定义 match 配置
-    const customMatchResponse = await api.get('/mosdns/custom-matches', profileOptions)
     const fetchedMatches = Array.isArray(customMatchResponse.data?.custom_matches)
       ? customMatchResponse.data.custom_matches
       : []
@@ -1951,7 +1962,6 @@ const showMosdnsSettingsDialog = async () => {
     }))
 
     // 加载 DNS 服务器配置
-    const dnsResponse = await api.get('/mosdns/dns-servers', profileOptions)
     mosdnsLocalDns.value = dnsResponse.data.local_dns || ''
     mosdnsRemoteDns.value = dnsResponse.data.remote_dns || ''
     mosdnsFallbackDns.value = dnsResponse.data.fallback_dns || ''
@@ -1963,19 +1973,15 @@ const showMosdnsSettingsDialog = async () => {
     mosdnsCustomHosts.value = dnsResponse.data.custom_hosts || ''
 
     // 加载日志配置
-    const logResponse = await api.get('/mosdns/log-settings', profileOptions)
     mosdnsLogEnabled.value = logResponse.data.log_enabled !== undefined ? logResponse.data.log_enabled : true
     mosdnsLogLevel.value = logResponse.data.log_level || 'info'
     mosdnsLogFile.value = logResponse.data.log_file || './mosdns.log'
 
     // 加载 API 配置
-    const apiResponse = await api.get('/mosdns/api-settings', profileOptions)
     mosdnsApiEnabled.value = apiResponse.data.api_enabled !== undefined ? apiResponse.data.api_enabled : true
     mosdnsApiAddress.value = apiResponse.data.api_address || '0.0.0.0:8338'
 
     // 加载缓存配置
-    const cacheResponse = await api.get('/mosdns/cache-settings', profileOptions)
-    if (!pageActive) return
     mosdnsCacheEnabled.value = cacheResponse.data.cache_enabled !== undefined ? Boolean(cacheResponse.data.cache_enabled) : true
     mosdnsCacheSize.value = Number(cacheResponse.data.cache_size ?? 10240)
     mosdnsCacheLazyTtl.value = Number(cacheResponse.data.cache_lazy_ttl ?? 21600)

@@ -13,7 +13,7 @@
     @save="save"
   >
     <template #footer="{ disabled }">
-      <SettingsPublishBar :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" service-type="oxidns" :disabled="disabled" :save="() => save(false)" @save-draft="save()" />
+      <SettingsPublishBar :open="open" :profile-id="profileId" :preferred-agent-id="preferredAgentId" :initial-targets="initialTargets" service-type="oxidns" :disabled="disabled" :save="() => save(false)" @save-draft="save()" />
     </template>
     <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 p-3 md:p-5" @input.capture="markEdited">
       <p v-if="contextLabel" class="m-0 break-words text-xs text-muted-foreground">{{ contextLabel }}</p>
@@ -104,9 +104,12 @@ import LoadingRows from '@/components/common/LoadingRows.vue'
 import { Button } from '@/components/ui/button'
 import SettingsWorkspace from './SettingsWorkspace.vue'
 import SettingsPublishBar from './SettingsPublishBar.vue'
+import type { AgentSettingsTargets } from '@/lib/agentSettings'
 
 const props = defineProps<{
   open: boolean; profileId: string; preferredAgentId?: string; initialFeature?: string; contextLabel?: string; backLabel?: string
+  /** 入口刚读取的设备与配置空间列表，交给发布栏首次打开时沿用 */
+  initialTargets?: AgentSettingsTargets
   /** 打开后直接进入的内容：config 为完整参数（定位到主执行链），files 为附加文件 */
   initialTab?: 'config' | 'files'
 }>()
@@ -308,6 +311,7 @@ async function load() {
   resetCommon()
   invalidateValidation()
   Object.keys(editorErrors).forEach(key => delete editorErrors[key])
+  let validation: Promise<boolean> | undefined
   try {
     const config = await oxidnsApi.getSettings(props.profileId)
     if (version !== loadVersion) return
@@ -320,6 +324,8 @@ async function load() {
     savedSource.value = JSON.stringify(settings.value)
     tab.value = 'config'
     nativeView.value = 'common'
+    // 常用设置与配置检查读的是同一份草稿，彼此不依赖，同时发出
+    validation = validateDraft()
     await projectCommon()
   } catch (error: any) {
     if (version === loadVersion) loadError.value = error.response?.data?.message || '加载 OxiDNS 配置失败，请重试。'
@@ -328,7 +334,7 @@ async function load() {
       loading.value = false
       if (settings.value && !loadError.value) {
         await showInitialTab()
-        await validateDraft()
+        await validation
       }
     }
   }

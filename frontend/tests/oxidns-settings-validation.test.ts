@@ -5,7 +5,7 @@ import OxidnsNativeEditor from '@/components/generate/OxidnsNativeEditor.vue'
 import OxidnsConfigNavigation from '@/components/generate/OxidnsConfigNavigation.vue'
 import { agentApi, profileApi, oxidnsApi } from '@/api'
 
-import { config, settings, render, button, click, settleValidation, input, savedPayload, views, worker, yamlInput } from './helpers/oxidns-settings'
+import { config, projection, settings, render, button, click, settleValidation, input, savedPayload, views, worker, yamlInput } from './helpers/oxidns-settings'
 
 vi.mock('@/api', () => ({
   agentApi: { getAll: vi.fn(), summaries: vi.fn(), pushConfig: vi.fn(), getDeployment: vi.fn(), activateDeployment: vi.fn() },
@@ -98,6 +98,19 @@ describe('unified OxiDNS profile settings', () => {
     expect(document.body.textContent).toContain('规则检查通过')
     await click('保存草稿')
     expect(oxidnsApi.saveSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('checks the loaded draft while the common settings are still being read', async () => {
+    let finishProjection!: () => void
+    vi.mocked(oxidnsApi.readCommonSettings).mockImplementationOnce(value => new Promise(resolve => {
+      finishProjection = () => resolve({ data: projection(value) } as any)
+    }))
+    await render()
+    expect(oxidnsApi.validateSettings).toHaveBeenCalledExactlyOnceWith(settings(), 'oxi-profile')
+    finishProjection(); await flushPromises()
+    expect(document.body.textContent).toContain('规则检查通过')
+    expect(oxidnsApi.validateSettings).toHaveBeenCalledTimes(1)
+    expect(oxidnsApi.readCommonSettings).toHaveBeenCalledTimes(1)
   })
 
   it('saves without waiting for a slow validator or triggering an extra check', async () => {

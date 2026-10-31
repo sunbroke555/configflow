@@ -9,7 +9,7 @@ import { notify } from '@/lib/feedback'
 // Exercise the real cards and profile store, replacing HTTP and the editor body.
 vi.mock('@/api', () => ({
   default: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
-  agentApi: { getAll: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn() },
+  agentApi: { getAll: vi.fn(), summaries: vi.fn(), getDeployment: vi.fn(), getUpgrade: vi.fn(), bindProfile: vi.fn() },
   profileApi: { list: vi.fn() }
 }))
 vi.mock('@/lib/feedback', () => ({
@@ -80,6 +80,7 @@ const profiles = [
 
 async function render(item = agent()) {
   vi.mocked(agentApi.getAll).mockResolvedValue({ data: [item] } as any)
+  vi.mocked(agentApi.summaries).mockResolvedValue({ data: [item] } as any)
   vi.mocked(profileApi.list).mockResolvedValue({ data: profiles } as any)
   const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/agents', component: { render: () => null } }] })
   await router.push('/agents')
@@ -100,12 +101,17 @@ async function render(item = agent()) {
 
 describe('Agent settings entry scope', () => {
   it.each(['mihomo', 'mosdns', 'oxidns', 'surge'])('opens %s settings in the bound profile without switching the global profile', async serviceType => {
-    const { open, editor, button } = await render(agent({ service_type: serviceType }))
+    const item = agent({ service_type: serviceType })
+    const { open, editor, button } = await render(item)
     await open()
     expect(editor().props('agentSettings')).toEqual({
       agentId: 'settings-agent', agentName: 'Settings test', serviceType,
       profileId: 'workspace-agent', profileName: '设备空间',
+      targets: { agents: [item], profiles },
     })
+    // 绑定只读轻量列表，不为打开设置再算一次完整内容同步
+    expect(agentApi.summaries).toHaveBeenCalledTimes(1)
+    expect(agentApi.getAll).toHaveBeenCalledTimes(1)
     expect(activeProfileId.value).toBe('workspace-current')
     expect(sessionStorage.getItem('configflow.activeProfile')).toBe('workspace-current')
     expect(agentApi.bindProfile).not.toHaveBeenCalled()
@@ -124,14 +130,14 @@ describe('Agent settings entry scope', () => {
 
   it('refreshes the Agent binding, software and profile name before opening', async () => {
     const { open, editor } = await render()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce({ data: [agent({
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce({ data: [agent({
       name: 'Renamed agent', profile_id: 'workspace-new', service_type: 'oxidns'
     })] } as any)
     vi.mocked(profileApi.list).mockResolvedValueOnce({ data: profiles.map(profile => (
       profile.id === 'workspace-new' ? { ...profile, name: '已重命名空间' } : profile
     )) } as any)
     await open()
-    expect(editor().props('agentSettings')).toEqual({
+    expect(editor().props('agentSettings')).toMatchObject({
       agentId: 'settings-agent', agentName: 'Renamed agent', serviceType: 'oxidns',
       profileId: 'workspace-new', profileName: '已重命名空间',
     })
@@ -153,7 +159,7 @@ describe('Agent settings entry scope', () => {
     await flushPromises()
     expect(editor().exists()).toBe(false)
 
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce({ data: [agent({ profile_id: 'workspace-new' })] } as any)
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce({ data: [agent({ profile_id: 'workspace-new' })] } as any)
     await open()
     expect(editor().props('agentSettings')).toMatchObject({ profileId: 'workspace-new', profileName: '新空间' })
     expect(activeProfileId.value).toBe('workspace-current')
@@ -167,7 +173,7 @@ describe('Agent settings entry failures', () => {
     ['an unsupported software type', [agent({ service_type: 'custom' })], '此 Agent 的软件类型暂不支持配置设置。'],
   ])('rejects %s without falling back to the current profile', async (_label, rows, reason) => {
     const { open, editor, button } = await render()
-    vi.mocked(agentApi.getAll).mockResolvedValueOnce({ data: rows } as any)
+    vi.mocked(agentApi.summaries).mockResolvedValueOnce({ data: rows } as any)
     await open()
     expect(editor().exists()).toBe(false)
     expect(notify.error).toHaveBeenCalledWith('打开配置设置失败', reason)
@@ -177,7 +183,7 @@ describe('Agent settings entry failures', () => {
 
   it.each(['agents', 'profiles'])('allows retry after the %s refresh fails', async source => {
     const { open, editor, button } = await render()
-    const request = source === 'agents' ? vi.mocked(agentApi.getAll) : vi.mocked(profileApi.list)
+    const request = source === 'agents' ? vi.mocked(agentApi.summaries) : vi.mocked(profileApi.list)
     request.mockRejectedValueOnce(new Error('连接失败'))
     await open()
     expect(editor().exists()).toBe(false)
