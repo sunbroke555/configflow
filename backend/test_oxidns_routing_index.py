@@ -3,7 +3,7 @@ import random
 
 import pytest
 
-from backend.common.oxidns_common_routing import SELECTORS, _atom, _catalog
+from backend.common.oxidns_common_routing import SELECTORS, _Mentions, _atom, _catalog, _references
 from backend.common.oxidns_settings import OxidnsSettingsError
 from backend.common.rule_dns import has_ip_part
 from backend.converters.oxidns import _items, _routing_groups, ruleset_parts
@@ -103,3 +103,31 @@ def test_catalog_keeps_duplicate_ids_of_each_kind():
     # Both same-kind items of one id stay in its record; another kind never joins it.
     assert records['dup']['suffix'] == 'rules' and records['dup']['parts'] == {'domain', 'ip'}
     assert records['bad']['suffix'] == 'rulesets'
+
+
+_PIECES = ['rules_domain_1', 'rules_domain_10', 'rules_ip_2', 'cf_dns_up_0123456789ab', 'rules_reload',
+           'rules_refresh', '$', '.', '-', '_', ' ', '/', ':', 'é', 'qname ', 'goto ', 'x', '1']
+_TAGS = ['rules_domain_1', 'rules_domain_10', 'rules_ip_2', 'cf_dns_up_0123456789ab', 'rules_reload',
+         'rules_refresh', 'domain_1', 'é', '.', 'a b', 'x$y', 'q/r', '$rules_domain_1', 'rules_domain_1 ', '']
+
+
+def _random_value(rng, depth=0):
+    choice = rng.random()
+    if depth > 2 or choice < 0.5:
+        if rng.random() < 0.1:
+            return rng.choice([None, 1, True, 2.5])
+        return ''.join(rng.choice(_PIECES) for _ in range(rng.randrange(0, 5)))
+    if choice < 0.75:
+        return [_random_value(rng, depth + 1) for _ in range(rng.randrange(0, 4))]
+    # Keys are never references, only values.
+    return {rng.choice(_TAGS): _random_value(rng, depth + 1) for _ in range(rng.randrange(0, 4))}
+
+
+@pytest.mark.parametrize('seed', range(300))
+def test_mentions_match_references(seed):
+    rng = random.Random(seed)
+    values = [_random_value(rng) for _ in range(rng.randrange(0, 8))]
+    mentions = _Mentions(values)
+    for tag in _TAGS:
+        assert mentions.positions(tag) == [position for position, value in enumerate(values)
+                                           if _references(value, tag)], tag

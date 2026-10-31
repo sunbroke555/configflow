@@ -195,15 +195,19 @@ def _route_of(values, identity):
                  if identity in values[f'{route}_rules'] or identity in values[f'{route}_rulesets']), None)
 
 
-def _owned_group(document, plugins, args, entry, tag):
-    """A generated provider that only this one sequence_main entry uses."""
+def _owned_group(mentions, entry, tag):
+    """A generated provider that only this one sequence_main entry uses.
+
+    mentions() returns the _Mentions of the sequence_main entries, of the top
+    level and of the plugins, built once per document.
+    """
     if not GROUP_TAG_RE.fullmatch(tag) or set(entry) != {'matches', 'exec'}:
         return False
-    if sum(1 for item in args if _references(item, tag)) != 1 or \
-            _references({key: value for key, value in document.items() if key != 'plugins'}, tag):
+    args, top, plugins = mentions()
+    if len(args.positions(tag)) != 1 or top.positions(tag):
         return False
-    return not any(_references(plugin, tag) for name, plugin in plugins.items()
-                   if name not in ('sequence_main', 'rules_reload', tag))
+    return not any(plugins.values[position]['tag'] not in ('sequence_main', 'rules_reload', tag)
+                   for position in plugins.positions(tag))
 
 
 def _unique_atoms(part, provider, atoms):
@@ -278,6 +282,11 @@ def _recognize(document, settings, config, claim, catalog=None):
     else:
         return state
     records, atoms = catalog() if catalog else _catalog(config)
+
+    @cache
+    def mentions():
+        top = {key: value for key, value in document.items() if key != 'plugins'}
+        return _Mentions(args), _Mentions([top]), _Mentions(plugins.values())
     groups = {'domain': [], 'ip': []}
     dynamic = []
     middle_end = len(args) - 1
@@ -298,7 +307,7 @@ def _recognize(document, settings, config, claim, catalog=None):
                 route = parse_exec(entry['exec'], part, plugins)
             if route is not None and route not in LIST_ROUTES:
                 # A user's own match (or one reusing a generated provider) stays a custom match.
-                if claim and _owned_group(document, plugins, args, entry, parsed[2]) and \
+                if claim and _owned_group(mentions, entry, parsed[2]) and \
                         (isinstance(route, Invalid) or _unique_atoms(part, provider, atoms)):
                     claimed = True
                 else:
@@ -572,6 +581,43 @@ def _references(value, tag):
     if isinstance(value, list):
         return any(_references(item, tag) for item in value)
     return False
+
+
+_WORD = re.compile(r'[\w.\-]+')
+
+
+def _words(value, found=None):
+    """Every maximal run of tag characters in the strings _references reads."""
+    found = set() if found is None else found
+    if isinstance(value, str):
+        found.update(_WORD.findall(value))
+    elif isinstance(value, dict):
+        for item in value.values():
+            _words(item, found)
+    elif isinstance(value, list):
+        for item in value:
+            _words(item, found)
+    return found
+
+
+class _Mentions:
+    """Which of several values reference a tag, exactly as _references decides.
+
+    A tag made only of tag characters is referenced where it equals a whole run
+    of them, so each value is scanned once for all tags. Other tags are searched.
+    """
+
+    def __init__(self, values):
+        self.values = list(values)
+        self.index = {}
+        for position, value in enumerate(self.values):
+            for word in _words(value):
+                self.index.setdefault(word, []).append(position)
+
+    def positions(self, tag):
+        if isinstance(tag, str) and _WORD.fullmatch(tag):
+            return self.index.get(tag, [])
+        return [position for position, value in enumerate(self.values) if _references(value, tag)]
 
 
 def _new_name(preferred, occupied):
@@ -1080,13 +1126,15 @@ def apply_routing(document, settings, config, changes, base_url='', *, before_co
             values['aggregate_rules'] = True
         expected = _routing_groups(config, values)
         old = [group for entries in current['groups'].values() for group in entries]
+        outside = _Mentions([{key: value for key, value in document.items() if key != 'plugins'},
+                             values['custom_matches']])
+        inside = _Mentions(result['plugins'])
         external = {group['tag'] for group in old if
                     set(group['provider']) - {'tag', 'type', 'args'} or
                     document.get('include') or
-                    _references({key: value for key, value in document.items() if key != 'plugins'}, group['tag']) or
-                    _references(values['custom_matches'], group['tag']) or
-                    any(_references(plugin, group['tag']) for plugin in result['plugins']
-                        if plugin.get('tag') not in ('sequence_main', 'rules_reload', group['tag']))}
+                    outside.positions(group['tag']) or
+                    any(inside.values[position].get('tag') not in ('sequence_main', 'rules_reload', group['tag'])
+                        for position in inside.positions(group['tag']))}
         result['plugins'], groups = place_routing_groups(result['plugins'], old, expected, external)
         for key in SELECTORS:
             previous = result_settings.get(key)
