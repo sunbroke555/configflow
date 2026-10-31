@@ -369,6 +369,8 @@ class ProfileRepository:
         # readers return independent values.
         self._document_cache = None
         self._cache_lock = threading.Lock()
+        # 本进程提交过的写事务数；请求内记住的配置空间校验结果据此失效
+        self.commit_count = 0
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         with self._lock(self.initialization_lock_file):
@@ -991,6 +993,7 @@ class ProfileRepository:
                     raise
             if committed is not None:
                 self._set_cache(committed)
+                self.commit_count += 1
         finally:
             self._local.document = None
 
@@ -1042,7 +1045,9 @@ class ProfileRepository:
                     if (agent.get('profile_id') or default_id) == profile_id]}
 
     def _profile_metadata(self, profile_id):
-        return self._metadata(self.get_profile(profile_id))
+        # 只取元数据，不复制整个 profile（含规则、路由器发布清单等）
+        with self._document() as document:
+            return self._metadata(self._profile(document, profile_id))
 
     def get_profile(self, profile_id):
         with self._document() as document:

@@ -92,6 +92,9 @@ _CONFIG_CACHE: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
 _CONFIG_BASELINES: ContextVar[Optional[Dict[str, Dict[str, Any]]]] = ContextVar(
     'configflow_profile_baselines', default=None
 )
+# 本请求已校验过的配置空间：(请求对象, 仓库, 提交数, {请求键: ID})。请求边界清除；
+# 期间任何写事务（包括删除配置空间）都会让它失效，之后再解析会重新校验。
+_RESOLVED_PROFILES: ContextVar[Optional[tuple]] = ContextVar('configflow_resolved_profiles', default=None)
 
 
 def get_repository() -> ProfileRepository:
@@ -116,6 +119,7 @@ def set_repository(repository: ProfileRepository) -> None:
     _repository = repository
     _CONFIG_CACHE.set({})
     _CONFIG_BASELINES.set({})
+    _RESOLVED_PROFILES.set(None)
 
 
 def _cache() -> Dict[str, Dict[str, Any]]:
@@ -130,12 +134,25 @@ def reset_config_context() -> None:
     """Discard compatibility snapshots at request/task boundaries."""
     _CONFIG_CACHE.set(None)
     _CONFIG_BASELINES.set(None)
+    _RESOLVED_PROFILES.set(None)
+
+
+def resolved_profiles(request_object) -> Dict[Optional[str], str]:
+    """本请求已校验过的配置空间 ID，供 resolve_profile_id 复用。"""
+    repository = get_repository()
+    commits = repository.commit_count
+    memo = _RESOLVED_PROFILES.get()
+    if memo is None or memo[0] is not request_object or memo[1] is not repository or memo[2] != commits:
+        memo = (request_object, repository, commits, {})
+        _RESOLVED_PROFILES.set(memo)
+    return memo[3]
 
 
 def get_config(profile_id: Optional[str] = None) -> Dict[str, Any]:
     """Get a request-scoped compatibility view of a profile."""
     from backend.common.profile_context import resolve_profile_id
 
+    # 请求内已校验过的 ID 直接复用（见 resolve_profile_id），快照命中时不再读仓库
     resolved_id = resolve_profile_id(profile_id)
     cache = _cache()
     if resolved_id not in cache:
