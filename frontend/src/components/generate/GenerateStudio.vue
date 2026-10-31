@@ -138,6 +138,8 @@
             </div>
           </div>
 
+          <SubscriptionHostsSummary v-if="hostsReport && !running" :report="hostsReport" />
+
           <div v-if="pushResults.length" class="min-w-0 border-b border-border px-5 py-2 max-sm:px-3" aria-label="配置发布结果">
             <div class="min-w-0 divide-y divide-border/70">
               <div v-for="result in pushResults" :key="result.id" class="min-w-0" :data-publish-agent="result.id">
@@ -239,6 +241,7 @@ import AgentOperationSteps from '@/components/agents/AgentOperationSteps.vue'
 import AgentDeploymentStatus from '@/components/agents/AgentDeploymentStatus.vue'
 import AgentStatusRow from '@/components/agents/AgentStatusRow.vue'
 import AgentDNSChecks from '@/components/agents/AgentDNSChecks.vue'
+import SubscriptionHostsSummary from '@/components/generate/SubscriptionHostsSummary.vue'
 import { submitAgentRequests, uniquePublicationTargets } from '@/lib/agentRequests'
 import { deploymentErrorSummary } from '@/lib/agentFailure'
 import { consumeAction } from '@/lib/actions'
@@ -246,6 +249,7 @@ import { notify } from '@/lib/feedback'
 import { copyText } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import { useLive } from '@/stores/live'
+import type { SubscriptionHostsReport } from '@/types'
 
 const isPhone = useMediaQuery('(max-width: 639px)')
 
@@ -317,6 +321,8 @@ const lines = ref<string[]>([])
 const freshFrom = ref(0)
 const error = ref('')
 const codeEl = ref<HTMLElement | null>(null)
+/** Mihomo only: hosts merged from subscriptions; hidden when no subscription carries any. */
+const hostsReport = ref<SubscriptionHostsReport | null>(null)
 
 const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 const frame = () => new Promise(resolve => requestAnimationFrame(() => resolve(null)))
@@ -359,6 +365,7 @@ const generate = async () => {
   failedAt.value = -1
   lines.value = []
   output.value = ''
+  hostsReport.value = null
   freshFrom.value = 0
   const target = active.value
   const api = {
@@ -370,7 +377,8 @@ const generate = async () => {
   }[target]
 
   const request = api()
-    .then(res => ({ ok: true as const, content: String(res.data?.content ?? res.data ?? '') }))
+    .then(res => ({ ok: true as const, content: String(res.data?.content ?? res.data ?? ''),
+      hosts: (res.data?.subscription_hosts ?? null) as SubscriptionHostsReport | null }))
     .catch((err: any) => ({ ok: false as const, message: err.response?.data?.message || '生成失败' }))
   loadCounts()
 
@@ -401,6 +409,8 @@ const generate = async () => {
     }
     stepIndex.value = 5
     freshFrom.value = lines.value.length
+    const hosts = result.hosts
+    hostsReport.value = target === 'mihomo' && hosts && (hosts.merged || hosts.ignored) ? hosts : null
     await nextTick()
     if (codeEl.value) codeEl.value.scrollTop = 0
     notify.success(`${FILES[target]} 已生成 · ${all.length} 行`)
@@ -532,6 +542,7 @@ watch(active, () => {
   if (running.value) return
   lines.value = []
   output.value = ''
+  hostsReport.value = null
   stepIndex.value = -1
   failedAt.value = -1
   error.value = ''

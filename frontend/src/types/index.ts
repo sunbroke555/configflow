@@ -86,6 +86,60 @@ export interface ProxyGroup {
   source?: 'subscription' | 'node' | 'strategy'  // 已废弃，兼容旧数据
 }
 
+/** Hosts taken from subscriptions while generating Mihomo (preview response). */
+export interface SubscriptionHostsItem {
+  subscription: string
+  domain: string
+  value?: string | string[]
+  status: 'merged' | 'ignored'
+  /** merged: an address list, or a domain (applies to nodes only through Mihomo's DNS listener). */
+  kind?: 'address' | 'domain'
+  reason?: string
+  detail?: string
+}
+
+/** A mapped node domain resolved through Mihomo's DNS listener. */
+export interface SubscriptionHostsPolicyEntry {
+  domain: string
+  /** Where the hosts chain from the node domain ends. */
+  target: string
+  /** configflow: written into proxy-server-nameserver-policy; user: the user's own policy already points there. */
+  source: 'configflow' | 'user'
+}
+
+/** Present only when a merged domain-to-domain mapping ends on a domain. */
+export interface SubscriptionHostsDns {
+  /** Mappings whose hosts chain ends on a domain. */
+  mapped: number
+  /** At least one mapped node domain now resolves through the listener. */
+  applied: boolean
+  listener: string | null
+  policy: SubscriptionHostsPolicyEntry[]
+  /** Patterns ConfigFlow added to fake-ip-filter (written as real-ip rules in rule mode). */
+  filter: string[]
+  /** Distinct targets kept out of Fake-IP by those entries. */
+  targets_filtered: number
+  /** Targets the written fake-ip-filter already covered. */
+  targets_covered: number
+  fake_ip: 'blacklist' | 'rule' | 'whitelist' | 'not_needed' | null
+  skipped: Array<{ domain: string; target: string; reason: 'policy_conflict' | 'whitelist_covers' }>
+  warnings: string[]
+  notes: string[]
+  /** Oldest Mihomo that reads proxy-server-nameserver-policy. */
+  min_version: string
+  /** Agents of this profile whose reported core is older (preview only). */
+  outdated_agents?: Array<{ name: string; version: string }>
+}
+
+export interface SubscriptionHostsReport {
+  merged: number
+  ignored: number
+  domain_mapped: number
+  subscriptions: Array<{ id: string; name: string; total: number; merged: number; ignored: number }>
+  items: SubscriptionHostsItem[]
+  dns?: SubscriptionHostsDns
+}
+
 export interface AgentContentSync {
   status: 'synced' | 'changed' | 'unknown' | 'never-pushed' | 'checking'
   /** Stable server reason code; never display raw errors as UI copy. */

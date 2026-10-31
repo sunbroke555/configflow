@@ -102,7 +102,32 @@ def save_subscription_nodes(
         from backend.utils.logger import log_text
         logger.info("订阅 %s 节点数变化：%s → %s", log_text((metadata or {}).get('subscription_name') or sub_id),
                     previous.get('count'), payload['count'])
+    _note_hosts_change(sub_id, previous, payload)
     return payload
+
+
+def _note_hosts_change(sub_id, previous, payload):
+    """Hosts live in the main Mihomo file, which only a publication replaces.
+
+    Devices keep refreshing providers by themselves, so a hosts change must be
+    surfaced: drop cached Agent content checks so they report 「有变更，待推送」
+    on the next poll instead of after their fifteen-minute reuse.
+    """
+    from backend.utils.subscription_hosts import describe_change, hosts_digest
+    old = ((previous or {}).get('metadata') or {}).get('hosts')
+    new = (payload.get('metadata') or {}).get('hosts')
+    if hosts_digest(old) == hosts_digest(new):
+        return
+    from backend.utils.logger import log_text
+    change = describe_change(old, new)
+    logger.info("订阅 %s 的 hosts 有变化：新增 %d 条、删除 %d 条、修改 %d 条；重新发布 Mihomo 配置后生效",
+                log_text((payload.get('metadata') or {}).get('subscription_name') or sub_id),
+                change['added'], change['removed'], change['changed'])
+    try:
+        from backend.agents.content_sync import invalidate_content_sync
+        invalidate_content_sync()
+    except Exception:  # never let a status cache break a node refresh
+        logger.debug("作废 Agent 内容核对缓存失败", exc_info=True)
 
 
 def load_subscription_cache(sub_id: str) -> Optional[Dict[str, Any]]:

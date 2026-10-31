@@ -139,8 +139,18 @@ def preview_mihomo():
         base_url = data.get('base_url', '')
 
         # 传递 base_url 给生成器
-        yaml_content = generate_mihomo_config(config_data, base_url=base_url)
-        return jsonify({'content': yaml_content})
+        report = {}
+        yaml_content = generate_mihomo_config(config_data, base_url=base_url, report=report)
+        hosts_report = report.get('subscription_hosts')
+        dns_report = (hosts_report or {}).get('dns')
+        if dns_report and dns_report.get('applied'):
+            # The preview is for no device in particular; name the ones whose reported core ignores the policy.
+            from backend.utils.proxy_server_dns import outdated_agents
+            try:
+                dns_report['outdated_agents'] = outdated_agents(config_data.get('profile_id'))
+            except Exception:
+                logger.debug('读取 Agent 上报的 Mihomo 版本失败', exc_info=True)
+        return jsonify({'content': yaml_content, 'subscription_hosts': hosts_report})
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:

@@ -19,8 +19,20 @@ def validate_refresh_interval(value, label='订阅源更新间隔'):
 
 
 def source_cache_metadata(sub, result):
-    return {'subscription_name': sub.get('name', ''), 'url': sub.get('url'),
-            'fetched_at': getattr(result, 'fetched_at', None)}
+    metadata = {'subscription_name': sub.get('name', ''), 'url': sub.get('url'),
+                'fetched_at': getattr(result, 'fetched_at', None)}
+    # Only a downloaded body can carry the subscription's own top-level hosts;
+    # Sub-Store conversions and cache renders contain proxies alone.
+    try:
+        text, source = result
+    except (TypeError, ValueError):
+        text, source = None, None
+    if isinstance(text, str) and source not in ('cache', 'prepared_yaml'):
+        from backend.utils.subscription_hosts import extract_subscription_hosts
+        hosts = extract_subscription_hosts(text)
+        if hosts is not None:
+            metadata['hosts'] = hosts
+    return metadata
 
 
 def _is_fresh(timestamp, interval):
