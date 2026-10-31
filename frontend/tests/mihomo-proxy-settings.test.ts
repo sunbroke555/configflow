@@ -229,12 +229,34 @@ describe('individual and all-group delay tests', () => {
     await flushPromises()
     expect(button.text()).toBe('600 ms')
     expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: { ...PROXIES, Auto: { ...PROXIES.Auto, now: 'Slow' } } } } } as any)
     vi.mocked(mihomoPanelApi.proxyDelay).mockResolvedValueOnce({ data: { data: { delay: 85 } } } as any)
     await button.trigger('click')
     await flushPromises()
     expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledExactlyOnceWith('gw', 'Slow', undefined)
     expect(button.text()).toBe('85 ms')
     expect(state.delayOf('Fast', PROXIES.Proxy)).toBe(123)
+  })
+  it('reads the live exit before testing a group member instead of the cached one', async () => {
+    const { wrapper, state } = await render()
+    expect(state.proxies.Auto.now).toBe('Fast')
+    // 核心已自行切到另一个出口（如自动测速、重载后），页面仍是旧出口
+    vi.mocked(mihomoPanelApi.proxies).mockResolvedValue({ data: { data: { proxies: {
+      ...PROXIES, Auto: { ...PROXIES.Auto, all: ['Fast', 'Slow'], now: 'Slow' }
+    } } } } as any)
+    vi.mocked(mihomoPanelApi.proxyDelay).mockRejectedValueOnce({ response: { status: 503, data: { message: 'An error occurred in the delay test' } } })
+    const button = wrapper.get('button[aria-label="当前出口测速 Auto（Proxy）"]')
+    await button.trigger('click')
+    await flushPromises()
+    expect(mihomoPanelApi.proxyDelay).toHaveBeenCalledExactlyOnceWith('gw', 'Slow', undefined)
+    expect(mihomoPanelApi.providerProxyDelay).not.toHaveBeenCalled()
+    expect(notify.error).toHaveBeenCalledWith('Auto 测速失败', '当前出口 Slow：An error occurred in the delay test')
+    expect(state.proxies.Auto.now).toBe('Slow')
+    expect(button.text()).toBe('600 ms')
+    // 普通节点不需要读出口
+    vi.mocked(mihomoPanelApi.proxies).mockClear()
+    await state.testNode('Slow', PROXIES.Proxy)
+    expect(mihomoPanelApi.proxies).not.toHaveBeenCalled()
   })
   it('stores an in-flight result on its original exit when the group changes exit', async () => {
     let resolve!: (value: any) => void
@@ -347,7 +369,7 @@ describe('individual and all-group delay tests', () => {
     expect(mihomoPanelApi.providerProxyDelay).toHaveBeenCalledTimes(1)
     reject({ response: { status: 504, data: { message: 'exit timed out' } } })
     await flushPromises()
-    expect(notify.error).toHaveBeenCalledWith('Auto 测速失败', 'exit timed out')
+    expect(notify.error).toHaveBeenCalledWith('Auto 测速失败', '当前出口 Fast：exit timed out')
     expect(button.attributes('aria-busy')).toBe('false')
     expect(button.attributes('disabled')).toBeUndefined()
     expect(wrapper.get('button[aria-label="测速 Proxy"]').attributes('disabled')).toBeUndefined()

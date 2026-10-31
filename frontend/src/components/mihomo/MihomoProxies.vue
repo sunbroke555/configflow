@@ -332,13 +332,25 @@ async function unfix(group: MihomoProxy) {
   }
 }
 
+/** 核心会自行切换策略组出口（自动测速、重载后先用首个成员），测成员前先读实时出口，不测页面里过期的那个。 */
+async function refreshExits(agentId: string, generation: number) {
+  const { data } = await mihomoPanelApi.proxies(agentId)
+  if (disposed || generation !== testEpoch) return false
+  const coreProxies = data.data?.proxies || {}
+  coreProxyNames.value = new Set(Object.keys(coreProxies))
+  proxies.value = { ...proxies.value, ...coreProxies }
+  return true
+}
+
 async function testNode(name: string, group: MihomoProxy) {
   const key = delayKey(name, group)
   if (batchRunning.value || testing.size || nodeTesting.has(key)) return
   const generation = testEpoch
   const agentId = props.agentId
   nodeTesting.add(key)
+  let exit = ''
   try {
+    if (GROUP_TYPES.has(proxies.value[name]?.type || '') && !await refreshExits(agentId, generation)) return
     const target = finalNode(proxies.value, name)
     const proxy = proxies.value[target]
     if (!proxy) throw new Error('找不到该节点，请刷新后重试。')
@@ -352,6 +364,7 @@ async function testNode(name: string, group: MihomoProxy) {
     const viaGroup = sources.length > 1 && name !== target && coreProxyNames.value.has(name)
     if (sources.length > 1 && !viaGroup) throw new Error('多个来源中存在同名节点，请使用所属策略组的分组测速。')
     if (!viaGroup && !inCore && !sources.length) throw new Error('找不到该节点，请刷新后重试。')
+    if (target !== name) exit = target
     const { data } = await (viaGroup || inCore
       ? mihomoPanelApi.proxyDelay(agentId, viaGroup ? name : target, group.testUrl)
       : mihomoPanelApi.providerProxyDelay(agentId, sources[0], target, group.testUrl))
@@ -360,7 +373,8 @@ async function testNode(name: string, group: MihomoProxy) {
     if (typeof delay !== 'number' || !Number.isFinite(delay) || delay < 0) throw new Error('测速结果无效，请重试。')
     delays.set(delayKey(target, group), { delay, target, revision: ++delayRevision })
   } catch (failure) {
-    if (!disposed && generation === testEpoch) notify.error(`${name} 测速失败`, panelError(failure))
+    // 组成员失败时写明实际测的出口，免得误以为整组不可用
+    if (!disposed && generation === testEpoch) notify.error(`${name} 测速失败`, exit ? `当前出口 ${exit}：${panelError(failure)}` : panelError(failure))
   } finally { if (generation === testEpoch) nodeTesting.delete(key) }
 }
 
