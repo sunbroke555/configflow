@@ -52,9 +52,19 @@ def _is_global_request() -> bool:
 
 def resolve_profile_id(explicit: Optional[str] = None, fallback: Optional[str] = None) -> str:
     """Resolve explicit/path, query, header, then the stable default profile."""
-    from backend.common.config import get_repository
+    from backend.common.config import get_repository, resolved_profiles
 
     repository = get_repository()
+    # 同一请求内复用已校验的结果（before_request 已解析过一次）。全局请求取的是
+    # 可切换的默认配置空间，带 fallback 的调用结果取决于参数，都不复用。
+    memo = memo_key = None
+    if has_request_context() and fallback is None and (
+            isinstance(explicit, str)
+            or (explicit is None and (request.endpoint is None or not _is_global_request()))):
+        memo = resolved_profiles(request._get_current_object())
+        memo_key = explicit if isinstance(explicit, str) else None
+        if memo is not None and memo_key in memo:
+            return memo[memo_key]
     if explicit is not None:
         candidate = explicit
     elif has_request_context() and (request.endpoint is None or not _is_global_request()):
@@ -72,6 +82,8 @@ def resolve_profile_id(explicit: Optional[str] = None, fallback: Optional[str] =
         candidate = fallback if fallback is not None else repository.default_profile_id()
     repository.validate_profile_id(candidate)
     repository._profile_metadata(candidate)
+    if memo is not None:
+        memo[memo_key] = memo[candidate] = candidate
     return candidate
 
 

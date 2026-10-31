@@ -65,11 +65,7 @@ def _repository_agent_tokens() -> Iterable[str]:
     """Collect persisted Agent credentials without exposing manager return values."""
     from backend.common.config import get_repository
 
-    for agent in get_repository().get_system().get("agents", []):
-        if isinstance(agent, dict):
-            token = agent.get("token")
-            if isinstance(token, str) and token:
-                yield token
+    yield from get_repository().agent_tokens_for_sanitization()
 
 
 def _contains_encoded_secret(value: str, secrets: set[str]) -> bool:
@@ -113,7 +109,13 @@ def contains_internal_rule_proxy_token(value: str) -> bool:
 
 
 def _external_payload_secrets(system_config=None):
-    """Read the current redaction context; never cache credentials globally."""
+    """Read the current redaction context from the authoritative repository.
+
+    令牌集合由仓库按 store head 记住（见 ProfileRepository._sanitization_tokens）。
+    常驻的文档缓存里本来就有这些令牌，记住集合不扩大暴露面（文档超过缓存上限
+    不进缓存时，也只多常驻这几个令牌字符串，不多常驻文档）；任何提交都会换
+    head，令牌轮换在下一个响应就生效。不要在这里另建跨文档版本的缓存。
+    """
     secrets = set(_repository_rule_proxy_tokens())
     secrets.update(_repository_agent_tokens())
     if isinstance(system_config, dict):

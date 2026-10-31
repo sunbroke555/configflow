@@ -369,6 +369,10 @@ class ProfileRepository:
         # readers return independent values.
         self._document_cache = None
         self._cache_lock = threading.Lock()
+        # (head, 令牌集合)，见 _sanitization_tokens
+        self._sanitization_tokens_cache = None
+        # 本进程提交过的写事务数；请求内记住的配置空间校验结果据此失效
+        self.commit_count = 0
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
         with self._lock(self.initialization_lock_file):
@@ -964,6 +968,18 @@ class ProfileRepository:
             configuration_committed(self, previous, document)
 
     @contextmanager
+    def _committed_source(self):
+        """产出 (document, committed)。
+
+        committed 为真时 document 是已提交的一代：写事务只修改它的深拷贝，提交后
+        生成新的 Entry，所以调用方可以长期持有这个引用作为三方合并基线的来源，
+        但绝不能修改它。事务内读到的是仍会被修改的工作副本，committed 为假。
+        """
+        committed = getattr(self._local, 'document', None) is None
+        with self._document() as document:
+            yield document, committed
+
+    @contextmanager
     def _write_locked(self, *, locked_routers=(), policy_router=None, meta=None):
         """One write transaction; the caller holds .config.lock.
 
@@ -991,6 +1007,7 @@ class ProfileRepository:
                     raise
             if committed is not None:
                 self._set_cache(committed)
+                self.commit_count += 1
         finally:
             self._local.document = None
 
@@ -1042,7 +1059,9 @@ class ProfileRepository:
                     if (agent.get('profile_id') or default_id) == profile_id]}
 
     def _profile_metadata(self, profile_id):
-        return self._metadata(self.get_profile(profile_id))
+        # 只取元数据，不复制整个 profile（含规则、路由器发布清单等）
+        with self._document() as document:
+            return self._metadata(self._profile(document, profile_id))
 
     def get_profile(self, profile_id):
         with self._document() as document:
@@ -1329,6 +1348,11 @@ class ProfileRepository:
         with self._document() as document:
             return copy.deepcopy(document['shared'])
 
+    def get_shared_with_source(self):
+        """共享资源副本，以及它所读的已提交 shared 节（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return copy.deepcopy(document['shared']), (document['shared'] if committed else None)
+
     def create_rule_library_item(self, rule, content):
         """Commit a new source and its prepared cache, never replace an existing ID.
 
@@ -1442,6 +1466,11 @@ class ProfileRepository:
         with self._document() as document:
             return copy.deepcopy(document['system'])
 
+    def get_system_with_source(self):
+        """系统节副本，以及它所读的已提交 system 节（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return copy.deepcopy(document['system']), (document['system'] if committed else None)
+
     def update_system_transaction(self, updater):
         with self._document(write=True) as document:
             current = document['system']
@@ -1501,6 +1530,15 @@ class ProfileRepository:
     def get_compat_config(self, profile_id, *, resource_roots=None):
         with self._document() as document:
             return self._resolve_profile(document, profile_id, resource_roots)
+
+    def get_compat_config_with_source(self, profile_id):
+        """兼容视图，以及解析它的已提交文档（见 _committed_source）。"""
+        with self._committed_source() as (document, committed):
+            return self._resolve_profile(document, profile_id), (document if committed else None)
+
+    def compat_config_from(self, document, profile_id):
+        """用 get_compat_config_with_source 返回的文档重新解析，结果与当时的视图相同。"""
+        return self._resolve_profile(document, profile_id)
 
     def export_profile(self, profile_id):
         return self.get_profile(profile_id)
@@ -1659,16 +1697,51 @@ class ProfileRepository:
         system_config["rule_proxy_token"] = new_token
         return True
 
+    @staticmethod
+    def _sanitization_tokens_of(system):
+        """(规则代理令牌, Agent 令牌)，只读取，不复制 system。"""
+        system_config = system.get("system_config", {})
+        values = []
+        if isinstance(system_config, dict):
+            values.append(system_config.get("rule_proxy_token"))
+            retired = system_config.get("retired_rule_proxy_tokens", [])
+            if isinstance(retired, list):
+                values.extend(retired)
+        agents = system.get("agents", [])
+        return (
+            frozenset(value for value in values if isinstance(value, str) and value),
+            frozenset(agent["token"] for agent in (agents if isinstance(agents, list) else [])
+                      if isinstance(agent, dict) and isinstance(agent.get("token"), str) and agent["token"]),
+        )
+
+    def _sanitization_tokens(self):
+        """当前一代文档里的令牌，按 store head 记住。
+
+        直接读已提交文档，不深拷贝 system（含全部 Agent 的发布历史）。任何提交
+        （包括令牌轮换）都会换 head，下一次读取就拿到新令牌；数据库被其他进程
+        改写时，head 比较同样会发现。这些令牌本来就在常驻的文档缓存里，这里只多
+        记住它们的集合，没有扩大凭据在进程内的暴露面；文档太大不进缓存时，也只
+        多常驻这几个令牌字符串，不多常驻文档。
+        """
+        if getattr(self._local, 'document', None) is not None:
+            # 事务内读到的是仍会被修改的工作副本，不缓存
+            with self._document() as document:
+                return self._sanitization_tokens_of(document['system'])
+        entry = self._read_entry()
+        cached = self._sanitization_tokens_cache
+        if cached is not None and cached[0] == entry.head:
+            return cached[1]
+        tokens = self._sanitization_tokens_of(entry.document['system'])
+        self._sanitization_tokens_cache = (entry.head, tokens)
+        return tokens
+
     def rule_proxy_tokens_for_sanitization(self) -> set[str]:
         """Return persisted current and retired tokens for output sanitization only."""
-        system_config = self.get_system().get("system_config", {})
-        if not isinstance(system_config, dict):
-            return set()
-        values = [system_config.get("rule_proxy_token")]
-        retired = system_config.get("retired_rule_proxy_tokens", [])
-        if isinstance(retired, list):
-            values.extend(retired)
-        return {value for value in values if isinstance(value, str) and value}
+        return set(self._sanitization_tokens()[0])
+
+    def agent_tokens_for_sanitization(self) -> frozenset[str]:
+        """Persisted Agent credentials, for output sanitization only."""
+        return self._sanitization_tokens()[1]
 
     def _create_migration_snapshot_dir(self) -> Path:
         """Create a unique snapshot directory, retrying an actual mkdir race."""
