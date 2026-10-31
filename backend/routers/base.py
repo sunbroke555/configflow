@@ -255,6 +255,8 @@ class RouterState:
     ros_policy_plan: Optional[Dict[str, Any]] = None
     # Manifest-owned IPv6 Fake-IP routes stay separate from IPv4 NAT and return routing.
     ipv6_fakeip_plan: Optional[Dict[str, Any]] = None
+    # Same-LAN RA DNS advertising is checked only with a valid selected OxiDNS.
+    ipv6_dns_plan: Optional[Dict[str, Any]] = None
     # RouterOS DNS guard: live rows by REST path, and the plan built from them.
     dns_guard: Optional[Dict[str, Any]] = None
     dns_guard_plan: Optional[Dict[str, Any]] = None

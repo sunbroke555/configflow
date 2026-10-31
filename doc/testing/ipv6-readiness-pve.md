@@ -238,3 +238,24 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 在已归属本任务的隔离 VM151 / CT152–154 运行更新后的 `scripts/tests/ipv6_managed_routes_lab.py`，实际确认新建临时网段路由使用 `fe80::…%接口`，并通过旧预览拒绝、创建后回读、重复发布不重复、修改网段、关闭发布撤回和沿用原路由检查。最后恢复完整原草稿及原有 IPv4/IPv6 路由，重新发布原 Mihomo 配置，IPv4 客户端请求、Mihomo 路径、ROS 路径及 IPv6 节点连接证据均通过。本轮未重启 guest，也未修改生产设备。
 
 脱敏报告保留在测试服务器 `/tmp/configflow-ipv6-readiness/managed-route-results.json`。本轮验证 LLA 作为内网下一跳，不证明所有网卡更换、网段迁移或公网节点协议均已覆盖。
+
+
+## 同一 LAN 的 RA DNS 发布验收
+
+`router_ipv6_dns_lab.py` 在 VM151（RouterOS 7.25）和 CT153 上通过真实预览后端、REST 和客户端 RA 报文完成以下检查：
+
+- `advertise-dns=yes` 并保留显式 `dns` 地址：预览只读，发布先更新 IPv4 DHCP DNS，再关闭目标 LAN 的 DNS 通告。
+- `advertise-dns=self`：同样能关闭，随后重复发布不产生修改。
+- 发布前改变 RA 配置时，旧预览被拒绝，DNS 通告不会提前关闭。
+- 客户端实际收到的 RA 不再包含 RDNSS（类型 25）；地址前缀（类型 3）、默认路由有效期和路由器地址保持不变。
+- 只有共享 `all` 通告且无明确 LAN 覆盖时不修改 ND，避免全局关闭；另一次实测确认有效 LAN 条目可以覆盖 `all`。（2026-10-31 起这种情况只跳过本项，不再阻止同一路由器的其他发布。）
+- 取消 OxiDNS 关联后保留现状，不擅自重新开启 DNS 通告。
+- 最终还原临时 DHCP 服务、网段、Agent 登记、关联及原 ND 配置，并确认原客户端 → ROS → Mihomo → IPv6 节点链路通过。
+
+脚本使用临时 OxiDNS 登记指向实验网已有的 DNS 监听地址，只验证路由器发布和通告行为，不把该登记当作实际安装 OxiDNS 的验收。不会操作生产 VM101/CT105。结果保存在测试服务器 `/tmp/configflow-ipv6-readiness/router-ra-dns-results.json`。
+
+`router_ipv6_dns_browser.mjs` 另用隔离 API 数据挂载真实路由器页面，覆盖桌面浅色、深色和手机的 18 项场景；预览和截图不触发真实配置写入。单元与集成回归覆盖写入失败、回读失败、逆序回滚、DHCP/RA 竞态和自动规则同步暂停。
+
+### 共享 all 的专用条目命令
+
+2026-10-31，在 VM151（RouterOS 7.25）上临时建立 bridge `cf-tmp-nd`，以现有 ND 条目参数（另加两个 `dns` 地址及 `ra-preference=high`、`other-configuration=yes`）作为 `all` 来源，经 `/rest/execute` 执行后端生成的 `/ipv6 nd add …` 命令。命令被接受，新条目除 `advertise-dns=no` 与接口外，`dns` 列表、`ra-delay`、`ra-interval`、`ra-lifetime`、`ra-preference`、`hop-limit`、`mtu`、`reachable-time`、`retransmit-interval` 及布尔项全部与来源一致；随后删除临时条目与 bridge，ND 配置与测试前完全相同。未修改原有 ND 条目或生产设备。

@@ -14,7 +14,7 @@
 | 用户名、密码 | 能使用相关管理接口的账号 | 编辑时密码留空表示保留旧密码；请先确认面板所在设备能访问路由器 |
 | 校验 HTTPS 证书 | 默认开 | 有可信证书时保留；自己的路由器使用自签证书且确认地址正确时可关，否则证书验证失败会阻止连接。HTTP 下此开关不起作用 |
 | 代理网关（Mihomo Agent） | 默认不关联 | 选实际接收主路由转发连接的 Mihomo。只保存关联不会自动让它具备转发能力 |
-| DHCP DNS 服务器（OxiDNS Agent） | 默认不关联 | 选设备应使用的 OxiDNS；不关联则不安排这项修改。关联 HA 成员时页面会提示实际使用 VIP |
+| DHCP DNS 服务器（OxiDNS Agent） | 默认不关联 | 选设备应使用的 OxiDNS；RouterOS 同时核对该 LAN 的 IPv6 DNS 下发。不关联则保留现有设置。关联 HA 成员时页面会提示实际使用 VIP |
 
 RouterOS 的 HTTPS 管理服务需要 `www-ssl`；使用 HTTP 的 `www` 需要 RouterOS 7.9+。iKuai 4.x 通常把 HTTP 转到 HTTPS，出厂自签证书可能需要关闭上述校验。ConfigFlow 不会替路由器升级系统或打开管理服务。
 
@@ -36,7 +36,37 @@ fake-ip 是 OxiDNS/Mihomo 用于分流的临时地址。已经通过这种方式
 
 ## DHCP DNS 和强制 DNS
 
-关联 OxiDNS 后，发布会尝试修改能唯一确定的 DHCP 网段，**用所选 OxiDNS 替换该网段的 DNS 列表，不保留旧备用 DNS**。设备通常要重新连接网络或续租地址才会取得新值。如果无法唯一判断网段，应先核对网络和预览，不要猜。
+关联 OxiDNS 后，发布会尝试修改能唯一确定的 IPv4 DHCP 网段，**用所选 OxiDNS 替换该网段的 DNS 列表，不保留旧备用 DNS**。设备通常要重新连接网络或续租地址才会取得新值。如果无法唯一判断网段，应先核对网络和预览，不要猜。
+
+### IPv6 DNS 下发（RouterOS）
+
+设备即使已通过 IPv4 DHCP 获得 OxiDNS，也可能通过 IPv6 路由器通告（RA）再收到另一套 DNS。关联 OxiDNS 后，差异报告会在「DHCP DNS」下方显示「IPv6 DNS 下发」，检查**所选 Mihomo 网关所在的同一 LAN**。
+
+![路由器核对清单中的 IPv6 DNS 下发及待关闭说明](../img/guide/router-ipv6-dns.png)
+
+| 检查结果 | 含义与下一步 |
+| --- | --- |
+| 待关闭 | 该 LAN 仍通过 RA 下发 DNS。点「预览发布」，核对 LAN 接口和改动，再确认发布 |
+| 无需调整 | 该 LAN 当前没有通过 RA 下发 DNS，本次不需要改这一项；不代表已测试所有设备的 DNS 查询 |
+| 需处理 | 还不能安全确定修改范围，或通告配置无法读取、存在动态或无效条目；本次发布跳过这一项，其他改动照常发布。按显示的原因处理后重新检查 |
+
+未关联 OxiDNS 时不显示此检查项，也不读取或修改 IPv6 DNS 下发，不能据此认为路由器已经关闭它。
+
+确认发布时，ConfigFlow **先写入并核对 IPv4 DHCP 的 OxiDNS 地址，再把已确认 LAN 的 `advertise-dns` 改为 `no`**。IPv6 地址前缀和默认网关仍照常通告，设备仍可获得 IPv6 地址并使用 IPv6 网络。检查本身不写入，也没有跳过预览的单独关闭开关。写入后会回读核对；失败时尝试回滚本次已完成的修改，需查看发布与回滚结果。
+
+「需处理」只影响这一项：预览会提示「IPv6 DNS 下发本次跳过」，路由、规则和 DHCP DNS 照常发布，发布记录中这一项标为需处理，RA 通告保持原样。自动规则同步也不会因此暂停。
+
+RouterOS 出厂只有一条共享的 `interface=all` 通告。DNS 通告来自它、又没有该 LAN 的专用条目时，ConfigFlow 不会直接关闭 `all`，以免连带影响其他网段或上网接口。卡片会给出一条可复制的命令，例如：
+
+```
+/ipv6 nd add interface=bridge advertise-dns=no ra-interval=3m20s-10m ra-lifetime=30m ...
+```
+
+它为该 LAN 单独建立通告条目，除 `advertise-dns=no` 外的参数照抄当前 `all` 条目；专用条目优先于 `all` 生效，`all` 和其他接口保持不变。在 RouterOS 终端执行后重新生成差异报告，这一项显示「无需调整」。该 LAN 已有停用的专用条目或存在多条通告时，不提供命令，请在 **IPv6 → ND** 中手动整理。
+
+关闭后，设备可能仍暂时保留先前获得的 DNS，需要重新联网或等待旧 DNS 通告过期。这项操作只调整该 LAN 的 RA DNS 下发，**不修改 ROS 自身 DNS、上游连接的 `use-peer-dns` 或 DHCPv6 服务器设置**。设备手写 DNS、应用自带的加密 DNS，以及其他设备发出的 DNS 通告仍可能走别的路径；此项不等于接管全部 DNS 流量。
+
+### 强制 DNS（RouterOS）
 
 RouterOS 还提供以下选项：
 

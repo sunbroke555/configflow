@@ -134,6 +134,10 @@ def _verify(stage: str, checks: Dict[str, Any], driver, agent: AgentReturnRoutin
             state: Optional[RouterState] = None) -> Optional[RouterState]:
     """Read back one stage. ``state`` reuses a read made with no write since;
     routes and NAT return the state they checked."""
+    if stage == 'ipv6_dns':
+        from backend.routers.ipv6_dns import verify
+        verify(driver, checks['ipv6_dns'])
+        return
     if stage == 'ipv6_fakeip':
         from backend.routers.ipv6_fakeip import verify
         verify(driver, checks['ipv6_fakeip'])
@@ -304,6 +308,11 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 if current == 'ipv6_fakeip':
                     _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认 IPv6 Fake-IP 路由与计划一致', 'status': 'verified'})
+                if current == 'ipv6_dns' and stage.get('skipped'):
+                    record({'stage': current, 'summary': 'IPv6 DNS 下发未能确认可安全修改的 LAN，本次保留现状', 'status': 'warning'})
+                elif current == 'ipv6_dns':
+                    _verify(current, plan['checks'], driver, agent)
+                    record({'stage': current, 'summary': '回读确认 OxiDNS DHCP 与同一局域网的 IPv6 DNS 通告一致', 'status': 'verified'})
                 if current == 'routes' and plan.get('checks', {}).get('ros_policy') is not None:
                     unchanged = _verify(current, plan['checks'], driver, agent)
                     record({'stage': current, 'summary': '回读确认来源策略路由与计划一致', 'status': 'verified'})
@@ -343,6 +352,12 @@ def _execute(plan: Dict[str, Any], driver, agent: Optional[AgentReturnRouting]) 
                 if getattr(driver, 'vendor', '') == 'routeros':
                     ops = [{**op, 'checked_dhcp_dns': dhcp} if index == 0 and op['kind'] == 'dhcp_dns_update'
                            else op for index, op in enumerate(ops)]
+            if current == 'ipv6_dns':
+                # Never withdraw RA DNS while DHCP still points elsewhere. This
+                # read is after the DHCP stage, even when that stage was a no-op.
+                if not plan.get('checks', {}).get('dhcp_dns'):
+                    raise ReleaseError('IPv6 DNS 下发缺少已确认的 OxiDNS DHCP 目标，请重新预览')
+                _verify('dhcp_dns', plan['checks'], driver, agent)
             if current == 'dns_guard' and plan['checks']['dns_guard']['roles']:
                 # Hijacked clients receive fake-ip answers at once; the proxy
                 # routes and their NAT protection must already be in place.

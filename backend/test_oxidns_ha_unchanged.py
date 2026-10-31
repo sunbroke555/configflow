@@ -66,6 +66,10 @@ def test_dhcp_settings_and_plan_fingerprint_are_unchanged(leftover):
 def test_router_inspection_uses_the_single_agent_without_ha(monkeypatch, leftover):
     from backend.routes import routers as api
     driver = MemoryDriver()
+    # OxiDNS selection also inspects the known LAN; this fixture has no RA service.
+    nd_state = {'/ip/address': [{'.id': '*A', 'address': '192.168.0.1/24', 'interface': 'bridge'}],
+                '/ipv6/nd': []}
+    monkeypatch.setattr(driver, '_list', lambda path: copy.deepcopy(nd_state[path]), raising=False)
     agents = {'dns-agent': {**DNS_AGENT, **copy.deepcopy(leftover)},
               'gateway': {'id': 'gateway', 'host': '192.168.0.3', 'service_type': 'mihomo', 'status': 'offline'}}
     monkeypatch.setattr(api, '_agent', lambda agent_id: agents.get(agent_id) if agent_id else None)
@@ -74,7 +78,7 @@ def test_router_inspection_uses_the_single_agent_without_ha(monkeypatch, leftove
     _, desired, _, _ = api._inspect({}, {**DHCP_ROUTER, 'proxy_gateway_agent_id': 'gateway'}, driver)
     assert {key: value for key, value in desired.items() if key.startswith('dns')} == {
         'dns_agent_id': 'dns-agent', 'dns_server': '192.168.0.2', 'dns_error': ''}
-    assert driver.dhcp_reads == 1
+    assert driver.dhcp_reads == 2  # Initial DHCP report, then the RA DNS scope check.
 
 
 @pytest.mark.parametrize('leftover', DISABLED_LEFTOVERS)

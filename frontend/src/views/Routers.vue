@@ -368,7 +368,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
         class="mt-4"
         :padded="false"
         title="DHCP DNS"
-        description="只更新包含所选 mihomo 网关的唯一 DHCP 网段；未关联 OxiDNS Agent 时保留现有 DNS。"
+        description="通过 IPv4 DHCP 下发 DNS，只更新包含所选 mihomo 网关的唯一 DHCP 网段；未关联 OxiDNS Agent 时保留现有 DHCP DNS。"
       >
         <template #actions>
           <StatusDot :tone="dhcpDnsStatus.tone" :label="dhcpDnsStatus.label" />
@@ -401,6 +401,41 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
         <p v-if="dhcpDns.status !== 'disabled'" class="m-0 px-5 pb-4 text-[12px] leading-relaxed text-muted-foreground max-md:px-4 max-sm:px-3">
           发布会将 DNS 列表替换为所选服务器，不保留旧备用 DNS。终端在 DHCP 续租或重新联网后获得新 DNS。
         </p>
+      </SectionCard>
+
+      <SectionCard
+        v-if="ipv6Dns"
+        data-router-ipv6-dns
+        class="mt-4"
+        :padded="false"
+        title="IPv6 DNS 下发"
+        help="关联 OxiDNS 后，核对同一 LAN 是否通过 IPv6 路由器通告（RA）另发 DNS。关闭 DNS 下发可以避免客户端绕过 DHCP 指定的 OxiDNS；IPv6 地址和默认网关继续通告。改动先进入「预览发布」，确认后才应用。客户端已缓存的 DNS 可能要等过期或重新联网才消失。"
+      >
+        <template #actions>
+          <StatusDot :tone="ipv6DnsStatus.tone" :label="ipv6DnsStatus.label" />
+        </template>
+        <div class="flex flex-col gap-2 px-5 pb-4 text-[12.5px] leading-relaxed max-md:px-4 max-sm:px-3">
+          <p v-if="ipv6Dns.interface" class="m-0">
+            目标 LAN：<span class="font-mono [overflow-wrap:anywhere]">{{ ipv6Dns.interface }}</span>
+          </p>
+          <p class="m-0">{{ ipv6DnsMessage }}</p>
+          <p v-if="ipv6Dns.status === 'pending'" class="m-0 text-muted-foreground">
+            在「预览发布」确认后关闭；IPv6 地址和默认网关继续通告。
+          </p>
+          <p v-for="blocker in ipv6Dns.blockers" :key="blocker" role="alert" class="m-0 break-words text-warning-accent">{{ blocker }}</p>
+          <p v-for="warning in ipv6Dns.warnings" :key="warning" role="status" class="m-0 break-words text-warning-accent">{{ warning }}</p>
+          <p v-if="ipv6Dns.blockers.length" class="m-0 text-muted-foreground">其他路由、规则和 DHCP DNS 照常发布，只有这一项保留现状。</p>
+          <div v-if="ipv6Dns.fix_command" class="min-w-0 space-y-1.5" data-router-ipv6-dns-command>
+            <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+              <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+              <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 通告命令" @click="copyIPv6DnsCommand">
+                <Copy class="size-3.5" aria-hidden="true" />复制
+              </Button>
+            </div>
+            <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6Dns.fix_command }}</pre>
+            <p class="m-0 text-muted-foreground">为 {{ ipv6Dns.interface }} 单独建立不下发 DNS 的通告，其余参数照抄当前 all 条目；all 保持不变，其他接口不受影响。执行后重新生成差异报告确认。</p>
+          </div>
+        </div>
       </SectionCard>
 
       <SectionCard
@@ -656,7 +691,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
           </FormField>
           <p v-if="form.type === 'routeros'" class="m-0 text-xs leading-relaxed text-muted-foreground">取消规则集后，需保存、预览并确认发布，才会清理对应的受管规则。</p>
           </component>
-          <FormField v-if="!setupDraftSession" label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" v-bind="routerCopy.dns">
+          <FormField v-if="!setupDraftSession" label="DHCP DNS 服务器（OxiDNS Agent）" html-for="router-dns" v-bind="form.type === 'routeros' ? routerCopy.dnsROS : routerCopy.dns">
             <Select v-model="form.dns_agent_id">
               <SelectTrigger id="router-dns" class="w-full bg-background/50"><SelectValue placeholder="不关联" /></SelectTrigger>
               <SelectContent class="max-w-[calc(100vw-2rem)]">
@@ -723,6 +758,7 @@ import { RouterLink, matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import {
   Activity,
   CircleX,
+  Copy,
   GitCompare,
   Loader2,
   Pencil,
@@ -763,6 +799,7 @@ import { setupApi } from '@/api/setup'
 import { activeProfileId as selectedProfileId } from '@/profileContext'
 import { confirm, confirmDanger, confirmState, notify, settleConfirm } from '@/lib/feedback'
 import { routerCopy } from '@/lib/routerCopy'
+import { copyText } from '@/lib/clipboard'
 import { routerForwardingWarning, type GatewayForwardingEntry, type RouterForwardingWarning } from '@/lib/gatewayForwarding'
 import { usePageReloadGuard, withPageReloadBlocked } from '@/lib/pageReloadGuard'
 
@@ -797,6 +834,27 @@ interface IPv6FakeIPReport {
   items: { cidr: string; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
   warnings: string[]
   blockers: string[]
+}
+
+type IPv6DnsStatus = 'disabled' | 'not_required' | 'synced' | 'pending' | 'unknown' | 'blocked'
+interface IPv6DnsReport {
+  enabled: boolean
+  status: IPv6DnsStatus
+  interface: string
+  target_dns: string
+  message?: string
+  items: {
+    id: string
+    interface: string
+    source_interface: string
+    advertise_dns: string
+    dns_servers: string[]
+    status: IPv6DnsStatus
+    detail: string
+  }[]
+  blockers: string[]
+  warnings: string[]
+  fix_command?: string
 }
 
 interface DhcpDnsReport {
@@ -897,6 +955,22 @@ const DHCP_DNS_STATUS = {
   pending: { label: '待更新', tone: 'warning' },
   unknown: { label: '待确认', tone: 'warning' }
 } as const
+const IPV6_DNS_STATUS = {
+  disabled: { label: '未检查', tone: 'muted' },
+  not_required: { label: '无需调整', tone: 'success' },
+  synced: { label: '无需调整', tone: 'success' },
+  pending: { label: '待关闭', tone: 'warning' },
+  unknown: { label: '需处理', tone: 'warning' },
+  blocked: { label: '需处理', tone: 'warning' }
+} as const
+const IPV6_DNS_MESSAGE: Record<IPv6DnsStatus, string> = {
+  disabled: '未关联 OxiDNS，本次不检查或修改 IPv6 DNS 下发。',
+  not_required: '该 LAN 未通过 IPv6 另发 DNS，无需调整。',
+  synced: '该 LAN 未通过 IPv6 另发 DNS，无需调整。',
+  pending: '该 LAN 正在通过 IPv6 另发 DNS，需要关闭以统一使用 OxiDNS。',
+  unknown: '尚未确定可以安全修改的 LAN 配置，请先处理下方问题，再重新检查。',
+  blocked: '尚未确定可以安全修改的 LAN 配置，请先处理下方问题，再重新检查。'
+}
 const LOG_STATUS: Record<string, { label: string; chip: string }> = {
   ok: { label: '完成', chip: 'chip-ok' },
   verified: { label: '已校验', chip: 'chip-ok' },
@@ -947,6 +1021,17 @@ const reportSummary = computed(() => (report.value?.summary || {}) as ReportSumm
 const ipv6FakeIP = computed(() => report.value?.ipv6_fakeip as IPv6FakeIPReport | undefined)
 const dhcpDns = computed(() => report.value?.dhcp_dns as DhcpDnsReport | undefined)
 const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'disabled'])
+const ipv6Dns = computed(() => report.value?.ipv6_dns as IPv6DnsReport | undefined)
+const ipv6DnsStatus = computed(() => IPV6_DNS_STATUS[ipv6Dns.value?.status || 'unknown'] || IPV6_DNS_STATUS.unknown)
+const ipv6DnsMessage = computed(() => ipv6Dns.value?.message || IPV6_DNS_MESSAGE[ipv6Dns.value?.status || 'unknown'])
+async function copyIPv6DnsCommand() {
+  try {
+    await copyText(ipv6Dns.value?.fix_command || '')
+    notify.success('命令已复制。')
+  } catch {
+    notify.error('复制失败，请手动选择命令。')
+  }
+}
 const dnsGuard = computed(() => report.value?.dns_guard as DnsGuardReport | undefined)
 const dnsGuardStatus = computed(() => DNS_GUARD_STATUS[dnsGuard.value?.status || 'disabled'])
 const reportRouter = ref<RouterItem | null>(null)
