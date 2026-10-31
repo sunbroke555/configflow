@@ -3,7 +3,7 @@
     <PageHeader title="系统设置">
       <template #actions><Button as-child variant="outline" class="min-h-11"><RouterLink to="/setup">首次使用向导</RouterLink></Button></template>
     </PageHeader>
-    <Tabs :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
+    <Tabs keep-visited :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
       <TabsList class="mb-4 min-h-11 max-sm:mb-2 max-sm:grid max-sm:h-auto max-sm:w-full max-sm:grid-cols-2">
         <TabsTrigger value="general" class="min-h-11 px-4 max-sm:px-2">常规</TabsTrigger>
         <TabsTrigger value="tasks" class="min-h-11 px-4 max-sm:px-2">

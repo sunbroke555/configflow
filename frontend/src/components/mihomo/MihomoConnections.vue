@@ -222,6 +222,7 @@ import MihomoConnectionDetail from './MihomoConnectionDetail.vue'
 import DeviceNoteDialog from './DeviceNoteDialog.vue'
 import ConnectionRuleDialog from './ConnectionRuleDialog.vue'
 import { connectionRuleValues, deviceAddress, deviceNote, type DeviceNotes } from '@/lib/device-notes'
+import { useTabActive } from '@/components/ui/tabs'
 import { clientToolsApi, mihomoPanelApi } from '@/api'
 import { confirmDanger, notify } from '@/lib/feedback'
 import { formatBytes } from '@/lib/format'
@@ -244,9 +245,14 @@ const CLOSED_LIMIT = 500
 /** 趋势图保留的采样数：2 秒一次，约 2 分钟 */
 const TREND_POINTS = 60
 
-const props = defineProps<{ agentId: string; active: boolean }>()
+const props = withDefaults(defineProps<{ agentId: string; active?: boolean }>(), { active: true })
+// 所在标签是否为当前标签：由 Tabs 注入，切换标签不经过 props，隐藏的面板不会整表重新渲染
+const active = useTabActive(() => props.active)
 const panelElement = ref<HTMLElement | null>(null)
-const { width: panelWidth } = useElementSize(panelElement)
+const { width: measuredWidth } = useElementSize(panelElement)
+// 切到其他标签时面板隐藏、宽度读成 0：沿用上次的宽度，免得隐藏和切回时各把整张表按另一套列重排一次
+const panelWidth = ref(0)
+watch(measuredWidth, width => { if (width) panelWidth.value = width }, { immediate: true })
 const touchPointer = useMediaQuery('(pointer: coarse)')
 const actionsWidth = computed(() => touchPointer.value ? 100 : 76)
 
@@ -266,7 +272,9 @@ async function loadNotes() {
     const { data } = await clientToolsApi.notes(agentId)
     if (generation !== notesEpoch || disposed) return
     if (!data?.success) throw new Error('读取备注失败。')
-    notes.value = data.notes; notesError.value = ''
+    // 切回标签时会重读备注；内容没变就不替换，免得整表再渲染一次
+    if (JSON.stringify(data.notes) !== JSON.stringify(notes.value)) notes.value = data.notes
+    notesError.value = ''
   } catch (failure) {
     if (generation === notesEpoch && !disposed) notesError.value = panelError(failure)
   }
@@ -542,7 +550,7 @@ function recordClosed(current: MihomoConnection[]) {
 function schedule() {
   if (timer) clearTimeout(timer)
   timer = null
-  if (disposed || !props.active || !live.value) return
+  if (disposed || !active.value || !live.value) return
   timer = setTimeout(async () => {
     if (document.visibilityState === 'visible') await load()
     schedule()
@@ -592,14 +600,16 @@ async function closeAll() {
   }
 }
 
-watch(() => [props.active, live.value], ([active, polling]) => {
+watch(() => [active.value, live.value], ([shown, polling]) => {
   // 暂停后再恢复时旧样本已过时，不能拿来算速率
-  if (!active || !polling) previous = null
+  if (!shown || !polling) previous = null
   else load()
+  // 切走后面板保持挂载，未返回的读取不再更新隐藏的列表；暂停实时刷新时仍让它读完
+  if (!shown) controller?.abort()
   schedule()
 })
 onMounted(async () => {
-  if (props.active) await load()
+  if (active.value) await load()
   schedule()
 })
 onUnmounted(() => {
@@ -608,7 +618,7 @@ onUnmounted(() => {
   controller?.abort()
 })
 watch(() => props.agentId, () => { expanded.value = new Set(); memberLimits.value = new Map(); notesEpoch++; notes.value = {}; notesError.value = ''; noteIP.value = ''; ruleAction.value = null; void loadNotes() })
-watch(() => props.active, active => { if (active) void loadNotes() })
+watch(active, shown => { if (shown) void loadNotes() })
 onMounted(loadNotes)
 onUnmounted(() => { notesEpoch++ })
 </script>

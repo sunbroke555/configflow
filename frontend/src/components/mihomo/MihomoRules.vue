@@ -72,6 +72,7 @@ import Toolbar from '@/components/common/Toolbar.vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingRows from '@/components/common/LoadingRows.vue'
+import { useTabActive } from '@/components/ui/tabs'
 import { mihomoPanelApi } from '@/api'
 import { notify } from '@/lib/feedback'
 import { relativeTime } from '@/lib/format'
@@ -79,6 +80,8 @@ import { panelError, type MihomoProvider, type MihomoRule } from '@/types/mihomo
 
 const PAGE = 200
 const props = defineProps<{ agentId: string; reloadToken: number }>()
+// 所在标签是否为当前标签：由 Tabs 注入，切换标签不经过 props，隐藏的面板不会整表重新渲染
+const active = useTabActive()
 
 const rules = ref<MihomoRule[]>([])
 const providers = ref<MihomoProvider[]>([])
@@ -149,6 +152,9 @@ async function updateAll() {
   }
 }
 
-watch(() => props.reloadToken, load)
+// 切走后面板保持挂载：隐藏期间的刷新只做标记，切回时再读取
+let stale = false
+watch(() => props.reloadToken, () => { stale = !active.value; if (active.value) void load() })
+watch(active, shown => { if (shown && stale) { stale = false; void load() } })
 onMounted(load)
 </script>

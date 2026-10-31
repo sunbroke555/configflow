@@ -159,6 +159,32 @@ describe('ScheduledTasks', () => {
     expect(wrapper.text()).not.toContain('运行中…')
   })
 
+  it('pauses polling while its settings tab is hidden and reads again only once due', async () => {
+    vi.mocked(tasksApi.list).mockResolvedValue({ data: { success: true, tasks: [task({ running: true })] } } as any)
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:path(.*)*', component: { render: () => null } }] })
+    const wrapper = mount(ScheduledTasks, { props: { active: true }, attachTo: document.body, global: { plugins: [router] } })
+    wrappers.push(wrapper)
+    await flushPromises()
+    expect(tasksApi.list).toHaveBeenCalledTimes(1)
+    await wrapper.setProps({ active: false })
+    await vi.advanceTimersByTimeAsync(60000)
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+    expect(tasksApi.list).toHaveBeenCalledTimes(1)
+    // 隐藏期间已经过了轮询时间，切回立即读取一次
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    expect(tasksApi.list).toHaveBeenCalledTimes(2)
+    // 刚读过就切走再切回，不重复读取，按剩余时间继续轮询
+    await wrapper.setProps({ active: false })
+    await vi.advanceTimersByTimeAsync(1000)
+    await wrapper.setProps({ active: true })
+    await flushPromises()
+    expect(tasksApi.list).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(tasksApi.list).toHaveBeenCalledTimes(3)
+  })
+
   it('reports a run that cannot start', async () => {
     const wrapper = await render([task()])
     vi.mocked(tasksApi.run).mockRejectedValue({ isAxiosError: true, response: { data: { message: '这个任务正在运行，请稍后查看结果' } } })

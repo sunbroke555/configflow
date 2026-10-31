@@ -52,4 +52,26 @@ describe('Segmented', () => {
     await nextTick()
     expect(thumb(wrapper)).toContain('opacity: 1')
   })
+
+  it('keeps the thumb in place while its panel is hidden', async () => {
+    let resize!: () => void
+    vi.stubGlobal('ResizeObserver', class { constructor(callback: () => void) { resize = callback } observe() {} unobserve() {} disconnect() {} })
+    let width = 40
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')!
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => width })
+    onTestFinished(() => { Object.defineProperty(HTMLElement.prototype, 'offsetWidth', original) })
+    const wrapper = render('a')
+    await nextTick()
+    await nextTick()
+    expect(thumb(wrapper)).toContain('width: 40px')
+    // 所在标签隐藏时量到 0 宽：保留原位置，切回时滑块不会从 0 宽重新滑出
+    width = 0
+    resize()
+    await nextTick()
+    expect(thumb(wrapper)).toContain('width: 40px')
+    width = 48
+    resize()
+    await nextTick()
+    expect(thumb(wrapper)).toContain('width: 48px')
+  })
 })
