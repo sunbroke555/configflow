@@ -63,7 +63,7 @@ def resolve_profile_id(explicit: Optional[str] = None, fallback: Optional[str] =
             or (explicit is None and (request.endpoint is None or not _is_global_request()))):
         memo = resolved_profiles(request._get_current_object())
         memo_key = explicit if isinstance(explicit, str) else None
-        if memo_key in memo:
+        if memo is not None and memo_key in memo:
             return memo[memo_key]
     if explicit is not None:
         candidate = explicit

@@ -112,7 +112,8 @@ def _external_payload_secrets(system_config=None):
     """Read the current redaction context from the authoritative repository.
 
     令牌集合由仓库按 store head 记住（见 ProfileRepository._sanitization_tokens）。
-    常驻的文档缓存里本来就有这些令牌，记住集合不扩大暴露面；任何提交都会换
+    常驻的文档缓存里本来就有这些令牌，记住集合不扩大暴露面（文档超过缓存上限
+    不进缓存时，也只多常驻这几个令牌字符串，不多常驻文档）；任何提交都会换
     head，令牌轮换在下一个响应就生效。不要在这里另建跨文档版本的缓存。
     """
     secrets = set(_repository_rule_proxy_tokens())

@@ -137,9 +137,15 @@ def reset_config_context() -> None:
     _RESOLVED_PROFILES.set(None)
 
 
-def resolved_profiles(request_object) -> Dict[Optional[str], str]:
-    """本请求已校验过的配置空间 ID，供 resolve_profile_id 复用。"""
+def resolved_profiles(request_object) -> Optional[Dict[Optional[str], str]]:
+    """本请求已校验过的配置空间 ID，供 resolve_profile_id 复用。
+
+    配置事务内返回 None：工作副本可能已删掉某个配置空间，而提交数要等提交后才
+    增加，此时必须照常读工作副本校验。
+    """
     repository = get_repository()
+    if getattr(repository._local, 'document', None) is not None:
+        return None
     commits = repository.commit_count
     memo = _RESOLVED_PROFILES.get()
     if memo is None or memo[0] is not request_object or memo[1] is not repository or memo[2] != commits:

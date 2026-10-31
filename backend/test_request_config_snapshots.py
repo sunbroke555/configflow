@@ -3,12 +3,12 @@
 import copy
 
 import pytest
-from flask import Flask
+from flask import Blueprint, Flask, jsonify
 
 from backend.common import config as config_module
 from backend.common.config_export import sanitize_external_payload
 from backend.common.config_repository import ProfileNotFound, ProfileRepository
-from backend.common.profile_context import resolve_profile_id
+from backend.common.profile_context import install_profile_context, resolve_profile_id
 
 REDACTED = "[REDACTED]"
 
@@ -140,6 +140,59 @@ def test_another_request_does_not_reuse_the_validated_profile(repository, app):
         with app.test_request_context('/api/rules'):
             assert resolve_profile_id() == 'default'
         assert resolve_profile_id() == 'other'
+
+
+def test_full_request_validates_the_profile_once(repository, monkeypatch):
+    calls = []
+    metadata = repository._profile_metadata
+    monkeypatch.setattr(repository, '_profile_metadata', lambda profile_id: calls.append(profile_id) or metadata(profile_id))
+    app = Flask(__name__)
+    rules = Blueprint('rules', __name__)
+
+    @rules.get('/api/rules')
+    def list_rules():
+        config = config_module.get_config()
+        assert config_module.get_config(resolve_profile_id()) is config
+        return jsonify(profile_id=config['profile_id'])
+
+    app.register_blueprint(rules)
+    install_profile_context(app)
+    response = app.test_client().get('/api/rules', headers={'X-ConfigFlow-Profile': 'other'})
+
+    assert response.get_json() == {'profile_id': 'other'}
+    assert response.headers['X-ConfigFlow-Profile'] == 'other'
+    assert calls == ['other']
+
+
+def test_global_request_follows_a_default_switch(repository):
+    app = Flask(__name__)
+    settings = Blueprint('settings', __name__)
+
+    @settings.post('/api/settings/default-profile')
+    def switch_default():
+        before = resolve_profile_id()
+        repository.set_default_profile('other')
+        return jsonify(before=before, after=resolve_profile_id())
+
+    app.register_blueprint(settings)
+    install_profile_context(app)
+    response = app.test_client().post('/api/settings/default-profile')
+
+    assert response.get_json() == {'before': 'default', 'after': 'other'}
+
+
+def test_transaction_working_copy_is_validated_without_the_memo(repository, app):
+    with app.test_request_context('/api/rules', headers={'X-ConfigFlow-Profile': 'other'}):
+        config_module.reset_config_context()
+        assert resolve_profile_id('other') == 'other'
+        with pytest.raises(RuntimeError):
+            with repository._document(write=True) as document:
+                del document['profiles']['other']
+                # commit_count only grows after the commit: never answer from the memo here.
+                with pytest.raises(ProfileNotFound):
+                    resolve_profile_id('other')
+                raise RuntimeError('abort')
+        assert resolve_profile_id('other') == 'other'
 
 
 def test_redaction_tokens_are_read_once_per_generation_without_copying_system(repository, monkeypatch):
