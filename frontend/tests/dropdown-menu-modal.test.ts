@@ -72,26 +72,35 @@ describe('DropdownMenu modal default', () => {
     expect(document.body.style.pointerEvents).toBe('')
   })
 
-  it('selects an item inside a modal dialog without dismissing the dialog', async () => {
+  // 放在模态对话框里的菜单要显式 :modal="true"（ProxyGroupOrderDialog、OxidnsSchemaValueEditor）
+  async function mountMenuInDialog() {
     const dialogOpen = ref(true)
     const menuOpen = ref(false)
     const onSelect = vi.fn()
     wrappers.push(mount(defineComponent({
       components: { DialogRoot, DialogContent, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger },
       setup: () => ({ dialogOpen, menuOpen, onSelect }),
-      template: `<DialogRoot v-model:open="dialogOpen">
-        <DialogContent :show-close-button="false" :aria-describedby="undefined">
-          <DialogTitle>调整顺序</DialogTitle>
-          <DropdownMenu v-model:open="menuOpen">
-            <DropdownMenuTrigger as-child><button type="button">更多操作</button></DropdownMenuTrigger>
-            <DropdownMenuContent><DropdownMenuItem @select="onSelect">移到顶部</DropdownMenuItem></DropdownMenuContent>
-          </DropdownMenu>
-        </DialogContent>
-      </DialogRoot>`,
+      template: `<div>
+        <button type="button" data-testid="outside">对话框外部</button>
+        <DialogRoot v-model:open="dialogOpen">
+          <DialogContent :show-close-button="false" :aria-describedby="undefined">
+            <DialogTitle>调整顺序</DialogTitle>
+            <DropdownMenu v-model:open="menuOpen" :modal="true">
+              <DropdownMenuTrigger as-child><button type="button">更多操作</button></DropdownMenuTrigger>
+              <DropdownMenuContent><DropdownMenuItem @select="onSelect">移到顶部</DropdownMenuItem></DropdownMenuContent>
+            </DropdownMenu>
+          </DialogContent>
+        </DialogRoot>
+      </div>`,
     }), { attachTo: document.body }))
     await settle()
     menuOpen.value = true
     await settle()
+    return { dialogOpen, menuOpen, onSelect }
+  }
+
+  it('selects an item inside a modal dialog without dismissing the dialog', async () => {
+    const { dialogOpen, menuOpen, onSelect } = await mountMenuInDialog()
     // 对话框锁住 body 时，后打开的菜单层仍可点击
     expect(document.body.style.pointerEvents).toBe('none')
     expect(menu()!.closest<HTMLElement>('[data-dismissable-layer]')!.style.pointerEvents).toBe('auto')
@@ -101,6 +110,16 @@ describe('DropdownMenu modal default', () => {
     item.click()
     await settle()
     expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(menuOpen.value).toBe(false)
+    expect(dialogOpen.value).toBe(true)
+  })
+
+  it('closes only the menu when clicking outside a modal dialog', async () => {
+    const { dialogOpen, menuOpen } = await mountMenuInDialog()
+    expect(menu()).toBeTruthy()
+
+    pointerDown(document.querySelector('[data-testid="outside"]')!)
+    await settle()
     expect(menuOpen.value).toBe(false)
     expect(dialogOpen.value).toBe(true)
   })
