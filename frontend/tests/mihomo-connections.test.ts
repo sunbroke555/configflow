@@ -401,6 +401,35 @@ describe('mihomo connections', () => {
 })
 
 describe('mihomo connection summary', () => {
+  it('stops reading while its tab is hidden and keeps the closed history for when it is shown again', async () => {
+    vi.mocked(clientToolsApi.notes).mockImplementation(async () => ({ data: { success: true, notes: { '192.0.2.1': '书房电脑' } } }) as any)
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValueOnce(snapshot([connection('a', 'a.example', '192.0.2.1'), connection('b', 'b.example', '192.0.2.1')]))
+    const { wrapper, state } = await render()
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValueOnce(snapshot([connection('a', 'a.example', '192.0.2.1')]))
+    await state.load(); await flushPromises()
+    expect(state.closed.map((row: any) => row.id)).toEqual(['b'])
+    let signal: AbortSignal | undefined
+    vi.mocked(mihomoPanelApi.connections).mockImplementationOnce((_id: string, options: any) => { signal = options.signal; return new Promise(() => {}) })
+    void state.load()
+    state.measuredWidth = 900; await flushPromises()
+    const columns = state.visibleColumns.map((column: any) => column.key)
+    await wrapper.setProps({ active: false }); await flushPromises()
+    expect(signal?.aborted).toBe(true)
+    // 隐藏后读到的宽度是 0，列布局保持不变
+    state.measuredWidth = 0; await flushPromises()
+    expect(state.panelWidth).toBe(900)
+    expect(state.visibleColumns.map((column: any) => column.key)).toEqual(columns)
+    const calls = vi.mocked(mihomoPanelApi.connections).mock.calls.length
+    const notes = state.notes
+    vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([connection('a', 'a.example', '192.0.2.1')]))
+    await wrapper.setProps({ active: true }); await flushPromises()
+    expect(mihomoPanelApi.connections).toHaveBeenCalledTimes(calls + 1)
+    expect(state.closed.map((row: any) => row.id)).toEqual(['b'])
+    // 切回时重读的备注没变，不替换（避免整表多渲染一次）
+    expect(clientToolsApi.notes).toHaveBeenCalledTimes(2)
+    expect(state.notes).toBe(notes)
+  })
+
   it('puts counters on the first row and trend metrics on the second', async () => {
     vi.mocked(mihomoPanelApi.connections).mockResolvedValue(snapshot([]))
     const { state } = await render()

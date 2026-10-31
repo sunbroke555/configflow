@@ -246,7 +246,10 @@ const TREND_POINTS = 60
 
 const props = defineProps<{ agentId: string; active: boolean }>()
 const panelElement = ref<HTMLElement | null>(null)
-const { width: panelWidth } = useElementSize(panelElement)
+const { width: measuredWidth } = useElementSize(panelElement)
+// 切到其他标签时面板隐藏、宽度读成 0：沿用上次的宽度，免得隐藏和切回时各把整张表按另一套列重排一次
+const panelWidth = ref(0)
+watch(measuredWidth, width => { if (width) panelWidth.value = width }, { immediate: true })
 const touchPointer = useMediaQuery('(pointer: coarse)')
 const actionsWidth = computed(() => touchPointer.value ? 100 : 76)
 
@@ -266,7 +269,9 @@ async function loadNotes() {
     const { data } = await clientToolsApi.notes(agentId)
     if (generation !== notesEpoch || disposed) return
     if (!data?.success) throw new Error('读取备注失败。')
-    notes.value = data.notes; notesError.value = ''
+    // 切回标签时会重读备注；内容没变就不替换，免得整表再渲染一次
+    if (JSON.stringify(data.notes) !== JSON.stringify(notes.value)) notes.value = data.notes
+    notesError.value = ''
   } catch (failure) {
     if (generation === notesEpoch && !disposed) notesError.value = panelError(failure)
   }
@@ -593,8 +598,8 @@ async function closeAll() {
 }
 
 watch(() => [props.active, live.value], ([active, polling]) => {
-  // 暂停后再恢复时旧样本已过时，不能拿来算速率
-  if (!active || !polling) previous = null
+  // 暂停后再恢复时旧样本已过时，不能拿来算速率；切走后面板保持挂载，未返回的读取也不再更新隐藏的列表
+  if (!active || !polling) { previous = null; controller?.abort() }
   else load()
   schedule()
 })
