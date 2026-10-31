@@ -1,9 +1,13 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { installScrollingMarker } from '@/lib/scrollingMarker'
 
 beforeAll(() => {
   vi.useFakeTimers()
   installScrollingMarker()
+})
+
+afterAll(() => {
+  vi.useRealTimers()
 })
 
 afterEach(() => {
