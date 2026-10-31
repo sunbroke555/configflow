@@ -890,7 +890,8 @@ def control(label):
                      check=False).returncode == 0:
                 break
             time.sleep(0.5)
-        results = measure(label, 'AC', mixed=17890, controller=19090)
+        # Its own label: the deployed config's measurement under LABEL stays as it was.
+        results = measure(f'{label}-control', 'AC', mixed=17890, controller=19090)
         save(f'evidence/{label}-control.json', {'measure': results})
     finally:
         guest(152, 'systemctl', 'stop', 'cf-subhosts-raw', check=False)
