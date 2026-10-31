@@ -180,6 +180,21 @@ body {
   display: none;
 }
 
+/* ---------- 长列表行 ----------
+ * 规则、节点这类上千行的列表：离屏的行跳过样式、布局与绘制，弹层开关、
+ * 滚动、进入排序引起的整页样式重算只需处理屏幕附近的行。
+ * content-visibility 会同时带上 layout / style / paint containment：行内超出
+ * 行边界的内容会被裁掉，行也会成为 absolute / fixed 后代的包含块，
+ * 所以只加在内容不向外溢出的行或卡片上（弹层都 Teleport 到 body，不受影响）。
+ * 离屏行先按 --cf-cv-row-h（内容高度，不含内边距和边框）估高，渲染过一次后
+ * 由 auto 记住真实高度，避免滚动条跳动；窄屏（< 768px）控件撑到触控高度，
+ * 行会变高，各处另给 max-md 估值。表格行（tr）不支持这项属性，加了也无效。
+ */
+.cf-cv-row {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto var(--cf-cv-row-h, 55px);
+}
+
 /* ---------- 数据表格 ----------
  * 规格要求数据密集区域优先使用列表/表格而非卡片墙。
  * 这里放跨页面通用的骨架，各页只补自己的列样式。
