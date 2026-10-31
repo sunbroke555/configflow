@@ -13,6 +13,14 @@ export interface MihomoIPv6Value {
   editable: boolean
   message: string
 }
+export interface MihomoFakeIPv6Range {
+  visible: boolean
+  value: string
+  source: 'explicit' | 'default' | 'invalid'
+  editable: boolean
+  error: string
+  message: string
+}
 export interface MihomoIPv6Config {
   core: MihomoIPv6Value
   dns: MihomoIPv6Value
@@ -67,6 +75,83 @@ export function readMihomoIPv6(source: string, defaultSource?: string): MihomoIP
   }
 }
 
+/** Validate without rewriting host bits or the user's chosen IPv6 spelling. */
+export function validateMihomoFakeIPv6Range(value: string): string {
+  const match = /^([0-9a-f:.]+)\/(\d{1,3})$/i.exec(value.trim())
+  const invalid = '请填写有效的 IPv6 网段，例如 fc00::1/64。'
+  if (!match || !match[1].includes(':') || Number(match[2]) > 128) return invalid
+  let address: string
+  try {
+    // The platform URL parser validates compressed IPv6 and embedded IPv4 forms;
+    // the character allowlist above excludes zones, ports, paths and user info.
+    address = new URL(`http://[${match[1]}]/`).hostname.slice(1, -1)
+  } catch {
+    return invalid
+  }
+  const first = Number.parseInt(address.split(':')[0] || '0', 16)
+  if ((first & 0xfe00) !== 0xfc00 || Number(match[2]) < 7) {
+    return '请使用 fc00::/7 范围内的内网网段，前缀长度为 7–128；不要填写公网或 fe80:: 链路本地地址。'
+  }
+  return ''
+}
+
+/** Read the effective range without materializing a missing value in the draft. */
+export function readMihomoFakeIPv6Range(source: string, defaultSource?: string): MihomoFakeIPv6Range {
+  try {
+    const document = parse(source.trim() ? source : defaultSource || '')
+    const values = document.toJS({ maxAliasCount: 100 }) as Record<string, unknown>
+    const dns = values.dns
+    if (dns === null || typeof dns !== 'object' || Array.isArray(dns)) {
+      return { visible: false, value: '', source: 'invalid', editable: false, error: '', message: '' }
+    }
+    const settings = dns as Record<string, unknown>
+    const visible = (values.ipv6 === undefined || values.ipv6 === true) && settings.enable === true
+      && settings.ipv6 === true && settings['enhanced-mode'] === 'fake-ip'
+    const raw = settings['fake-ip-range6']
+    const missing = !Object.prototype.hasOwnProperty.call(settings, 'fake-ip-range6')
+    const value = missing ? DEFAULT_MIHOMO_FAKE_IPV6_RANGE
+      : typeof raw === 'string' ? raw : raw === null || typeof raw === 'object' ? '' : String(raw)
+    const error = missing ? '' : typeof raw === 'string' ? validateMihomoFakeIPv6Range(raw)
+      : 'IPv6 Fake-IP 网段必须是文本，请填写有效的 IPv6 网段。'
+    const dnsNode = document.getIn(['dns'], true)
+    const target = document.getIn(['dns', 'fake-ip-range6'], true)
+    const shared = new Set<unknown>()
+    visit(document, { Alias(_key, alias) { shared.add(alias.resolve(document)) } })
+    const inheritedDNS = dnsNode === undefined
+    const inheritedRange = target === undefined && !missing
+    const sharedAnchor = shared.has(document.contents) || shared.has(dnsNode) || shared.has(target)
+    const editable = isMap(dnsNode) && !inheritedRange && !sharedAnchor && !isAlias(target)
+      && (target === undefined || isScalar(target))
+    const message = sharedAnchor ? '此网段的 YAML 锚点被其他配置引用，请在下方 YAML 中修改。'
+      : isAlias(dnsNode) || isAlias(target) ? '此网段使用 YAML 别名，请在下方 YAML 中修改。'
+      : inheritedDNS || inheritedRange ? '此网段来自 YAML 合并配置，请在下方 YAML 中修改。'
+      : !editable ? '此网段的 YAML 格式无法直接编辑，请在下方 YAML 中修正。'
+      : missing ? 'YAML 尚未填写；编辑网段或重新开启 DNS IPv6 后补齐。' : ''
+    return { visible, value, source: missing ? 'default' : error ? 'invalid' : 'explicit', editable, error, message }
+  } catch (failure) {
+    const message = failure instanceof Error ? failure.message : '无法读取 IPv6 Fake-IP 网段，请检查 YAML。'
+    return { visible: false, value: '', source: 'invalid', editable: false, error: message, message }
+  }
+}
+
+/** Change only the local range; aliases and merge sources stay under manual control. */
+export function setMihomoFakeIPv6Range(source: string, value: string, defaultSource?: string): string {
+  const state = readMihomoFakeIPv6Range(source, defaultSource)
+  if (!state.editable) throw new Error(state.message || state.error || '当前网段无法直接编辑，请在 YAML 中修改。')
+  if (!state.visible) throw new Error('请先开启 IPv6 和 DNS IPv6，并使用 Fake-IP 模式。')
+  const error = validateMihomoFakeIPv6Range(value)
+  if (error) throw new Error(error)
+  const document = parse(source.trim() ? source : defaultSource || '')
+  const path = ['dns', 'fake-ip-range6']
+  const previous = document.getIn(path, true)
+  if (isScalar(previous)) {
+    previous.value = value.trim()
+    // Explicitly correcting a typed scalar must not leave e.g. !!int on a CIDR.
+    if (previous.tag && previous.tag !== 'tag:yaml.org,2002:str') delete previous.tag
+  } else document.setIn(path, value.trim())
+  return document.toString({ lineWidth: 0 })
+}
+
 /** Edit the selected flag and fill a missing Fake-IP IPv6 range when it becomes usable. */
 export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field, enabled: boolean, defaultSource?: string): MihomoIPv6Edit {
   const state = readMihomoIPv6(source, defaultSource)
@@ -99,6 +184,10 @@ export function setMihomoIPv6WithDetails(source: string, field: MihomoIPv6Field,
         notice = `已补充 IPv6 Fake-IP 网段 ${DEFAULT_MIHOMO_FAKE_IPV6_RANGE}；保存后到「上级路由」查看差异并发布路由。`
       }
     }
+  }
+  if (!enabled && dns !== null && typeof dns === 'object' && !Array.isArray(dns)
+    && Object.prototype.hasOwnProperty.call(dns, 'fake-ip-range6')) {
+    notice = '已关闭 IPv6 Fake-IP，网段保留供再次开启；保存后到「上级路由」预览发布，撤回 CF 受管路由。'
   }
   return { content: document.toString({ lineWidth: 0 }), addedFakeIPv6Range, notice }
 }
