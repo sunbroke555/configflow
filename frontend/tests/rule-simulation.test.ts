@@ -14,6 +14,7 @@ let wrapper: VueWrapper | undefined
 let group: ProxyGroup
 let rules: Array<Record<string, any>>
 let dnsState: Record<string, any>
+let matchRuleId: string
 const requests: InternalAxiosRequestConfig[] = []
 const originalAdapter = api.defaults.adapter
 const scrollDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView')
@@ -28,6 +29,7 @@ beforeEach(() => {
   setActiveProfileId('simulation-profile')
   requests.length = 0
   group = { id: 'group-one', name: 'Primary policy', type: 'select', enabled: true, subscriptions: ['sub-one'], regex: 'HK' }
+  matchRuleId = 'rule-one'
   rules = [{ id: 'rule-one', itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: 'example.test', policy: group.name, enabled: true }]
   dnsState = {
     success: true, upstreams: [], mosdns: {}, rules: { 'rule-one': { state: 'follow', route: 'proxy', follow_route: 'proxy' } },
@@ -38,10 +40,13 @@ beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   api.defaults.adapter = async config => {
     requests.push(config)
-    if (config.url === '/rules/match-test') return response(config, {
-      success: true, matched: true, rule_id: 'rule-one', item_type: 'rule',
-      policy: group.name, priority: 1, matched_line: `DOMAIN-SUFFIX,example.test,${group.name}`, elapsed_time: 3
-    })
+    if (config.url === '/rules/match-test') {
+      const rule = rules.find(item => item.id === matchRuleId)
+      return response(config, rule ? {
+        success: true, matched: true, rule_id: rule.id, item_type: 'rule',
+        policy: rule.policy, priority: rules.indexOf(rule) + 1, matched_line: `${rule.rule_type},${rule.value},${rule.policy}`, elapsed_time: 3
+      } : { success: true, matched: false, elapsed_time: 3 })
+    }
     if (config.url === '/proxy-groups/preview-regex') return response(config, {
       success: true, nodes: [{ name: 'HK first' }, { name: 'HK cached winner' }], count: 2
     })
@@ -180,5 +185,107 @@ describe('rule match simulation', () => {
     const page = await renderAndSimulate()
     expect(page.find('[data-sim-dns]').exists()).toBe(false)
     expect(page.text()).not.toContain('DNS：')
+  })
+})
+
+describe('rule match simulation scan', () => {
+  const stubMotion = (reduce: boolean) => vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+    matches: reduce && query.includes('prefers-reduced-motion'), media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn()
+  })))
+
+  const useRules = (count: number) => {
+    rules = Array.from({ length: count }, (_, index) => ({
+      id: `rule-${index + 1}`, itemType: 'rule', rule_type: 'DOMAIN-SUFFIX', value: `site${index + 1}.test`,
+      // 策略交替，避免相邻规则合成分组
+      policy: index % 2 ? 'DIRECT' : group.name, enabled: true
+    }))
+  }
+
+  /** 记录依次加上 is-scan 的行，以及高亮期间被触发的组件重渲染次数 */
+  const recordScan = (root: Node) => {
+    const record = { scanned: [] as string[], maxAtOnce: 0, rendersWhileScanning: 0 }
+    const observer = new MutationObserver(list => {
+      for (const mutation of list) {
+        const row = mutation.target as HTMLElement
+        if (row.classList.contains('is-scan') && !(mutation.oldValue || '').split(/\s+/).includes('is-scan')) record.scanned.push(row.dataset.ruleKey!)
+      }
+      record.maxAtOnce = Math.max(record.maxAtOnce, (root as Element).querySelectorAll('.is-scan').length)
+    })
+    observer.observe(root, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true })
+    const mixin = { renderTriggered() { if ((root as Element).querySelector('.is-scan')) record.rendersWhileScanning++ } }
+    return { record, mixin, stop: () => observer.disconnect() }
+  }
+
+  async function mountAndSubmit(mixin: object, query = 'www.site.test') {
+    wrapper = mount(Rules, { attachTo: document.body, global: { mixins: [mixin] } })
+    await flushPromises()
+    await wrapper.get('[aria-label="要模拟的域名或 IP"]').setValue(query)
+    await wrapper.get('form').trigger('submit')
+    return wrapper
+  }
+
+  it('moves the scan highlight row by row without re-rendering the list', async () => {
+    stubMotion(false)
+    useRules(4)
+    matchRuleId = 'rule-3'
+    const scan = recordScan(document.body)
+    const page = await mountAndSubmit(scan.mixin)
+    await vi.waitFor(() => expect(page.get('form').text()).toContain('DOMAIN-SUFFIX,site3.test'), { timeout: 3000 })
+    scan.stop()
+    expect(scan.record.scanned).toEqual(['rule-rule-1', 'rule-rule-2', 'rule-rule-3'])
+    expect(scan.record.maxAtOnce).toBe(1)
+    expect(scan.record.rendersWhileScanning).toBe(0)
+    expect(document.querySelector('.is-scan')).toBeNull()
+    expect(page.get('[data-rule-key="rule-rule-3"]').classes()).toContain('is-match')
+    expect(page.findAll('.rule-row.is-match')).toHaveLength(1)
+  })
+
+  it('scans every row again for each new simulation', async () => {
+    stubMotion(false)
+    useRules(3)
+    matchRuleId = 'rule-2'
+    const scan = recordScan(document.body)
+    const page = await mountAndSubmit(scan.mixin)
+    await vi.waitFor(() => expect(page.get('form').text()).toContain('DOMAIN-SUFFIX,site2.test'), { timeout: 3000 })
+    matchRuleId = 'missing'
+    await page.get('form').trigger('submit')
+    await vi.waitFor(() => expect(page.get('form').text()).toContain('未命中任何规则'), { timeout: 3000 })
+    scan.stop()
+    expect(scan.record.scanned).toEqual(['rule-rule-1', 'rule-rule-2', 'rule-rule-1', 'rule-rule-2', 'rule-rule-3'])
+    expect(document.querySelector('.is-scan')).toBeNull()
+    expect(page.findAll('.rule-row.is-match')).toHaveLength(0)
+  })
+
+  it('stops the scan and does not scroll when the page is left mid-scan', async () => {
+    stubMotion(false)
+    useRules(4)
+    matchRuleId = 'rule-4'
+    const scan = recordScan(document.body)
+    const page = await mountAndSubmit(scan.mixin)
+    await vi.waitFor(() => expect(document.querySelector('.is-scan')).not.toBeNull(), { timeout: 3000 })
+    scan.stop()
+    const rows = Array.from(page.element.querySelectorAll<HTMLElement>('[data-rule-key]'))
+    const afterLeave = recordScan(page.element)
+    page.unmount()
+    wrapper = undefined
+    await new Promise(resolve => window.setTimeout(resolve, 500))
+    afterLeave.stop()
+    expect(afterLeave.record.scanned).toEqual([])
+    expect(rows.filter(row => row.classList.contains('is-scan'))).toEqual([])
+    expect(window.scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('shows the result without scanning when the system reduces motion', async () => {
+    stubMotion(true)
+    useRules(4)
+    matchRuleId = 'rule-4'
+    const scan = recordScan(document.body)
+    const page = await mountAndSubmit(scan.mixin)
+    await vi.waitFor(() => expect(page.get('form').text()).toContain('DOMAIN-SUFFIX,site4.test'))
+    scan.stop()
+    expect(scan.record.scanned).toEqual([])
+    expect(page.get('[data-rule-key="rule-rule-4"]').classes()).toContain('is-match')
   })
 })

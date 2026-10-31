@@ -59,7 +59,7 @@ watch(
 )
 
 /** 系统要求减少动态效果时，无论偏好如何都不播放流动动画；调用时再查询，不在模块加载时依赖 matchMedia */
-const systemReducesMotion = (): boolean =>
+export const systemReducesMotion = (): boolean =>
   typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
 export const usePreferences = () => ({
