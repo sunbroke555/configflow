@@ -2,9 +2,10 @@
 import re
 import yaml
 from collections import OrderedDict
+from contextlib import contextmanager
 from copy import deepcopy
 from sys import getsizeof
-from threading import RLock
+from threading import RLock, local
 from urllib.parse import urlsplit
 from typing import Dict, Any, List, Optional
 from backend.utils.logger import get_logger
@@ -1056,6 +1057,26 @@ def _parse_structured_proxy_string(proxy_string: str) -> Optional[Dict[str, Any]
 
 
 
+_node_conversions = local()
+
+
+@contextmanager
+def node_conversions(results, *, reuse=False):
+    """Record Sub-Store conversions of URI node strings in this thread into ``results``.
+
+    With ``reuse`` a string already in ``results`` is answered from it instead
+    of asking Sub-Store again. A publication that renders its files a second
+    time (after saving newly downloaded subscriptions) reuses the first
+    rendering's conversions; one string always converts to the same proxy.
+    """
+    previous = getattr(_node_conversions, 'scope', None)
+    _node_conversions.scope = (results, reuse)
+    try:
+        yield results
+    finally:
+        _node_conversions.scope = previous
+
+
 def convert_node_to_mihomo(node: Dict[str, Any]) -> Dict[str, Any]:
     """将通用节点格式转换为 Mihomo 格式。
 
@@ -1079,8 +1100,14 @@ def convert_node_to_mihomo(node: Dict[str, Any]) -> Dict[str, Any]:
             return parsed
 
         # URI 或 base64 格式，通过 Sub-Store 转换
-        logger.info(f"节点 '{outer_name}' 为 URI/base64 格式，调用 Sub-Store 转换")
-        proxy = convert_proxy_string(proxy_string)
+        scope = getattr(_node_conversions, 'scope', None) if isinstance(proxy_string, str) else None
+        if scope is not None and scope[1] and proxy_string in scope[0]:
+            proxy = deepcopy(scope[0][proxy_string])
+        else:
+            logger.info(f"节点 '{outer_name}' 为 URI/base64 格式，调用 Sub-Store 转换")
+            proxy = convert_proxy_string(proxy_string)
+            if scope is not None:
+                scope[0][proxy_string] = deepcopy(proxy)
         if proxy:
             proxy['name'] = outer_name
             fix_proxy_fields(proxy)

@@ -578,7 +578,8 @@ def _publish_service(repository, manager, session, service):
         raise InstallationError(reservation.get('message') or '设备正在执行其他任务。', 409)
     try:
         config = _saved_snapshot(repository, session)
-        prepared = _prepare_transactional_content(agent, config, base_url=session['server_url'], deployment_id=deployment_id)
+        prepared = _prepare_transactional_content(agent, config, base_url=session['server_url'], deployment_id=deployment_id,
+                                                  store_downloads=True)
         _pair(repository, manager, session)
         if prepared['prepared_providers']:
             commit_provider_bundle(session['profile_id'], prepared['prepared_providers'])
