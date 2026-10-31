@@ -78,7 +78,7 @@ import { relativeTime } from '@/lib/format'
 import { panelError, type MihomoProvider, type MihomoRule } from '@/types/mihomo'
 
 const PAGE = 200
-const props = defineProps<{ agentId: string; reloadToken: number }>()
+const props = defineProps<{ agentId: string; active: boolean; reloadToken: number }>()
 
 const rules = ref<MihomoRule[]>([])
 const providers = ref<MihomoProvider[]>([])
@@ -149,6 +149,9 @@ async function updateAll() {
   }
 }
 
-watch(() => props.reloadToken, load)
+// 切走后面板保持挂载：隐藏期间的刷新只做标记，切回时再读取
+let stale = false
+watch(() => props.reloadToken, () => { stale = !props.active; if (props.active) void load() })
+watch(() => props.active, active => { if (active && stale) { stale = false; void load() } })
 onMounted(load)
 </script>

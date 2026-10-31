@@ -65,16 +65,17 @@
           <Button v-if="upgradeRequired" class="min-h-11" @click="router.push('/agents')">前往升级 Agent</Button>
         </EmptyState>
       </SectionCard>
-      <Tabs v-else :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
+      <!-- 子标签首次打开后保持挂载，切回保留测速结果和连接记录；换设备时重建，只挂载当前标签 -->
+      <Tabs v-else :key="agentId" keep-visited :model-value="tab" class="min-w-0" @update:model-value="changeTab(String($event))">
         <TabsList class="mb-4 min-h-11 max-sm:mb-0">
           <TabsTrigger value="proxies" class="min-h-11 px-4">策略</TabsTrigger>
           <TabsTrigger value="connections" class="min-h-11 px-4">连接</TabsTrigger>
           <TabsTrigger value="rules" class="min-h-11 px-4">规则</TabsTrigger>
           <TabsTrigger value="logs" class="min-h-11 px-4">日志</TabsTrigger>
         </TabsList>
-        <TabsContent value="proxies"><MihomoProxies :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="proxies"><MihomoProxies :key="agentId" :agent-id="agentId" :active="tab === 'proxies'" :reload-token="reloadToken" /></TabsContent>
         <TabsContent value="connections"><MihomoConnections :key="agentId" :agent-id="agentId" :active="tab === 'connections'" /></TabsContent>
-        <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :reload-token="reloadToken" /></TabsContent>
+        <TabsContent value="rules"><MihomoRules :key="agentId" :agent-id="agentId" :active="tab === 'rules'" :reload-token="reloadToken" /></TabsContent>
         <TabsContent value="logs"><MihomoLogs :key="agentId" :agent-id="agentId" :active="tab === 'logs'" :reload-token="reloadToken" /></TabsContent>
       </Tabs>
     </template>

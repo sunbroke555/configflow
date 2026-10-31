@@ -128,7 +128,7 @@ import {
   orderedGroups, panelError, saveProxySettings, type MihomoProvider, type MihomoProxy, type ProxyPanelSettings
 } from '@/types/mihomo'
 
-const props = defineProps<{ agentId: string; reloadToken: number }>()
+const props = defineProps<{ agentId: string; active: boolean; reloadToken: number }>()
 
 const proxies = ref<Record<string, MihomoProxy>>({})
 const providers = ref<MihomoProvider[]>([])
@@ -439,7 +439,10 @@ function resetTests() {
   testEpoch++; testing.clear(); nodeTesting.clear(); delays.clear()
   batchRunning.value = false; batchStop.value = true
 }
-watch(() => props.reloadToken, () => { resetTests(); void load() })
+// 切走后面板保持挂载：隐藏期间的刷新只做标记，切回时再读取
+let stale = false
+watch(() => props.reloadToken, () => { resetTests(); stale = !props.active; if (props.active) void load() })
+watch(() => props.active, active => { if (active && stale) { stale = false; void load() } })
 watch(() => props.agentId, () => {
   resetTests(); epoch++; proxies.value = {}; providers.value = []; coreProxyNames.value.clear(); nodeProviders.value.clear()
   void load()

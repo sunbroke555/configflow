@@ -141,7 +141,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowUpRight, CalendarClock, Loader2, Pencil, Play, RefreshCw } from '@lucide/vue'
 import SectionCard from '@/components/common/SectionCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -166,6 +166,9 @@ const errorMessage = (failure: unknown, fallback: string) =>
 const FAST_POLL = 3000
 const SLOW_POLL = 60000
 
+// 系统设置切到其他标签时本组件保持挂载，active 为 false 期间暂停轮询
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+
 const tasks = ref<ScheduledTask[]>([])
 const loading = ref(false)
 const loaded = ref(false)
@@ -175,6 +178,8 @@ const starting = ref(new Set<string>())
 const now = ref(Date.now())
 let fastUntil = 0
 let timer: number | undefined
+/** 下一次轮询的到期时间；隐藏期间不轮询，切回时到期才读取 */
+let dueAt = 0
 let clock: number | undefined
 let readToken = 0
 let disposed = false
@@ -215,7 +220,8 @@ function schedule() {
   window.clearTimeout(timer)
   if (disposed) return
   const fast = Date.now() < fastUntil || tasks.value.some(task => task.running)
-  timer = window.setTimeout(() => load(true), fast ? FAST_POLL : SLOW_POLL)
+  dueAt = Date.now() + (fast ? FAST_POLL : SLOW_POLL)
+  if (props.active) timer = window.setTimeout(() => load(true), fast ? FAST_POLL : SLOW_POLL)
 }
 
 async function load(quiet = false) {
@@ -319,12 +325,20 @@ async function saveEditor() {
 }
 
 function onVisibility() {
-  if (document.visibilityState === 'visible') load(true)
+  if (document.visibilityState === 'visible' && props.active) load(true)
 }
+
+watch(() => props.active, active => {
+  window.clearTimeout(timer)
+  if (!active || disposed) return
+  now.value = Date.now()
+  if (Date.now() >= dueAt) load(true)
+  else timer = window.setTimeout(() => load(true), dueAt - Date.now())
+})
 
 onMounted(() => {
   load()
-  clock = window.setInterval(() => { now.value = Date.now() }, 30000)
+  clock = window.setInterval(() => { if (props.active) now.value = Date.now() }, 30000)
   document.addEventListener('visibilitychange', onVisibility)
 })
 

@@ -55,8 +55,16 @@ describe('system settings tabs', () => {
     await general.trigger('mousedown', { button: 0 })
     await flushPromises()
     expect(wrapper.router.currentRoute.value.query.tab).toBeUndefined()
-    expect(wrapper.find('[data-scheduled-tasks]').exists()).toBe(false)
+    // 定时任务切走后保持挂载、只是隐藏；切回不重新读取
+    expect(wrapper.get('[data-scheduled-tasks]').element.closest('[role="tabpanel"]')!.getAttribute('data-state')).toBe('inactive')
     expect(wrapper.find('#rule-fetch-proxy').exists()).toBe(true)
+    const reads = vi.mocked(tasksApi.list).mock.calls.length
+    const tasks = wrapper.findAll('[role="tab"]').find(tab => tab.text().startsWith('定时任务'))!
+    await tasks.trigger('mousedown', { button: 0 })
+    await flushPromises()
+    expect(wrapper.router.currentRoute.value.query.tab).toBe('tasks')
+    expect(wrapper.get('[data-scheduled-tasks]').element.closest('[role="tabpanel"]')!.getAttribute('data-state')).toBe('active')
+    expect(tasksApi.list).toHaveBeenCalledTimes(reads)
   })
 })
 

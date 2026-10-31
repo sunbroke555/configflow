@@ -38,6 +38,7 @@ import { reactive } from 'vue'
 import { vi } from 'vitest'
 import MihomoPanel from '@/views/MihomoPanel.vue'
 import MihomoConnections from '@/components/mihomo/MihomoConnections.vue'
+import MihomoProxies from '@/components/mihomo/MihomoProxies.vue'
 import MihomoRules from '@/components/mihomo/MihomoRules.vue'
 import MihomoLogs from '@/components/mihomo/MihomoLogs.vue'
 import { agentApi, mihomoPanelApi } from '@/api'
@@ -130,6 +131,49 @@ describe('mihomo panel view', () => {
     wrapper.unmount()
   })
 
+  it('keeps visited tabs mounted, reloads hidden ones only when shown and rebuilds on device change', async () => {
+    routeState.route = reactive({ query: { agent: 'gw' } })
+    vi.mocked(agentApi.summaries).mockResolvedValue({ data: [
+      { id: 'gw', name: 'Gateway', service_type: 'mihomo', status: 'online' },
+      { id: 'gw2', name: 'Gateway 2', service_type: 'mihomo', status: 'online' }
+    ] } as any)
+    routeState.replace.mockImplementation(({ query }) => { routeState.route.query = query })
+    const { proxies, rules, connections } = vi.mocked(mihomoPanelApi)
+    proxies.mockClear(); rules.mockClear(); connections.mockClear()
+    const wrapper = mount(MihomoPanel)
+    await flushPromises()
+    const show = async (tab: string) => { routeState.route.query = { ...routeState.route.query, tab }; await flushPromises() }
+    expect(wrapper.findComponent(MihomoRules).exists()).toBe(false)
+    expect(wrapper.findComponent(MihomoConnections).exists()).toBe(false)
+    await show('rules')
+    await show('connections')
+    await show('proxies')
+    await show('rules')
+    expect(proxies).toHaveBeenCalledTimes(1)
+    expect(rules).toHaveBeenCalledTimes(1)
+    expect(connections).toHaveBeenCalledTimes(1)
+    expect(wrapper.getComponent(MihomoProxies).props('active')).toBe(false)
+    expect(wrapper.getComponent(MihomoConnections).props('active')).toBe(false)
+    expect(wrapper.get('[role="tabpanel"][data-state="inactive"]').classes()).toContain('data-[state=inactive]:hidden')
+    // 刷新只读取当前标签，隐藏的「策略」切回时再读
+    await wrapper.get('button[aria-label="刷新面板"]').trigger('click')
+    await flushPromises()
+    expect(rules).toHaveBeenCalledTimes(2)
+    expect(proxies).toHaveBeenCalledTimes(1)
+    await show('proxies')
+    expect(proxies).toHaveBeenCalledTimes(2)
+    await show('rules')
+    expect(rules).toHaveBeenCalledTimes(2)
+    // 换设备后重建，只挂载当前标签
+    routeState.route.query = { agent: 'gw2', tab: 'rules' }
+    await flushPromises()
+    expect(rules).toHaveBeenLastCalledWith('gw2')
+    expect(wrapper.findComponent(MihomoProxies).exists()).toBe(false)
+    expect(wrapper.findComponent(MihomoConnections).exists()).toBe(false)
+    expect(proxies).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('lists connections with the outbound chain', async () => {
     const wrapper = mount(MihomoConnections, { props: { agentId: 'gw', active: true } })
     await flushPromises()
@@ -139,7 +183,7 @@ describe('mihomo panel view', () => {
   })
 
   it('lists rules and rule providers', async () => {
-    const wrapper = mount(MihomoRules, { props: { agentId: 'gw', reloadToken: 0 } })
+    const wrapper = mount(MihomoRules, { props: { agentId: 'gw', active: true, reloadToken: 0 } })
     await flushPromises()
     expect(wrapper.text()).toContain('2 / 2 条')
     expect(wrapper.text()).toContain('ads')
