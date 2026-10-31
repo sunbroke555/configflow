@@ -158,6 +158,7 @@ def handle_rule_library_item(rule_id):
     from backend.common.config_repository import ProfileValidationError
     from backend.common.config import update_shared_and_config_transaction
     from backend.common.rule_dns import apply_rule_dns
+    from backend.common.oxidns_common_updates import rebase_native_rule_sources
     new_rule = request.get_json() if request.method == 'PUT' else None
     base_url = request.url_root.rstrip('/')
     previous, warnings = {}, []
@@ -210,11 +211,19 @@ def handle_rule_library_item(rule_id):
             new_rule['update_interval'] = old['update_interval']
         library[library.index(old)] = new_rule
 
+    routing_fields = (('enabled', True), ('behavior', 'domain'))
+    # A new address or source type changes the nested source of native downloads.
+    download_fields = (('url', None), ('source_type', 'url'))
+
+    def changed(fields):
+        # rebuild only runs for PUT, after mutate verified the stored item is baseline.
+        return any(new_rule.get(key, default) != baseline.get(key, default) for key, default in fields)
+
     def native_profiles(shared, profiles):
-        """Native OxiDNS profiles whose routing this edit changes."""
+        """Native OxiDNS profiles whose routing or downloads this edit changes."""
         old = next((item for item in shared.get('rule_library', []) if item.get('id') == rule_id), None)
         if old is None or not isinstance(new_rule, dict) or all(
-                new_rule.get(key, default) == old.get(key, default) for key, default in (('enabled', True), ('behavior', 'domain'))):
+                new_rule.get(key, default) == old.get(key, default) for key, default in (*routing_fields, *download_fields)):
             return []
         return [profile_id for profile_id, profile in profiles.items()
                 if (profile.get('oxidns') or {}).get('config_mode') == 'native' and
@@ -223,8 +232,11 @@ def handle_rule_library_item(rule_id):
     def rebuild(profile_id, before, after):
         # Enabling, disabling or retyping a source rebuilds native routing in the
         # same commit, parking and restoring the DNS choices of its references.
-        warnings.extend({'profile': profile_id, 'message': message}
-                        for message in apply_rule_dns(before, after, {}, base_url=base_url, strict=False))
+        if changed(routing_fields):
+            warnings.extend({'profile': profile_id, 'message': message}
+                            for message in apply_rule_dns(before, after, {}, base_url=base_url, strict=False))
+        if changed(download_fields):
+            rebase_native_rule_sources(before, after)
 
     if new_rule is None:
         update_shared_config_transaction(mutate)

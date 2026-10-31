@@ -302,34 +302,34 @@ def finish_rule_updates(ctx, changes, config, base_url=''):
                 refresh['args'] = deepcopy(_REFRESH)
 
 
-def _refresh_managed_rule_urls(document, config, base_url):
-    """Rebase proven generated downloads without changing custom native state.
-
-    Old native drafts retain absolute URLs from their first template render.
-    The resource path, profile endpoint, source, part and a known capability
-    token together identify a generated URL, even after its origin changes.
-    """
+def _managed_downloads(document):
     downloader = next((item for item in document.get('plugins', [])
                        if item.get('tag') == 'rules_download'), None)
     if downloader is None or downloader.get('type') != 'download':
-        return document
+        return None
     args = downloader.get('args')
     if not isinstance(args, dict) or not isinstance(args.get('downloads'), list):
-        return document
+        return None
+    return args['downloads']
+
+
+def _proxy_identity(config):
+    """(known capability tokens, profile rule-proxy endpoint), or None without a token."""
     system = config.get('system_config', {})
     token = system.get('rule_proxy_token')
     if not isinstance(token, str) or not token:
-        return document
+        return None
     retired = system.get('retired_rule_proxy_tokens', [])
     tokens = {value for value in [token, *(retired if isinstance(retired, list) else [])]
               if isinstance(value, str) and value}
     endpoint = profile_api_path(config, '/mosdns/rule-proxy')
     if endpoint == '/mosdns/rule-proxy':
         endpoint = '/api' + endpoint
-    effective = _base(config, base_url)
-    if not effective:
-        return document
-    referenced = {relative_resource(path) for path in resource_references(document)}
+    return tokens, endpoint
+
+
+def _ruleset_sources(config, referenced=None):
+    """Active ruleset sources by generated resource path: {path: (source, part)}."""
     sources = {}
     for record in _catalog(config)[0].values():
         source = record['item'].get('url')
@@ -337,46 +337,116 @@ def _refresh_managed_rule_urls(document, config, base_url):
             continue
         for part in record['parts']:
             path = relative_resource(_rule_path(record['item'], part))
-            if path in referenced:
+            if referenced is None or path in referenced:
                 sources[path] = (source, part)
+    return sources
+
+
+def _generated_source(entry, identity, source, part):
+    """The origin of a generated rule-proxy URL built from source, else None.
+
+    The profile endpoint, exact query, part, a known capability token and the
+    nested source together prove ConfigFlow rendered it; anything else is a
+    manual override.
+    """
+    if not isinstance(entry.get('url'), str):
+        return None
+    tokens, endpoint = identity
+    try:
+        parsed = urlsplit(entry['url'])
+        if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.fragment
+                or not parsed.path.endswith(endpoint)):
+            return None
+        # Reading port also rejects malformed authorities conservatively.
+        if parsed.port is not None and not 1 <= parsed.port <= 65535:
+            return None
+        pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        return None
+    query = dict(pairs)
+    if (len(pairs) != 3 or set(query) != {'url', 'part', 'token'}
+            or query['token'] not in tokens or query['part'] != part):
+        return None
+    origin = parsed._replace(path=parsed.path[:-len(endpoint)], query='', fragment='').geturl()
+    return origin if query['url'] == (origin + source if source.startswith('/') else source) else None
+
+
+def _with_downloads(document, output):
+    rendered = deepcopy(document)
+    downloader = next(item for item in rendered['plugins'] if item.get('tag') == 'rules_download')
+    replace_download_entries(downloader, output)
+    return rendered
+
+
+def _refresh_managed_rule_urls(document, config, base_url):
+    """Rebase proven generated downloads without changing custom native state.
+
+    Old native drafts retain absolute URLs from their first template render.
+    The resource path, profile endpoint, source, part and a known capability
+    token together identify a generated URL, even after its origin changes.
+    """
+    downloads = _managed_downloads(document)
+    identity = _proxy_identity(config)
+    effective = _base(config, base_url)
+    if downloads is None or identity is None or not effective:
+        return document
+    sources = _ruleset_sources(config, {relative_resource(path) for path in resource_references(document)})
     output, changed = [], False
-    for entry in args['downloads']:
+    for entry in downloads:
         output.append(entry)
         source_part = sources.get(_path(entry))
-        if source_part is None or not isinstance(entry.get('url'), str):
+        if source_part is None:
             continue
         source, part = source_part
-        try:
-            parsed = urlsplit(entry['url'])
-            if (parsed.scheme not in ('http', 'https') or not parsed.hostname
-                    or parsed.username is not None or parsed.fragment
-                    or not parsed.path.endswith(endpoint)):
-                continue
-            # Reading port also rejects malformed authorities conservatively.
-            if parsed.port is not None and not 1 <= parsed.port <= 65535:
-                continue
-            pairs = parse_qsl(parsed.query, keep_blank_values=True)
-        except ValueError:
-            continue
-        query = dict(pairs)
-        if (len(pairs) != 3 or set(query) != {'url', 'part', 'token'}
-                or query['token'] not in tokens or query['part'] != part):
-            continue
-        previous_base = parsed._replace(path=parsed.path[:-len(endpoint)], query='', fragment='').geturl()
-        previous_source = previous_base + source if source.startswith('/') else source
-        if query['url'] != previous_source:
+        if _generated_source(entry, identity, source, part) is None:
             continue
         current_source = effective + source if source.startswith('/') else source
         url = _build_rule_proxy_url(config, effective, current_source, part=part)
         if entry['url'] != url:
             output[-1] = {**entry, 'url': url}
             changed = True
-    if not changed:
-        return document
-    rendered = deepcopy(document)
-    downloader = next(item for item in rendered['plugins'] if item.get('tag') == 'rules_download')
-    replace_download_entries(downloader, output)
-    return rendered
+    return _with_downloads(document, output) if changed else document
+
+
+def rebase_native_rule_sources(before, after):
+    """Follow a rule-library source edit in after's native draft, in place.
+
+    Native drafts keep the nested source of each generated download, and
+    rendering only trusts a URL whose source matches the current declaration.
+    Without this, editing a source leaves the device on the old one and later
+    domain changes skip the entry. Only URLs generated from the previous
+    source move; manual overrides and include files stay untouched.
+    """
+    settings = after.get('oxidns')
+    if not isinstance(settings, dict) or settings.get('config_mode') != 'native':
+        return False
+    try:
+        document = load_native_yaml(settings.get('native_config', ''))
+    except OxidnsSettingsError:
+        return False
+    downloads = _managed_downloads(document)
+    identity = _proxy_identity(before)
+    if downloads is None or identity is None:
+        return False
+    previous, current = _ruleset_sources(before), _ruleset_sources(after)
+    output, changed = [], False
+    for entry in downloads:
+        output.append(entry)
+        path = _path(entry)
+        if path not in previous or path not in current or previous[path] == current[path]:
+            continue
+        (old_source, part), (new_source, new_part) = previous[path], current[path]
+        origin = _generated_source(entry, identity, old_source, part) if part == new_part else None
+        if origin is None:
+            continue
+        source = origin + new_source if new_source.startswith('/') else new_source
+        output[-1] = {**entry, 'url': _build_rule_proxy_url(after, origin, source, part=part)}
+        changed = True
+    if changed:
+        settings['native_config'] = yaml.safe_dump(_with_downloads(document, output),
+                                                   allow_unicode=True, sort_keys=False)
+    return changed
 
 
 def prepare_native_rule_updates(document, settings, config, base_url=''):
