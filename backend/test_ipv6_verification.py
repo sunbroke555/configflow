@@ -8,7 +8,7 @@ import pytest
 from backend.agents import ipv6_verification as verify
 from backend.agents import ipv6_readiness as bridge
 from backend.agents.oxidns_monitor import MonitorError
-from backend.test_ipv6_readiness import environment  # noqa: F401
+from backend.test_ipv6_readiness import YAML, environment  # noqa: F401
 from backend.test_agent_upgrade_auth import authenticated_app  # noqa: F401
 
 
@@ -204,7 +204,7 @@ def test_runtime_failure_keeps_publication_success_separate(verification):
 def test_saved_manual_configuration_change_invalidates_evidence(verification, monkeypatch, when):
     client, manager, _, headers, path, _, _ = verification
     def change():
-        manager.repository.save_profile('v6', {'mihomo': {'custom_config': 'ipv6: false'}})
+        manager.repository.save_profile('v6', {'mihomo': {'custom_config': YAML + 'log-level: debug\n'}})
     if when == 'during':
         def request(*a, **k):
             change()
@@ -442,3 +442,156 @@ def test_invalid_final_digest_cannot_fall_back_to_upload_digest(verification, mo
     assert report['status'] == 'warning'
     assert 'expected_config_sha256' not in calls[0][1]
     assert next(c for c in report['checks'] if c['id'] == 'runtime_expected_config')['status'] == 'unknown'
+
+
+# The end-to-end report of 2026-10-31: Mihomo published at revision 81, the
+# upstream router publication then recorded its readback in the same profile
+# (82). Mihomo's files were unchanged, yet the manual verification asked for
+# another Mihomo publication. Only what Mihomo receives decides it now.
+BASE = 'http://configflow.test'
+
+
+def confirm_publication(manager, agent, ident='publication-real', version='c' * 64):
+    """A confirmed publication recorded as push-config records it: bundle, baseline, receipt."""
+    from backend.agents import rule_sync_store
+    from backend.agents.deployment_bundle import retarget_config_path
+    from backend.routes.agents import _prepare_content_bundle
+    config, revision = manager.repository.get_publish_snapshot('v6')
+    manager.begin_deployment(agent['id'], ident)
+    bundle = retarget_config_path(_prepare_content_bundle(manager.get_agent_by_id(agent['id']), config,
+                                                          base_url=BASE, deployment_id=ident), 'config.yaml')
+    manager._remember_deployment_content(agent['id'], bundle, BASE, None, config)
+    rule_sync_store.capture(manager.repository, agent['id'], bundle, config, BASE,
+                            comparison_config=bundle.comparison_config)
+    manager.record_deployment(agent['id'], ident, {'status': 'succeeded', 'success': True,
+                                                  'config_revision': revision, 'config_version': version})
+    assert manager.get_agent_by_id(agent['id'])['config_revision'] == revision
+    return ident, revision
+
+
+def publish_router(manager):
+    """What the upstream router publication writes back: readback records, same Mihomo files."""
+    config, before = manager.repository.get_publish_snapshot('v6')
+    router = config['routers']['items'][0]
+    manager.repository.save_router_publication('v6', router, ipv6_fakeip={
+        'owned': [{'.id': '*A1', 'dst-address': 'fc00::/64', 'gateway': 'fe80::3%lan4'}]},
+        ipv6_routes={'owned': [{'.id': '*A2', 'dst-address': '2001:b28:f23d::/48'}]},
+        last_release={'status': 'succeeded'})
+    _, after = manager.repository.get_publish_snapshot('v6')
+    assert after == before + 1
+    return after
+
+
+@pytest.fixture
+def offline(monkeypatch):
+    # Preparing Mihomo's files for the comparison must not reach out anywhere.
+    monkeypatch.setattr('requests.sessions.Session.request',
+                        lambda *_a, **_k: pytest.fail('unexpected network request'))
+
+
+def verify_now(client, path, headers, revision):
+    response = client.post(path + '/verify', headers=headers, json={'expected_config_revision': revision})
+    assert response.status_code == 200, response.get_json()
+    return response.get_json()['verification']
+
+
+def test_router_publication_after_mihomo_publication_still_verifies(verification, offline):
+    client, manager, agent, headers, path, calls, _ = verification
+    confirm_publication(manager, agent)
+    revision = publish_router(manager)
+    report = verify_now(client, path, headers, revision)
+    assert report['status'] == 'ok', report
+    assert report['config_revision'] == revision
+    assert calls[-1] == ('verify', {'test_url': calls[-1][1]['test_url'], 'expected_config_sha256': 'c' * 64})
+    assert not any(c['id'] == 'runtime_expected_config' for c in report['checks'])
+    # Another service's settings in the same profile move the revision too.
+    manager.repository.save_profile('v6', {'oxidns': {**manager.repository.get_publish_snapshot('v6')[0]['oxidns'],
+                                                      'custom_hosts': '192.0.2.8 nas.lab.test'}})
+    _, later = manager.repository.get_publish_snapshot('v6')
+    assert later == revision + 1
+    assert verify_now(client, path, headers, later)['status'] == 'ok'
+    assert calls[-1][1]['expected_config_sha256'] == 'c' * 64
+
+
+@pytest.mark.parametrize('change', [
+    {'mihomo': {'custom_config': YAML + 'log-level: debug\n'}},
+    {'mihomo': {'custom_config': YAML.replace('fc00::1/64', 'fc00:0:0:2::1/64')}},
+])
+def test_a_real_mihomo_change_still_needs_publication(verification, offline, change):
+    client, manager, agent, headers, path, calls, _ = verification
+    confirm_publication(manager, agent)
+    publish_router(manager)
+    manager.repository.save_profile('v6', change)
+    _, revision = manager.repository.get_publish_snapshot('v6')
+    report = verify_now(client, path, headers, revision)
+    expected = next(c for c in report['checks'] if c['id'] == 'runtime_expected_config')
+    assert expected['status'] == 'unknown' and '还没有发布到这台 Mihomo' in expected['message']
+    assert report['status'] == 'warning'
+    assert 'expected_config_sha256' not in calls[-1][1]
+
+
+def test_same_revision_needs_no_comparison(verification, monkeypatch):
+    client, manager, agent, headers, path, calls, _ = verification
+    config, _ = manager.repository.get_publish_snapshot('v6')
+    ident, revision = publish(manager, agent)
+    snapshot(monkeypatch, config, ident)
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        applied_content={'deployment_id': ident}))
+    from backend.agents import content_sync
+    monkeypatch.setattr(content_sync, 'compare_now', lambda *a, **k: pytest.fail('compared at the published revision'))
+    assert verify_now(client, path, headers, revision)['status'] == 'ok'
+    assert calls[-1][1]['expected_config_sha256'] == 'a' * 64
+
+
+@pytest.mark.parametrize('status', ['unknown', 'checking'])
+def test_unconfirmed_comparison_is_not_treated_as_published(verification, monkeypatch, status):
+    client, manager, agent, headers, path, calls, _ = verification
+    config, _ = manager.repository.get_publish_snapshot('v6')
+    ident, _ = publish(manager, agent)
+    snapshot(monkeypatch, config, ident)
+    manager._update_agents(lambda agents: next(a for a in agents if a['id'] == agent['id']).update(
+        applied_content={'deployment_id': ident}))
+    revision = publish_router(manager)
+    from backend.agents import content_sync
+    monkeypatch.setattr(content_sync, 'compare_now', lambda *a, **k: {'status': status})
+    report = verify_now(client, path, headers, revision)
+    expected = next(c for c in report['checks'] if c['id'] == 'runtime_expected_config')
+    assert expected['status'] == 'unknown' and '缺少与当前已保存配置一致的发布记录' in expected['message']
+    assert 'expected_config_sha256' not in calls[-1][1]
+
+
+# 「关闭」: the verification is about IPv6, so without IPv6 it does not apply.
+OFF = 'ipv6: false\ndns:\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\n'
+
+
+def test_manual_verification_without_ipv6_is_not_applicable(verification):
+    client, manager, agent, headers, path, calls, _ = verification
+    manager.repository.save_profile('v6', {'mihomo': {'custom_config': OFF}})
+    _, revision = manager.repository.get_publish_snapshot('v6')
+    for response in (client.post(path + '/verify', headers=headers, json={'expected_config_revision': revision}),
+                     client.get(path + '/verify', headers=headers)):
+        assert response.status_code == 200, response.get_json()
+        data = response.get_json()
+        assert data['applicable'] is False and data['verification'] is None
+        assert data['message'] == '未启用 IPv6，无需验收'
+    assert not calls
+    assert not manager.get_agent_by_id(agent['id']).get('ipv6_verifications')
+
+
+def test_publication_without_ipv6_is_judged_by_its_own_snapshot(verification, monkeypatch):
+    client, manager, agent, headers, path, calls, _ = verification
+    manager.repository.save_profile('v6', {'mihomo': {'custom_config': OFF}})
+    published, _ = manager.repository.get_publish_snapshot('v6')
+    ident, revision = publish(manager, agent)
+    snapshot(monkeypatch, published, ident)
+    # A later draft turns IPv6 on; the publication itself had it off.
+    manager.repository.save_profile('v6', {'mihomo': {'custom_config': YAML}})
+    response = client.post(path + '/verify', headers=headers,
+                           json={'deployment_id': ident, 'expected_config_revision': revision})
+    assert response.status_code == 200, response.get_json()
+    assert response.get_json()['applicable'] is False and response.get_json()['verification'] is None
+    assert not calls
+    # Never enrolled, so the scheduler does not verify it either.
+    verify.enroll(manager, agent['id'], ident, published)
+    verify.tick(manager)
+    assert not calls

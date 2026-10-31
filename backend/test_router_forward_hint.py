@@ -72,6 +72,21 @@ def test_default_firewall_drops_the_same_port_path_and_gets_one_command():
     assert not any('syn-sent' in warning for warning in plan['warnings'])  # the older advisory says it no more
 
 
+def test_ipv4_and_ipv6_share_one_explanation_without_a_fixed_delay():
+    """VM151 lab (2026-10-31): IPv4 timed out; IPv6 with redirects barely stalled one-by-one."""
+    ipv4, ipv6 = forward_hint.drop_warning(4), forward_hint.drop_warning(6)
+    assert (ipv4, ipv6) == (forward_hint.IPV4_DROP, forward_hint.IPV6_DROP)
+    for text in (ipv4, ipv6):
+        assert '可能卡几秒甚至超时' in text and '只能部分缓解' in text and '不能依赖' in text
+        assert 'drop invalid' in text and '恢复正常' in text
+        assert '7 秒' not in text and '每个新连接' not in text and '偶尔' not in text
+    assert 'ICMP 重定向' in ipv4 and 'ICMPv6 重定向' in ipv6
+    assert 'IPv6 规则集路由' in ipv6 and 'IPv6' not in ipv4
+    # Apart from the family names and the IPv6-only coverage note, the wording is identical.
+    assert ipv6.replace('IPv6', 'IPv4').replace('ICMPv6', 'ICMP').replace(
+        '一条命令同时覆盖 IPv4 Fake-IP 和 IPv4 规则集路由；', '') == ipv4
+
+
 def test_hint_changes_no_operation_or_fingerprint():
     _, with_hint, _ = preview(DEFCONF)
     _, without, _ = preview([dict(SAME_PORT)] + DEFCONF)

@@ -427,3 +427,62 @@ def test_concurrent_list_requests_schedule_one_job(setup):
     assert len(executor.jobs) == 1
     executor.run()
     assert query(setup)['status'] == 'synced'
+
+
+def compare(setup, **kwargs):
+    checker, _, _, agent, config, prepare, _ = setup
+    return checker.compare_now(agent, config, 'https://config.example.test', prepare, **kwargs)
+
+
+def test_compare_now_answers_in_the_callers_thread_and_shares_the_cache(setup):
+    _, executor, _, _, config, _, calls = setup
+    result = compare(setup)
+    assert result['status'] == 'synced' and len(calls) == 1 and executor.jobs == []
+    # The list then reads the same answer without scheduling a worker.
+    assert query(setup) == result and executor.jobs == []
+    config['test_rule'] += 'DOMAIN,other.example.test\n'
+    assert compare(setup)['status'] == 'changed' and len(calls) == 2
+    assert query(setup)['status'] == 'changed' and executor.jobs == []
+
+
+def test_compare_now_reuses_a_fresh_list_result_until_it_expires(setup):
+    _, executor, now, _, _, _, calls = setup
+    query(setup)
+    executor.run()
+    assert compare(setup)['status'] == 'synced' and len(calls) == 1
+    now[0] += 900
+    assert compare(setup)['status'] == 'synced' and len(calls) == 2
+
+
+def test_compare_now_metadata_alone_is_still_synced(setup):
+    _, _, _, _, config, _, calls = setup
+    assert compare(setup)['status'] == 'synced'
+    # A profile's revision and timestamps are not inputs to the delivered files.
+    config.update(_revision=99, updated_at='later')
+    assert compare(setup)['status'] == 'synced' and len(calls) == 1
+
+
+@pytest.mark.parametrize('change, reason', [
+    ({'applied_content': None, 'config_version': 'applied-config'}, 'baseline_missing'),
+    ({'latest_deployment': {'deployment_id': 'next', 'status': 'uploading'}}, 'deployment_pending'),
+])
+def test_compare_now_never_claims_a_match_without_a_confirmed_baseline(setup, change, reason):
+    _, _, _, agent, _, _, calls = setup
+    agent.update(change)
+    assert compare(setup) == {'status': 'unknown', 'reason': reason}
+    assert calls == []
+
+
+def test_compare_now_preparation_failure_is_secret_free_unknown(setup):
+    checker, _, _, agent, config, _, _ = setup
+    def failing(*_args, **_kwargs):
+        raise ValueError('token=private-secret https://user:pass@example.test')
+    assert checker.compare_now(agent, config, '', failing) == {'status': 'unknown', 'reason': 'check_failed'}
+
+
+def test_compare_now_rejects_another_repository(setup, monkeypatch):
+    from backend.common import config as config_module
+    _, _, _, _, _, _, calls = setup
+    monkeypatch.setattr(config_module, '_repository', object())
+    assert compare(setup, repository=object()) == {'status': 'unknown', 'reason': 'check_failed'}
+    assert calls == []

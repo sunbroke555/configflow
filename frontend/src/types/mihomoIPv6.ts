@@ -66,6 +66,8 @@ export interface IPv6VerificationResult {
   agent_id: string
   profile_id: string
   verification: IPv6Verification | null
+  /** false: the verified configuration (the publication's own, else the saved one) has IPv6 off. */
+  applicable?: boolean
   message?: string
 }
 

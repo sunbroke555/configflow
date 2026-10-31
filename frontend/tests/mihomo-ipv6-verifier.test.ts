@@ -142,3 +142,28 @@ it('offers the same verification action when an automatic result needs more evid
   await flushPromises()
   expect(agentApi.verifyIPv6).toHaveBeenCalledTimes(2)
 })
+
+// 「关闭」: the server answers that there is nothing to verify, which is neither a failure nor a pass.
+const notApplicable = () => response({ success: true, agent_id: 'gw', profile_id: 'bound', verification: null,
+  applicable: false, message: '未启用 IPv6，无需验收' })
+
+it.each([
+  { auto: true, deploymentId: 'current' },
+  { readiness: { config_revision: 7, checks: [], routers: [], connectivity: { status: 'not_checked', message: '' } } },
+])('says IPv6 is off neutrally, without results, a verify button or polling (%j)', async props => {
+  vi.mocked(agentApi.verifyIPv6).mockResolvedValue(notApplicable())
+  vi.mocked(agentApi.getIPv6Verification).mockResolvedValue(notApplicable())
+  const wrapper = await render(props)
+  const note = wrapper.get('[data-ipv6-not-applicable]')
+  expect(note.text()).toBe('未启用 IPv6，无需验收。')
+  expect(note.classes()).toContain('text-muted-foreground')
+  expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  expect(wrapper.findComponent(MihomoIPv6VerificationResult).exists()).toBe(false)
+  expect(wrapper.findComponent(MihomoIPv6CheckSummary).exists()).toBe(false)
+  expect(wrapper.findAll('button').some(button => button.text() === '验证连接与分流')).toBe(false)
+  expect(wrapper.text()).not.toMatch(/正在验证|可以离开此窗口|未通过|待验证/)
+  const reads = vi.mocked(agentApi.getIPv6Verification).mock.calls.length
+  await vi.advanceTimersByTimeAsync(10000)
+  expect(agentApi.getIPv6Verification).toHaveBeenCalledTimes(reads)
+  expect(wrapper.emitted('result')?.at(-1)).toEqual([{ verification: null, fresh: props.auto === true }])
+})

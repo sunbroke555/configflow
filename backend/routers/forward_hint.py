@@ -4,9 +4,10 @@ Static routes (and policy routes) to a Mihomo on the same LAN send a client's
 packets into the router's LAN port and straight back out of it. Mihomo answers
 the client directly, so RouterOS sees only the first packet of each connection;
 the rest are ``invalid``. A ``drop invalid`` ahead of any LAN-to-LAN accept
-(RouterOS's default firewall has one, for IPv4 and for IPv6) then stalls every
-new connection for seconds. Redirects do not save it: RouterOS rate-limits them
-per client, and forwarding Linux clients ignore them (VM151, RouterOS 7.25).
+(RouterOS's default firewall has one, for IPv4 and for IPv6) then can stall a
+new connection for seconds or until it times out. Redirects only ease it:
+RouterOS rate-limits them per client, and forwarding Linux clients ignore them
+(VM151, RouterOS 7.25).
 
 The check simulates one LAN-in, LAN-out, invalid-state TCP packet through the
 forward chain with the ``ipv6_policy`` rule evaluator (it handles IPv4 and
@@ -118,10 +119,26 @@ def check(driver, family, lan, targets, rows=None):
     return {'status': 'ok', 'command': '', 'rule': None}
 
 
-IPV4_DROP = ('IPv4 防火墙会丢弃同口转发的后续包：设备经 ROS 同一 LAN 口转给 Mihomo，回包不经过 ROS，'
-             'ROS 把后续包判为 invalid 丢弃，新连接偶尔会卡几秒。ROS 的 ICMP 重定向有数量限制，'
-             '开了转发的 Linux 设备还会忽略，不能靠它解决。执行下方命令放行同口转发后，连接即恢复正常；'
-             'ConfigFlow 不修改防火墙，路由照常发布。')
+def drop_warning(family):
+    """One explanation for both families; only the names differ.
+
+    Measured on VM151 (RouterOS 7.25): without the accept every new IPv4
+    connection stalled until the 5 s client timeout. For IPv6 with a link-local
+    next hop, RouterOS redirected a client that opened connections one at a
+    time, so those barely stalled; several at once, or a client that ignores
+    redirects, stalled or timed out. So no fixed delay, and no reliance on
+    redirects.
+    """
+    redirect = 'ICMPv6' if family == 6 else 'ICMP'
+    covers = '一条命令同时覆盖 IPv6 Fake-IP 和 IPv6 规则集路由；' if family == 6 else ''
+    return (f'IPv{family} 防火墙会丢弃同口转发的后续包：设备经 ROS 同一 LAN 口转给 Mihomo，回包不经过 ROS，'
+            'ROS 把后续包判为 invalid，被 forward 链丢弃（如出厂的「drop invalid」），新连接可能卡几秒甚至超时。'
+            f'ROS 的 {redirect} 重定向只能部分缓解：有数量限制，同时打开多个连接时仍会卡，开了转发的 Linux 设备还会忽略，'
+            f'不能依赖。执行下方命令放行同口转发后，连接即恢复正常；{covers}ConfigFlow 不修改防火墙，路由照常发布。')
+
+
+IPV4_DROP = drop_warning(4)
+IPV6_DROP = drop_warning(6)
 IPV4_UNKNOWN = '未能确认 IPv4 防火墙是否会丢弃转给 Mihomo 的同口转发：'
 
 

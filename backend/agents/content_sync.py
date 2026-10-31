@@ -3,6 +3,8 @@
 List requests only inspect snapshots/cache and schedule work. Downloads and bundle
 generation run in at most two workers; a missing baseline never implies a match.
 Remote changes are checked on a fifteen-minute successful-result cache interval.
+``compare_now`` answers in its caller's thread, for callers that are already in
+a background worker; it shares the cache with the list.
 """
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -185,9 +187,60 @@ class ContentSyncChecker:
                     del self._running[identity]
                 self._slots.release()
 
+    def compare_now(self, agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
+        """The same comparison, answered in the caller's thread.
+
+        For a caller already off the request path that needs a definite answer
+        (an IPv6 verification worker). A fresh result for the same inputs, for
+        example the Agent page's, is reused; a new result is kept for it too.
+        """
+        if not isinstance(agent, dict) or not isinstance(config, dict) or not isinstance(agent.get('id'), str):
+            return _unknown('invalid_inputs')
+        identity = (scope, agent['id'])
+        if repository is _UNBOUND_REPOSITORY:
+            repository = _current_repository()
+        try:
+            agent_snapshot, config_snapshot = deepcopy(agent), deepcopy(config)
+            unavailable = _precondition(agent_snapshot, config_snapshot)
+            key = None if unavailable else _input_key(agent_snapshot, config_snapshot, base_url)
+        except Exception:
+            return _unknown('invalid_inputs')
+        if unavailable:
+            return unavailable
+        with self._lock:
+            if _current_repository() is not repository:
+                return _unknown('check_failed')
+            entry = self._entries.get(identity)
+            if (entry is not None and entry.key == key and entry.repository is repository
+                    and entry.result is not None and self._clock() < entry.expires):
+                return dict(entry.result)
+        try:
+            fingerprint = self._prepare_fingerprint(agent_snapshot, config_snapshot, base_url, prepare)
+        except Exception:
+            # Preparation exceptions can contain tokens, URLs or YAML excerpts.
+            return _unknown('check_failed')
+        result = {'status': 'synced' if fingerprint == agent_snapshot['applied_content']['fingerprint'] else 'changed',
+                  'checked_at': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}
+        with self._lock:
+            if _current_repository() is not repository:
+                return _unknown('check_failed')
+            entry = self._entries.get(identity)
+            if entry is None or entry.key != key or entry.repository is not repository:
+                # An older worker for other inputs then keeps its result to itself.
+                entry = self._entries[identity] = _Entry(key, repository)
+            entry.result = dict(result)
+            entry.expires = self._clock() + self._success_ttl
+            self._entries.move_to_end(identity)
+            self._trim()
+        return result
+
 
 _checker = ContentSyncChecker()
 
 
 def get_content_sync(agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
     return _checker.get_content_sync(agent, config, base_url, prepare, scope=scope, repository=repository)
+
+
+def compare_now(agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
+    return _checker.compare_now(agent, config, base_url, prepare, scope=scope, repository=repository)
