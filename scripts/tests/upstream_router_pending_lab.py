@@ -3,7 +3,8 @@
 
 The upstream router reminder reads the real VM151 RouterOS and the CT152 Agent
 through the same report and release preview as the 上游路由 page. Nothing is
-written to either: the browser script never confirms a release, and the copy's
+written to either: the browser scripts never confirm a release, read_only()
+refuses any RouterOS write or Agent operation in this process, and the copy's
 own changes (a Mihomo draft, an unreachable extra router) stay in WORK.
 
 CT152 sends its heartbeats to the preview service, not to this copy, so the
@@ -55,6 +56,7 @@ def prepare():
     # Automatic jobs would act on the real router from this copy: keep them off.
     import backend.agents.rule_sync as agent_rule_sync
     agent_rule_sync.start_loop = lambda: None
+    read_only()
     from backend.common.agent_manager import get_agent_manager
     manager = get_agent_manager()
     mihomo = [agent for agent in manager.get_all_agents()
@@ -62,6 +64,59 @@ def prepare():
     if len(mihomo) != 1:
         raise RuntimeError('Expected exactly one lab Mihomo in the preview data')
     return manager, mihomo[0]['id']
+
+
+COUNTS = {'agent_status': 0, 'agent_writes': 0, 'routeros_reads': 0, 'routeros_writes': 0}
+
+
+def read_only():
+    """VM151 and CT152 are shared and read-only here: refuse every write and count the reads.
+
+    Background jobs that could push to an Agent stay off; a RouterOS request
+    other than GET, and an Agent operation other than the read-only status,
+    fail before leaving this process. WORK/counters.json lets a browser check
+    tell a reused result from a new read.
+    """
+    import backend.agents.dns_follow as dns_follow
+    import backend.agents.ipv6_readiness as readiness
+    import backend.agents.ipv6_verification as verification
+    import backend.agents.oxidns_ha_publish as ha_publish
+    from backend.agents.oxidns_monitor import MonitorError
+    from backend.routers.base import RouterError
+    from backend.routers.routeros import RouterOSDriver
+    for module in (dns_follow, ha_publish, verification):
+        module.start_loop = lambda *_args, **_kwargs: None
+
+    def save():
+        (WORK / 'counters.json').write_text(json.dumps(COUNTS))
+
+    original_request = RouterOSDriver._request
+
+    def router_request(self, method, path, values=None, **kwargs):
+        if method != 'GET':
+            COUNTS['routeros_writes'] += 1
+            save()
+            raise RouterError(f'实验网只读：已拒绝 RouterOS {method} {path}')
+        COUNTS['routeros_reads'] += 1
+        save()
+        return original_request(self, method, path, values, **kwargs)
+    RouterOSDriver._request = router_request
+    original_agent = readiness._request
+
+    def agent_request(agent, operation='', payload=None):
+        if operation:
+            COUNTS['agent_writes'] += 1
+            save()
+            raise MonitorError('LAB_READ_ONLY', 409, f'实验网只读：已拒绝 Agent 操作 {operation}')
+        COUNTS['agent_status'] += 1
+        save()
+        return original_agent(agent, operation, payload)
+    readiness._request = agent_request
+
+    def no_verification(*_args, **_kwargs):
+        raise MonitorError('LAB_READ_ONLY', 409, '实验网只读：不运行验收')
+    verification.start = no_verification
+    save()
 
 
 def synced_fixture():

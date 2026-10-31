@@ -61,6 +61,8 @@ ROS 会给设备发 ICMP 重定向，让设备改为直接连 Mihomo，但每个
 - 「IPv6 模式」改为「关闭」、DNS 不再使用 Fake-IP 或删除网段后，保存并经差异报告**预览发布**，才撤回 ConfigFlow 添加的路由。
 - 自动规则同步不发布这项改动：首次出现、网段或下一跳变化时暂停同步，需要手动预览发布一次。
 
+![「Mihomo 用 IPv6，客户端走 IPv4」（DNS IPv6 关闭）时，差异报告中的 IPv6 Fake-IP 分流路由待添加](../img/guide/mihomo-ipv6-nodes-fakeip-pending.png)
+
 ### IPv6 规则集路由（RouterOS）
 
 Telegram 等规则集里除了 IPv4 网段，还有 `IP-CIDR6` 网段。设备有 IPv6 后会直接用这些 IPv6 地址连接，如果主路由只把 IPv4 网段交给 Mihomo，这些连接会从 WAN 直连并超时。

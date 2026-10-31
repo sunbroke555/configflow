@@ -286,3 +286,15 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 - 同样的 15 个连接全部卡住：12 个约 6.6 秒，3 个约 13.4 秒。
 - 经 `/rest/execute` 原样执行这条命令，RouterOS 接受，新规则正好位于 `*12` 之前；重新生成报告后提示消失，15 个连接恢复到 1–8 毫秒。
 - 结束后删除全部标记规则、接收命令新增的规则、接口列表及成员，停止 CT152 上的测试服务并撤掉测试地址；`/ip firewall`（filter、nat、mangle、raw、address-list）、接口列表与成员、静态路由、`/ip settings` 及 CT152/CT153 上相关状态与开始前逐项一致。fasttrack 留下的动态 dummy 规则 `*C` 在开始前已存在，未变化。
+
+## IPv6 Fake-IP 默认发布与检查复用（2026-10-31）
+
+`scripts/tests/ipv6_mode_browser.mjs` 在测试服务器上用 headless Chromium 运行，后端是本分支代码加 IPv6 预览数据的私有副本（`upstream_router_pending_lab.py`）。实验进程内拒绝一切 RouterOS 非 GET 请求和 Agent 写操作，并计数读取；全程 VM151、CT152 只读，没有点保存并发布、确认发布、补齐或验证。
+
+- 副本草稿先设为 `ipv6: false`、无 `fake-ip-range6`。选「Mihomo 用 IPv6，客户端走 IPv4」后 YAML 写入 `ipv6: true`、`dns.ipv6: false` 并补齐 `fake-ip-range6: fc00::1/64`，网段输入框显示，说明以完整名称「Mihomo 用 IPv6，客户端走 IPv4 分流」开头。
+- 网段改为 VM151 上没有的 `fc00:0:0:2::1/64` 并保存草稿：步骤清单为主机准备、保存并发布、上游路由发布、路由器防火墙 / NAT、验收；上游路由「2 项待处理」，其中「IPv6 Fake-IP 分流路由：待添加」，差异报告的卡片同样为「待添加」，下一跳 `fe80::cf:15ff:fe00:52%ether2`。DNS IPv6 关闭时设备检查的 `fake_ipv6` 为提醒而不是错误，并注明客户端暂不使用此网段。
+- 切到「客户端也走 IPv6」再保存，上游路由仍是同样的 2 项，说明两个模式发布同一条路由。
+- 新开页面再次打开设置：设备检查与上游路由的回答都是 `cached: true`，CT152 状态读取次数和 VM151 读取次数都不变；点「重新检查」后两者都重新读取。设备检查窗口直接显示上次结果并注明检查时间。
+- 手机深色 390 px：中间选项折成两行，高 44 px，页面无横向滚动，触控目标不小于 44 px。
+- 结束时 RouterOS 写入与 Agent 写操作计数均为 0。`upstream_router_pending_browser.mjs` 用同一只读保护重跑通过，并重拍了改名后的待发布提醒截图。
+
