@@ -369,6 +369,8 @@ class ProfileRepository:
         # readers return independent values.
         self._document_cache = None
         self._cache_lock = threading.Lock()
+        # (head, 令牌集合)，见 _sanitization_tokens
+        self._sanitization_tokens_cache = None
         # 本进程提交过的写事务数；请求内记住的配置空间校验结果据此失效
         self.commit_count = 0
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -1695,16 +1697,50 @@ class ProfileRepository:
         system_config["rule_proxy_token"] = new_token
         return True
 
+    @staticmethod
+    def _sanitization_tokens_of(system):
+        """(规则代理令牌, Agent 令牌)，只读取，不复制 system。"""
+        system_config = system.get("system_config", {})
+        values = []
+        if isinstance(system_config, dict):
+            values.append(system_config.get("rule_proxy_token"))
+            retired = system_config.get("retired_rule_proxy_tokens", [])
+            if isinstance(retired, list):
+                values.extend(retired)
+        agents = system.get("agents", [])
+        return (
+            frozenset(value for value in values if isinstance(value, str) and value),
+            frozenset(agent["token"] for agent in (agents if isinstance(agents, list) else [])
+                      if isinstance(agent, dict) and isinstance(agent.get("token"), str) and agent["token"]),
+        )
+
+    def _sanitization_tokens(self):
+        """当前一代文档里的令牌，按 store head 记住。
+
+        直接读已提交文档，不深拷贝 system（含全部 Agent 的发布历史）。任何提交
+        （包括令牌轮换）都会换 head，下一次读取就拿到新令牌；数据库被其他进程
+        改写时，head 比较同样会发现。这些令牌本来就在常驻的文档缓存里，这里只多
+        记住它们的集合，没有扩大凭据在进程内的暴露面。
+        """
+        if getattr(self._local, 'document', None) is not None:
+            # 事务内读到的是仍会被修改的工作副本，不缓存
+            with self._document() as document:
+                return self._sanitization_tokens_of(document['system'])
+        entry = self._read_entry()
+        cached = self._sanitization_tokens_cache
+        if cached is not None and cached[0] == entry.head:
+            return cached[1]
+        tokens = self._sanitization_tokens_of(entry.document['system'])
+        self._sanitization_tokens_cache = (entry.head, tokens)
+        return tokens
+
     def rule_proxy_tokens_for_sanitization(self) -> set[str]:
         """Return persisted current and retired tokens for output sanitization only."""
-        system_config = self.get_system().get("system_config", {})
-        if not isinstance(system_config, dict):
-            return set()
-        values = [system_config.get("rule_proxy_token")]
-        retired = system_config.get("retired_rule_proxy_tokens", [])
-        if isinstance(retired, list):
-            values.extend(retired)
-        return {value for value in values if isinstance(value, str) and value}
+        return set(self._sanitization_tokens()[0])
+
+    def agent_tokens_for_sanitization(self) -> frozenset[str]:
+        """Persisted Agent credentials, for output sanitization only."""
+        return self._sanitization_tokens()[1]
 
     def _create_migration_snapshot_dir(self) -> Path:
         """Create a unique snapshot directory, retrying an actual mkdir race."""

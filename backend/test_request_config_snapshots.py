@@ -6,8 +6,11 @@ import pytest
 from flask import Flask
 
 from backend.common import config as config_module
+from backend.common.config_export import sanitize_external_payload
 from backend.common.config_repository import ProfileNotFound, ProfileRepository
 from backend.common.profile_context import resolve_profile_id
+
+REDACTED = "[REDACTED]"
 
 
 @pytest.fixture
@@ -138,3 +141,42 @@ def test_another_request_does_not_reuse_the_validated_profile(repository, app):
             assert resolve_profile_id() == 'default'
         assert resolve_profile_id() == 'other'
 
+
+def test_redaction_tokens_are_read_once_per_generation_without_copying_system(repository, monkeypatch):
+    repository.update_system_transaction(lambda system: system['agents'].append(
+        {'id': 'a', 'name': 'A', 'profile_id': 'default', 'token': 'agent-token-one'}))
+    rule_token = repository.get_system()['system_config']['rule_proxy_token']
+    monkeypatch.setattr(repository, 'get_system', lambda: pytest.fail('redaction must not copy system'))
+    reads = []
+    tokens_of = repository._sanitization_tokens_of
+    monkeypatch.setattr(repository, '_sanitization_tokens_of', lambda system: reads.append(1) or tokens_of(system))
+
+    for _ in range(3):
+        assert sanitize_external_payload({'a': 'agent-token-one', 'r': f'x?token={rule_token}'}) == {
+            'a': REDACTED, 'r': REDACTED}
+    assert len(reads) == 1
+
+
+def test_rotated_tokens_are_redacted_by_the_next_response(repository):
+    repository.update_system_transaction(lambda system: system['agents'].append(
+        {'id': 'a', 'name': 'A', 'profile_id': 'default', 'token': 'agent-token-one'}))
+    old_rule_token = repository.get_system()['system_config']['rule_proxy_token']
+    assert sanitize_external_payload(['agent-token-one', old_rule_token]) == [REDACTED, REDACTED]
+
+    def rotate(system):
+        system['agents'][0]['token'] = 'agent-token-two'
+        settings = system['system_config']
+        settings['retired_rule_proxy_tokens'] = [old_rule_token]
+        settings['rule_proxy_token'] = 'rule-token-two'
+
+    repository.update_system_transaction(rotate)
+    assert sanitize_external_payload(['agent-token-two', 'rule-token-two', old_rule_token, 'agent-token-one']) == [
+        REDACTED, REDACTED, REDACTED, 'agent-token-one']
+
+
+def test_tokens_written_by_another_repository_are_redacted(repository):
+    sanitize_external_payload({})
+    other = ProfileRepository(repository.data_dir)
+    other.update_system_transaction(lambda system: system['agents'].append(
+        {'id': 'b', 'name': 'B', 'profile_id': 'default', 'token': 'external-agent-token'}))
+    assert sanitize_external_payload({'token': 'external-agent-token'}) == {'token': REDACTED}
