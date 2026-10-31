@@ -309,13 +309,15 @@ def inject_region_probe(mihomo_config: Dict[str, Any], port: int) -> bool:
 
 def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
                            sync_lan_hosts: bool = False, *, preflight_providers: bool = True,
-                           region_probe: bool = False) -> str:
+                           region_probe: bool = False, report: Optional[Dict[str, Any]] = None) -> str:
     """生成 Mihomo YAML 配置
 
     Args:
         sync_lan_hosts: 是否把 MosDNS 自定义 Hosts（内网域名映射）注入
             顶层 hosts。仅推送给局域网内 Agent 时为 True；订阅/下载
             配置保持 False，避免漫游设备在外网解析到内网 IP。
+        report: 传入字典时写入 ``subscription_hosts``：从订阅合并、忽略的
+            hosts 条目及原因，供预览展示。
     """
 
     from backend.utils.proxy_chains import lower_proxy_chains
@@ -373,9 +375,16 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     validate_ipv6_flags(mihomo_config)
     normalize_find_process_mode(mihomo_config)
 
+    # 订阅 hosts 不能覆盖手写条目，也排在 MosDNS 同步条目之后
+    written_hosts = mihomo_config.get('hosts')
+    user_host_keys = list(written_hosts) if isinstance(written_hosts, dict) else []
+
     # 仅 Agent 推送场景同步 MosDNS 自定义 Hosts（内网域名映射）
     if sync_lan_hosts:
         sync_mosdns_hosts(mihomo_config, config_data)
+    synced_hosts = mihomo_config.get('hosts')
+    mosdns_host_keys = [key for key in synced_hosts if key not in user_host_keys] \
+        if isinstance(synced_hosts, dict) else []
 
     # 收集被策略组使用的节点ID、订阅ID和聚合ID
     # Logical chains are policies in their own right, even without a parent group.
@@ -512,6 +521,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     used_node_ids = dependency_node_ids(config_data, used_node_ids | aggregation_roots)
     # 添加代理节点（包括拨号依赖）
     proxies = []
+    inline_proxies = []
     logger.debug(f"收集到的被使用节点ID: {used_node_ids}")
     logger.debug(f"开始生成 proxies，总节点数: {len(config_data.get('nodes', []))}")
 
@@ -531,6 +541,7 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
         proxy = overlay_dialer(config_data, node, convert_node_to_mihomo(node))
         if proxy:
             proxies.append(proxy)
+            inline_proxies.append((node, proxy))
             logger.debug(f"添加节点到 proxies: {node.get('name')}")
 
     logger.debug(f"最终生成的 proxies 数量: {len(proxies)}")
@@ -816,6 +827,14 @@ def generate_mihomo_config(config_data: Dict[str, Any], base_url: str = '',
     lower_group_provider_filters(config_data, mihomo_config)
     from backend.utils.proxy_chains import lower_chain_providers
     lower_chain_providers(config_data, mihomo_config)
+
+    # 订阅自带的 hosts：只合并本配置实际下发节点自己的 server 域名
+    from backend.utils.subscription_hosts import log_report, merge_subscription_hosts
+    hosts_report = merge_subscription_hosts(mihomo_config, config_data, user_keys=user_host_keys,
+                                            mosdns_keys=mosdns_host_keys, inline_proxies=inline_proxies)
+    log_report(logical_config.get('profile_id') or '', hosts_report)
+    if report is not None:
+        report['subscription_hosts'] = hosts_report
 
     from backend.utils.strategy_references import validate_rule_policies
     validate_rule_policies(

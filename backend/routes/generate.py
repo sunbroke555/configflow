@@ -139,8 +139,9 @@ def preview_mihomo():
         base_url = data.get('base_url', '')
 
         # 传递 base_url 给生成器
-        yaml_content = generate_mihomo_config(config_data, base_url=base_url)
-        return jsonify({'content': yaml_content})
+        report = {}
+        yaml_content = generate_mihomo_config(config_data, base_url=base_url, report=report)
+        return jsonify({'content': yaml_content, 'subscription_hosts': report.get('subscription_hosts')})
     except StrategyReferenceError as e:
         return jsonify({'success': False, 'message': str(e)}), 400
     except Exception as e:

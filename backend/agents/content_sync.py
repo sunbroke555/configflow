@@ -93,6 +93,9 @@ class ContentSyncChecker:
         self._lock = threading.RLock()
         self._entries = OrderedDict()
         self._running = {}
+        # Bumped by invalidate(), so a compare_now that prepared from an older
+        # cache does not store its answer.
+        self._generation = 0
 
     def _trim(self):
         for identity in list(self._entries):
@@ -147,6 +150,22 @@ class ContentSyncChecker:
                 entry.expires = self._clock() + self._error_ttl
                 return dict(entry.result)
             return {'status': 'checking'}
+
+    def invalidate(self):
+        """Forget finished results; running checks keep their slot but not their answer.
+
+        Inputs outside the profile (subscription caches) can change the
+        generated files without changing the cache key.
+        """
+        with self._lock:
+            self._generation += 1
+            for identity, entry in list(self._entries.items()):
+                if identity in self._running:
+                    # The worker may have read the old cache; a fresh entry
+                    # makes its result land nowhere.
+                    self._entries[identity] = _Entry(entry.key, entry.repository)
+                else:
+                    entry.result, entry.expires = None, 0
 
     @staticmethod
     def _prepare_fingerprint(agent, config, base_url, prepare):
@@ -214,6 +233,7 @@ class ContentSyncChecker:
             if (entry is not None and entry.key == key and entry.repository is repository
                     and entry.result is not None and self._clock() < entry.expires):
                 return dict(entry.result)
+            generation = self._generation
         try:
             fingerprint = self._prepare_fingerprint(agent_snapshot, config_snapshot, base_url, prepare)
         except Exception:
@@ -224,6 +244,8 @@ class ContentSyncChecker:
         with self._lock:
             if _current_repository() is not repository:
                 return _unknown('check_failed')
+            if self._generation != generation:
+                return result
             entry = self._entries.get(identity)
             if entry is None or entry.key != key or entry.repository is not repository:
                 # An older worker for other inputs then keeps its result to itself.
@@ -244,3 +266,7 @@ def get_content_sync(agent, config, base_url, prepare, *, scope='', repository=_
 
 def compare_now(agent, config, base_url, prepare, *, scope='', repository=_UNBOUND_REPOSITORY):
     return _checker.compare_now(agent, config, base_url, prepare, scope=scope, repository=repository)
+
+
+def invalidate_content_sync():
+    _checker.invalidate()

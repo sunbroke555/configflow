@@ -86,6 +86,26 @@ export interface ProxyGroup {
   source?: 'subscription' | 'node' | 'strategy'  // 已废弃，兼容旧数据
 }
 
+/** Hosts taken from subscriptions while generating Mihomo (preview response). */
+export interface SubscriptionHostsItem {
+  subscription: string
+  domain: string
+  value?: string | string[]
+  status: 'merged' | 'ignored'
+  /** merged: an address list, or a domain Mihomo does not follow for node servers. */
+  kind?: 'address' | 'domain'
+  reason?: string
+  detail?: string
+}
+
+export interface SubscriptionHostsReport {
+  merged: number
+  ignored: number
+  domain_mapped: number
+  subscriptions: Array<{ id: string; name: string; total: number; merged: number; ignored: number }>
+  items: SubscriptionHostsItem[]
+}
+
 export interface AgentContentSync {
   status: 'synced' | 'changed' | 'unknown' | 'never-pushed' | 'checking'
   /** Stable server reason code; never display raw errors as UI copy. */
