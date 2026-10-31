@@ -7,7 +7,9 @@ Lifecycle: backup; seed; fixture4; defconf; serve; browser actions; restore.
 Use the browser helper for every product setting, prepare, publish and verify.
 Private WORK contains credentials indirectly in its DB/backups: publish only
 redacted evidence, never WORK itself. defconf/restore are destructive to the
-specified lab configuration and require the complete baseline first.
+specified lab configuration and require the baseline first. This one-off run
+backs up config.yaml, not the Mihomo cache or Agent deployment journal; those
+remaining runtime artifacts must be disclosed in the restoration report.
 """
 import base64, hashlib, json, os, pathlib, re, shutil, socket, sqlite3, subprocess, sys, time, urllib.request, urllib.error
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -34,7 +36,7 @@ def state():return {p:ros('GET',p) for p in PATHS}
 def normalize(p,rows):
  if isinstance(rows,dict):rows=[rows]
  skip={'.id','bytes','packets','invalid','active','inactive','dynamic','creation-time','debug.fwp-ptr','hw-offloaded','immediate-gw','used','expires-after','next-run','run-count','last-started','last-link-up-time','last-link-down-time','cache-used'}
- if 'route' in p:skip|={'belongs-to','contribution','fib','suppressed','rpki','nexthop-id','debug.fwp-ptr','scope','target-scope'}
+ if 'route' in p:skip|={'belongs-to','contribution','fib','suppressed','rpki','nexthop-id','debug.fwp-ptr'}
  if p=='/ip/settings':skip|={'ipv4-fast-path-active','ipv4-fast-path-packets','ipv4-fast-path-bytes','ipv4-fasttrack-active','ipv4-fasttrack-packets','ipv4-fasttrack-bytes'}
  if p=='/ip/firewall/connection/tracking':skip|={'active-ipv4','active-ipv6','total-entries','total-ip4-entries','total-ip6-entries','max-entries'}
  return [{k:v for k,v in r.items() if k not in skip} for r in rows if r.get('dynamic')!='true']
@@ -217,7 +219,7 @@ def restore():
   for o,n in zip(old,now):
    changes={k:v for k,v in normalize(p,[o])[0].items() if normalize(p,[n])[0].get(k)!=v}
    if changes:ros('PATCH',p+'/'+n['.id'],changes) if '.id' in n else ros('POST',p+'/set',changes)
- restore_guest=r'''import json,pathlib,subprocess,sys
+ restore_guest=r'''import json,pathlib,subprocess,sys,time
 d=json.load(sys.stdin)
 for base in ['/etc/sysctl.d','/opt/configflow-agent/ipv6-readiness.json']:
  p=pathlib.Path(base)
@@ -225,12 +227,14 @@ for base in ['/etc/sysctl.d','/opt/configflow-agent/ipv6-readiness.json']:
   if f.is_file() and str(f) not in d['files']:f.unlink()
 for name,v in d['files'].items():
  p=pathlib.Path(name);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(bytes.fromhex(v['data']));p.chmod(v['mode'])
-if '/etc/mihomo/config.yaml' in d['files']:subprocess.run(['systemctl','restart','mihomo'],check=True)
+if '/etc/mihomo/config.yaml' in d['files']:
+ subprocess.run(['systemctl','restart','mihomo'],check=True)
+ time.sleep(3)  # TUN recreation initializes per-interface IPv6 parameters asynchronously.
 now=subprocess.run(['sysctl','-a'],capture_output=True,text=True).stdout
 now=dict(x.split(' = ',1) for x in now.splitlines() if ' = ' in x)
 errors=[];changed=[]
-for k,v in d['sysctls'].items():
- if k in now and v!=now[k] and k.startswith('net.'):
+for k,v in sorted(d['sysctls'].items(),key=lambda item: (not item[0].endswith('.stable_secret'),item[0])):
+ if k in now and (v!=now[k] or (k.endswith('.addr_gen_mode') and k.rsplit('.',1)[0]+'.stable_secret' in changed)) and k.startswith('net.') and k!='net.netfilter.nf_conntrack_count':
   r=subprocess.run(['sysctl','-w',k+'='+v],capture_output=True,text=True)
   changed.append(k)
   if r.returncode:errors.append({'key':k,'error':r.stderr})
@@ -241,7 +245,8 @@ print(json.dumps({'changed':changed,'errors':errors}))'''
   results[str(cid)]=json.loads(lab.guest(cid,'python3','-c',restore_guest,data=json.dumps(d).encode()).stdout)
   now=guest_state(cid)
   results[str(cid)]['files_equal']=d['files']==now['files']
-  results[str(cid)]['net_sysctl_diff']={k:[v,now['sysctls'].get(k)] for k,v in d['sysctls'].items() if k.startswith('net.') and k in now['sysctls'] and now['sysctls'][k]!=v}
+  results[str(cid)]['net_sysctl_diff']={k:('[redacted baseline/difference]' if 'secret' in k else [v,now['sysctls'].get(k)]) for k,v in d['sysctls'].items() if k.startswith('net.') and k!='net.netfilter.nf_conntrack_count' and k in now['sysctls'] and now['sysctls'][k]!=v}
+  results[str(cid)]['runtime_counters_excluded']=['net.netfilter.nf_conntrack_count']
  after=state();save('restore-ros.json',after)
  diffs={p:{'before':normalize(p,before[p]),'after':normalize(p,after[p])} for p in PATHS if normalize(p,before[p])!=normalize(p,after[p])}
  fixture_equal=not original_fixture.exists() or lab.guest(154,'cat','/opt/cf-ipv6-fixture/fixture.py').stdout==original_fixture.read_bytes()
