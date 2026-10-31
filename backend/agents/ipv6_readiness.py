@@ -393,7 +393,7 @@ def prepare(manager, agent_id, profile_id, body):
         except MonitorError as error:
             raise MonitorError('PREPARE_FAILED', 502, '主机配置补齐失败，请重新检查：' + str(error)) from None
         result = _inspect(manager, agent, profile_id, config)
-        result['message'] = '已补齐可自动处理的主机配置；ROS 路由请到上级路由差异报告预览并发布。'
+        result['message'] = '已补齐可自动处理的主机配置；ROS 路由请到上游路由差异报告预览并发布。'
         result['changed_routes'] = 0
         if prepared_host:
             for item in prepared_host.get('checks', []):

@@ -384,7 +384,7 @@ describe('Mihomo IPv6 mode', () => {
     expect(again.addedFakeIPv6Range).toBe(false)
     expect(again.content.match(/fake-ip-range6:/g)).toHaveLength(1)
     for (const content of [clients.content, nodes.content, off.content, again.content]) {
-      expect(content).not.toContain('上级路由')
+      expect(content).not.toContain('上游路由')
       expect(parse(content)['fake-ip-range']).toBeUndefined()
       expect(parse(content).tun).toEqual({ enable: true })
     }

@@ -1,6 +1,6 @@
 import api from '@/api'
 
-/** 单台上级路由相对当前设置的状态：同步、待发布、有改动但暂时无法发布、读取失败。 */
+/** 单台上游路由相对当前设置的状态：同步、待发布、有改动但暂时无法发布、读取失败。 */
 export type UpstreamRouterState = 'synced' | 'pending' | 'blocked' | 'unknown'
 
 export interface UpstreamRouterPendingItem {
@@ -43,7 +43,7 @@ const path = (agentId: string) => `/agents/${encodeURIComponent(agentId)}/upstre
 
 export const upstreamRouterApi = {
   /**
-   * 把这台 Mihomo 设为代理网关的上级路由（可跨配置空间）及其实时发布状态；只读。
+   * 把这台 Mihomo 设为代理网关的上游路由（可跨配置空间）及其实时发布状态；只读。
    * 路由器记录、配置空间修订号和 Agent 记录不变时，服务端沿用上次读取（checked_at 为读取时间）；
    * refresh 强制重新读取，用于保存、发布成功或重新检查之后。
    */

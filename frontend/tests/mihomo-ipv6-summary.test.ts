@@ -61,7 +61,7 @@ describe('Mihomo IPv6 three outcomes', () => {
     const blocked = { ...check('router_ros_fake4_0', 'error', '按顺序发现阻断'), details: ['filter/forward #7 drop', 'raw/prerouting trace'] }
     const result = group('client', { verification: verification({ checks: [...runtimeChecks(), blocked] }) })
     expect(result).toMatchObject({ status: '未通过', tone: 'danger' })
-    expect(result.issues).toEqual(['客户端分流路由或相关规则存在问题，请到「上级路由」检查差异后再验证。'])
+    expect(result.issues).toEqual(['客户端分流路由或相关规则存在问题，请到「上游路由」检查差异后再验证。'])
     expect(result.issues.join()).not.toMatch(/filter|prerouting|展开/)
   })
 
@@ -72,8 +72,8 @@ describe('Mihomo IPv6 three outcomes', () => {
     ] })
     const groups = buildMihomoIPv6Summary({ verification: report })
     expect(groups.every(row => row.tone === 'success')).toBe(true)
-    expect(groups[0]!.issues).toEqual(['本次连接已通过；路由器规则检查仍有差异，请到「上级路由」核对。'])
-    expect(groups[2]!.issues).toEqual(['本次连接已通过；分流路由检查仍有差异，请到「上级路由」核对。'])
+    expect(groups[0]!.issues).toEqual(['本次连接已通过；路由器规则检查仍有差异，请到「上游路由」核对。'])
+    expect(groups[2]!.issues).toEqual(['本次连接已通过；分流路由检查仍有差异，请到「上游路由」核对。'])
   })
 
   it('does not let passing observations hide current host or runtime failures', () => {

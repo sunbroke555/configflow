@@ -30,7 +30,7 @@ const props = defineProps<{
   save: () => Promise<PublishGuard | null>
   /**
    * 父组件的 @save-draft 监听。声明为 prop 以便等待其结果：返回（或 resolve 为）非空值表示草稿已保存，
-   * Mihomo 据此刷新上级路由提醒；返回 undefined / null 只代表未确认保存。
+   * Mihomo 据此刷新上游路由提醒；返回 undefined / null 只代表未确认保存。
    */
   onSaveDraft?: () => unknown
 }>()
@@ -50,7 +50,7 @@ const pendingPosts = reactive(new Set<string>())
 const submittedScopes = new Map<string, { profileId: string; serviceType: ServiceType }>()
 const announcedPublications = new Set<string>()
 const verifiedPublication = ref<MihomoPublishedTarget | null>(null)
-// Mihomo 本次打开后每保存成功一次（草稿或发布前的保存）加一，用于提醒并刷新上级路由的待发布状态。
+// Mihomo 本次打开后每保存成功一次（草稿或发布前的保存）加一，用于提醒并刷新上游路由的待发布状态。
 const routerCheck = ref(0)
 let session = 0
 let targetsInitialized = false

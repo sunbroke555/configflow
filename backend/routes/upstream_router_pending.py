@@ -22,6 +22,6 @@ def upstream_router_pending(agent_id):
         data = pending.agent_routers(agent_id, refresh=refresh)
         response, status = jsonify({'success': True, **data}), 200
     except FutureTimeout:
-        response, status = jsonify({'success': False, 'message': '读取上级路由状态超时，请稍后重试。'}), 504
+        response, status = jsonify({'success': False, 'message': '读取上游路由状态超时，请稍后重试。'}), 504
     response.headers['Cache-Control'] = 'no-store'
     return response, status

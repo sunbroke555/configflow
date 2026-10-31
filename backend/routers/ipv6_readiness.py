@@ -236,7 +236,7 @@ def inspect(driver, router, agent, host, configuration, dns_target=None, policy_
             checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少对应路由，但未确认唯一、稳定的同网段下一跳，不能自动添加{idle}'))
         else:
             plan = {'dst-address': fake, 'gateway': gateway, 'routing-table': 'main', 'disabled': 'false', 'distance': '1'}
-            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少 {fake} → {gateway}{idle}；请到上级路由差异报告预览并发布。'))
+            checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'warning', f'缺少 {fake} → {gateway}{idle}；请到上游路由差异报告预览并发布。'))
     else:
         checks.append(check('fake_ipv6', 'IPv6 Fake-IP 路由', 'ok', '当前保存配置未启用 IPv6 Fake-IP，本次不新增相关路由'))
     dependencies = {'wan': ('routes',), 'ra': ('nd', 'ipv4_addresses'), 'dns': ('dns', 'dhcp', 'nd')}

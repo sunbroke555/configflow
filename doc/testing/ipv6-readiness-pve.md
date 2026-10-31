@@ -172,9 +172,9 @@ python scripts/tests/ipv6_verification_lab.py verify --client --publish
 ![设备检查五项摘要](../img/guide/mihomo-ipv6-check-summary.png)
 
 
-## IPv6 Fake-IP 路由纳入上级路由发布
+## IPv6 Fake-IP 路由纳入上游路由发布
 
-2026-10-30，使用同一隔离 VM151 / CT152–154，验证 `scripts/tests/ipv6_managed_routes_lab.py`。现在开关只补齐 YAML 中缺少的 Fake-IP 网段，ROS 写入统一从上级路由差异报告进入预览发布；设备检查的补齐不再写 ROS。
+2026-10-30，使用同一隔离 VM151 / CT152–154，验证 `scripts/tests/ipv6_managed_routes_lab.py`。现在开关只补齐 YAML 中缺少的 Fake-IP 网段，ROS 写入统一从上游路由差异报告进入预览发布；设备检查的补齐不再写 ROS。
 
 实际执行并通过：
 
@@ -190,7 +190,7 @@ python scripts/tests/ipv6_verification_lab.py verify --client --publish
 
 真实 15820 页面同时做 1440px 浅色和 375px 深色只读验收：显示受管路由、下一跳和发布入口，无页面错误、横向溢出或配置写入。开关自动补网段、保存/发布分离等交互另有 29 个浏览器场景通过；前端全量 2,838 项、类型检查与生产构建通过。
 
-![上级路由 IPv6 Fake-IP](../img/guide/mihomo-ipv6-managed-route.png)
+![上游路由 IPv6 Fake-IP](../img/guide/mihomo-ipv6-managed-route.png)
 
 复现（先部署本分支到专用测试预览）：
 
@@ -227,7 +227,7 @@ rt -- /home/sunbroke/cf-test/.venv/bin/python scripts/tests/ipv6_managed_routes_
 
 ## 自定义 IPv6 Fake-IP 网段与 LLA 优先
 
-2026-10-30，在 Mihomo DNS 开关下新增网段输入框，开启 IPv6 Fake-IP 后显示，默认补齐 `fc00::1/64`，已有自定义值沿用。输入与 YAML 双向同步；非法 CIDR、公网和链路本地网段在输入框提示，不写入 YAML，并阻止生成页和面板入口保存或发布。关闭开关收起输入框、保留网段并说明受管路由需通过上级路由发布撤回。
+2026-10-30，在 Mihomo DNS 开关下新增网段输入框，开启 IPv6 Fake-IP 后显示，默认补齐 `fc00::1/64`，已有自定义值沿用。输入与 YAML 双向同步；非法 CIDR、公网和链路本地网段在输入框提示，不写入 YAML，并阻止生成页和面板入口保存或发布。关闭开关收起输入框、保留网段并说明受管路由需通过上游路由发布撤回。
 
 ![IPv6 Fake-IP 网段输入框](../img/guide/mihomo-ipv6-fakeip-range.png)
 

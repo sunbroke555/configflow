@@ -23,7 +23,7 @@ const error = ref('')
 const phase = ref<'idle' | 'loading' | 'checking' | 'preparing'>('idle')
 const verificationVersion = ref(0)
 const actionMessage = ref('')
-// 每次取得检查结果加一：首次显示上级路由提醒，之后重新检查时一并刷新。
+// 每次取得检查结果加一：首次显示上游路由提醒，之后重新检查时一并刷新。
 const routerCheck = ref(0)
 let session = 0
 let initialized = false

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 上级路由待发布提醒：按实际读取的差异报告与发布预览提示，并直达该路由器的预览发布。
+// 上游路由待发布提醒：按实际读取的差异报告与发布预览提示，并直达该路由器的预览发布。
 // 只提醒和链接；路由器写入始终在「上游路由」页预览确认后进行。
 import { computed, inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { routerKey, type RouteLocationRaw } from 'vue-router'
@@ -51,7 +51,7 @@ function itemsText(router: UpstreamRouterStatus) {
 
 const lines = computed<Line[]>(() => {
   if (failure.value) {
-    return [{ key: '', state: 'unknown', name: '', count: 0, profile: '', detail: failure.value, action: '查看上级路由', to: { path: '/routers' } }]
+    return [{ key: '', state: 'unknown', name: '', count: 0, profile: '', detail: failure.value, action: '查看上游路由', to: { path: '/routers' } }]
   }
   return routers.value.filter(router => router.state !== 'synced').map(router => {
     const base = {
@@ -102,7 +102,7 @@ async function load(refresh: boolean) {
     const { data } = await upstreamRouterApi.pending(id, { refresh, signal: abort.signal })
     if (disposed || generation !== session) return
     if (data?.success !== true || data.agent_id !== id || !Array.isArray(data.routers)) {
-      throw new Error(data?.message || '上级路由状态响应无效，请稍后重试。')
+      throw new Error(data?.message || '上游路由状态响应无效，请稍后重试。')
     }
     routers.value = data.routers.filter(valid)
     agentProfileId.value = typeof data.agent_profile_id === 'string' ? data.agent_profile_id : ''
@@ -150,10 +150,10 @@ onUnmounted(() => {
         <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning-accent" aria-hidden="true" />
         <div class="min-w-0">
           <p class="m-0 text-foreground">
-            <template v-if="line.state === 'pending'">上级路由「{{ line.name }}」有 <span class="num">{{ line.count }}</span> 项待发布</template>
-            <template v-else-if="line.state === 'blocked'">上级路由「{{ line.name }}」有改动暂时无法发布</template>
-            <template v-else-if="line.name">无法确认上级路由「{{ line.name }}」状态</template>
-            <template v-else>无法确认上级路由状态</template>
+            <template v-if="line.state === 'pending'">上游路由「{{ line.name }}」有 <span class="num">{{ line.count }}</span> 项待发布</template>
+            <template v-else-if="line.state === 'blocked'">上游路由「{{ line.name }}」有改动暂时无法发布</template>
+            <template v-else-if="line.name">无法确认上游路由「{{ line.name }}」状态</template>
+            <template v-else>无法确认上游路由状态</template>
           </p>
           <p v-if="line.profile || line.detail || (line.name && checked)" class="m-0 text-muted-foreground">
             <template v-if="line.profile">配置空间「{{ line.profile }}」<template v-if="line.detail || (line.name && checked)"> · </template></template>{{ line.detail }}<template v-if="line.name && checked"><template v-if="line.detail"> · </template><span data-upstream-router-checked>{{ checked }}</span></template>

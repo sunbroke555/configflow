@@ -40,7 +40,7 @@ export interface OxiDNSLink { router: string; agent: string }
 export const IPV6_STEP_LABELS: Record<IPv6StepId, string> = {
   host: 'Mihomo 主机准备',
   publish: '保存并发布 Mihomo',
-  upstream: '上级路由发布',
+  upstream: '上游路由发布',
   firewall: '路由器防火墙 / NAT',
   oxidns: 'OxiDNS 返回 IPv6 地址',
   verify: '验收',
@@ -82,12 +82,12 @@ export function publishStep(context: IPv6StepContext): IPv6Step {
 }
 
 export function upstreamStep(status: UpstreamPendingStatus | null, dirty: boolean, mode: Exclude<MihomoIPv6Mode, 'off'> = 'clients'): IPv6Step {
-  if (dirty) return step('upstream', '保存后核对', 'neutral', [], '上级路由按已保存的配置核对，请先保存草稿。')
+  if (dirty) return step('upstream', '保存后核对', 'neutral', [], '上游路由按已保存的配置核对，请先保存草稿。')
   if (!status) return step('upstream', '检查中', 'progress')
   if (status.state === 'none') {
     // Clients that stay on IPv4 need no router; Mihomo reaches its nodes by itself.
-    if (mode === 'nodes') return step('upstream', '未关联上级路由', 'neutral', [], '没有路由器把代理网关设为这台 Mihomo，无需发布。')
-    return step('upstream', '未关联上级路由', 'warning', ['没有路由器把代理网关设为这台 Mihomo；客户端的 IPv6 流量需要上级路由转给它。'])
+    if (mode === 'nodes') return step('upstream', '未关联上游路由', 'neutral', [], '没有路由器把代理网关设为这台 Mihomo，无需发布。')
+    return step('upstream', '未关联上游路由', 'warning', ['没有路由器把代理网关设为这台 Mihomo；客户端的 IPv6 流量需要上游路由转给它。'])
   }
   if (status.state === 'synced') return step('upstream', '已同步', 'success')
   if (status.state === 'pending') return step('upstream', status.pending > 0 ? `${status.pending} 项待处理` : '待处理', 'neutral')
@@ -104,7 +104,7 @@ export function firewallStep(context: IPv6StepContext): IPv6Step {
   const readiness = context.readiness
   // The check reads the saved Mihomo configuration, not the draft.
   if (!readiness || context.dirty) return waiting('firewall', context)
-  if (!readiness.routers.length) return step('firewall', '未关联上级路由', 'neutral')
+  if (!readiness.routers.length) return step('firewall', '未关联上游路由', 'neutral')
   const issues: string[] = []
   const unknowns: string[] = []
   const commands: Array<{ label: string; command: string }> = []

@@ -37,7 +37,7 @@ describe('IPv6 check window upstream router reminder', () => {
   it('replaces the fixed router hint with the live reminder for the checked device', async () => {
     const wrapper = await mount()
     expect(wrapper.text()).toContain('补齐仅处理 Mihomo 主机配置，必要时重新加载 Mihomo。')
-    expect(wrapper.text()).not.toContain('上级路由')
+    expect(wrapper.text()).not.toContain('上游路由')
     const reminder = wrapper.getComponent(UpstreamRouterPending)
     expect(reminder.props()).toMatchObject({ agentId: 'gw', refreshKey: 1 })
     expect(reminder.props('compact')).toBeFalsy()

@@ -66,8 +66,8 @@ describe('Mihomo IPv6 mode selector', () => {
     const changed = await choose(wrapper, 'clients')
     expect(parse(changed).dns).toMatchObject({ ipv6: true, 'fake-ip-range6': 'fc00::1/64' })
     expect(wrapper.get('[role="status"]').text()).toBe('已补充 IPv6 Fake-IP 网段 fc00::1/64。')
-    expect(wrapper.text()).not.toContain('上级路由」查看')
-    expect(wrapper.text()).not.toContain('保存后到「上级路由」')
+    expect(wrapper.text()).not.toContain('上游路由」查看')
+    expect(wrapper.text()).not.toContain('保存后到「上游路由」')
     expect(wrapper.findComponent(MihomoIPv6Readiness).exists()).toBe(false)
   })
 

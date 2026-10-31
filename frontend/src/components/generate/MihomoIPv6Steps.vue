@@ -298,7 +298,7 @@ onUnmounted(() => { clearInterval(ticker); disposed = true; session++ })
               <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ entry.command }}</pre>
             </div>
             <Button v-if="item.id === 'host' && item.issues.length" type="button" variant="outline" class="min-h-11" :disabled="disabled" @click="emit('check', selectedId)"><ScanLine class="size-4" aria-hidden="true" />检查设备</Button>
-            <RouterLink v-if="item.id === 'upstream' && upstream?.state === 'none'" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">前往上级路由</RouterLink>
+            <RouterLink v-if="item.id === 'upstream' && upstream?.state === 'none'" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">前往上游路由</RouterLink>
             <RouterLink v-if="item.id === 'oxidns'" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/agents">到 Agent 页打开 OxiDNS 设置</RouterLink>
           </template>
         </AgentStatusRow>
@@ -310,7 +310,7 @@ onUnmounted(() => { clearInterval(ticker); disposed = true; session++ })
           </div>
           <div v-if="!dirty && (upstream?.state === 'pending' || upstream?.state === 'unknown')" class="-mt-1 mb-2 flex min-w-0 flex-wrap gap-x-4 text-xs" data-ipv6-step-upstream>
             <RouterLink v-for="link in upstreamLinks" :key="link.key" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" :to="link.to">{{ link.label }}</RouterLink>
-            <RouterLink v-if="!upstreamLinks.length" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">前往上级路由查看</RouterLink>
+            <RouterLink v-if="!upstreamLinks.length" class="inline-flex min-h-11 items-center text-primary-accent underline underline-offset-4" to="/routers">前往上游路由查看</RouterLink>
           </div>
         </template>
         <div v-if="item.id === 'verify' && readiness && !dirty" v-show="item.tone !== 'success'" class="mb-2 ml-2 min-w-0 border-l border-border pl-4 text-xs" data-ipv6-step-verify>

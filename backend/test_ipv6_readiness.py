@@ -434,7 +434,7 @@ def test_api_preserves_draft_and_ipv4_and_repeated_prepare_is_idempotent(environ
         report = response.get_json()
     assert router.writes == []
     assert report['changed_routes'] == 0
-    assert '上级路由差异报告' in report['message']
+    assert '上游路由差异报告' in report['message']
     assert manager.repository.get_profile('v6') == before
     assert all(w[1].startswith('/ipv6/route') for w in router.writes)
 

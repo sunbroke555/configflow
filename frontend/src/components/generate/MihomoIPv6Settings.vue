@@ -37,7 +37,7 @@ const modeLabels: Record<MihomoIPv6Mode, string> = { off: '关闭', nodes: 'Miho
 const modeDescriptions: Record<MihomoIPv6Mode, string> = {
   off: 'Mihomo 不使用 IPv6，客户端也只拿到 IPv4 地址。',
   nodes: 'Mihomo 用 IPv6，客户端走 IPv4 分流：Mihomo 经 IPv6 连接节点，DNS 只给客户端返回 IPv4 地址。IPv6 Fake-IP 网段和规则集里的 IPv6 网段照常发布到上游路由，切换模式不用再改路由器。',
-  clients: '手机、电脑也拿到 IPv6 地址并经 Mihomo 分流，需要上级路由配合。',
+  clients: '手机、电脑也拿到 IPv6 地址并经 Mihomo 分流，需要上游路由配合。',
 }
 const modeHelp = optionHelp(
   '节点只有 IPv6 地址或想走 IPv6 线路时，选「Mihomo 用 IPv6，客户端走 IPv4」；希望手机、电脑也通过 IPv6 分流时，选「客户端也走 IPv6」。',

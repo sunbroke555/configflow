@@ -54,7 +54,7 @@ describe('publish bar upstream router reminder', () => {
     expect(saveDraft).toHaveBeenCalledTimes(1)
     const reminder = wrapper.getComponent(UpstreamRouterPending)
     expect(reminder.props()).toMatchObject({ agentId: 'one', refreshKey: 1, compact: true })
-    expect(wrapper.get('[data-publish-upstream-routers]').text()).toContain('上级路由「主路由」有 1 项待发布')
+    expect(wrapper.get('[data-publish-upstream-routers]').text()).toContain('上游路由「主路由」有 1 项待发布')
     expect(wrapper.text()).not.toContain('IPv6 Fake-IP 分流路由：待添加')
     expect(wrapper.get('[data-publish-upstream-routers] a').attributes('href')).toBe('/routers?router=ros&profile=office&preview=1')
     await button(wrapper, '保存草稿').trigger('click')
@@ -85,7 +85,7 @@ describe('publish bar upstream router reminder', () => {
     await button(wrapper, '保存并发布').trigger('click')
     await flushPromises()
     expect(wrapper.getComponent(UpstreamRouterPending).props('agentId')).toBe('one')
-    expect(wrapper.text()).toContain('上级路由「主路由」有 1 项待发布')
+    expect(wrapper.text()).toContain('上游路由「主路由」有 1 项待发布')
   })
 
   it('reminds for each Mihomo of the profile when no target is chosen', async () => {

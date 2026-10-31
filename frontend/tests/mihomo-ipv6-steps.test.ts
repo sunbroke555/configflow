@@ -75,9 +75,9 @@ describe('IPv6 step derivation', () => {
     expect(upstreamStep(null, false)).toMatchObject({ status: '检查中', tone: 'progress' })
     expect(upstreamStep({ state: 'synced', pending: 0 }, false)).toMatchObject({ status: '已同步', tone: 'success', issues: [] })
     expect(upstreamStep({ state: 'pending', pending: 2 }, false)).toMatchObject({ status: '2 项待处理', tone: 'neutral' })
-    expect(upstreamStep({ state: 'none', pending: 0 }, false)).toMatchObject({ status: '未关联上级路由', tone: 'warning' })
+    expect(upstreamStep({ state: 'none', pending: 0 }, false)).toMatchObject({ status: '未关联上游路由', tone: 'warning' })
     // Clients on IPv4 need no router: nothing to fix, nothing to publish.
-    expect(upstreamStep({ state: 'none', pending: 0 }, false, 'nodes')).toMatchObject({ status: '未关联上级路由', tone: 'neutral', issues: [] })
+    expect(upstreamStep({ state: 'none', pending: 0 }, false, 'nodes')).toMatchObject({ status: '未关联上游路由', tone: 'neutral', issues: [] })
     expect(upstreamStep({ state: 'pending', pending: 1 }, false, 'nodes')).toMatchObject({ status: '1 项待处理' })
     expect(upstreamStep({ state: 'unknown', pending: 0 }, false).status).toBe('无法确认')
     expect(upstreamStep({ state: 'synced', pending: 0 }, true)).toMatchObject({ status: '保存后核对' })
@@ -85,7 +85,7 @@ describe('IPv6 step derivation', () => {
 
   it('shows no router work when the device check finds none', () => {
     expect(firewallStep(context())).toMatchObject({ status: '无需处理', tone: 'success', issues: [] })
-    expect(firewallStep(context({ readiness: readiness({ routers: [] }) }))).toMatchObject({ status: '未关联上级路由' })
+    expect(firewallStep(context({ readiness: readiness({ routers: [] }) }))).toMatchObject({ status: '未关联上游路由' })
   })
 
   it('explains the same-port forward drop with the backend command, once per command', () => {
@@ -248,7 +248,7 @@ describe('Mihomo IPv6 step list', () => {
     expect(wrapper.get('[data-ipv6-step-upstream]').getComponent(RouterLink).props('to')).toBe('/routers')
     pending.vm.$emit('status', { state: 'none', pending: 0 })
     await flushPromises()
-    expect(status(wrapper, 'upstream')).toBe('未关联上级路由')
+    expect(status(wrapper, 'upstream')).toBe('未关联上游路由')
     expect(row(wrapper, 'upstream').getComponent(RouterLink).props('to')).toBe('/routers')
   })
 
