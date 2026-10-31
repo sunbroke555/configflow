@@ -78,12 +78,11 @@ def settle(client, executor, agent_id):
     return diff(client, agent_id)
 
 
-def expire_subscription_cache(repository, config):
-    from backend.utils.subscription_refresh import _download_cache_path
-    cache_path = _download_cache_path(config['subscriptions'][0]['url'])
-    downloaded = repository.read_shared_json(cache_path)
-    downloaded['fetched_at'] = '2000-01-01T00:00:00+00:00'
-    repository.write_shared_json(cache_path, downloaded)
+def refresh_subscription(config):
+    """The push saved the downloaded nodes; new upstream nodes arrive with the
+    scheduled task (定时任务) or a manual update, which store them."""
+    from backend.utils.subscription_refresh import download_subscription_nodes
+    download_subscription_nodes(config['subscriptions'][0])
 
 
 def test_unpushed_and_legacy_agents_explain_the_missing_baseline(diff_env):
@@ -97,7 +96,7 @@ def test_unpushed_and_legacy_agents_explain_the_missing_baseline(diff_env):
 
 
 def test_synced_after_push_then_real_changes_are_listed_and_redacted(diff_env):
-    client, manager, config, remote, repository, ids, executor = diff_env
+    client, manager, config, remote, _repository, ids, executor = diff_env
     agent_id = ids['mihomo']
     push(client, agent_id)
     synced = settle(client, executor, agent_id)
@@ -112,7 +111,7 @@ def test_synced_after_push_then_real_changes_are_listed_and_redacted(diff_env):
     config['nodes'][0]['params']['password'] = NEW_PASSWORD
     remote['provider'] = 'proxies: [{name: Remote, type: http, server: first.test, port: 8080}, ' \
                          '{name: Added, type: http, server: added.test, port: 8081}]'
-    expire_subscription_cache(repository, config)
+    refresh_subscription(config)
     result = settle(client, executor, agent_id)
     assert result['status'] == 'changed' and result['content'] == 'full' and result['checked_at']
     files = {item['path']: item for item in result['files']}

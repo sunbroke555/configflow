@@ -1223,9 +1223,43 @@ def _generated_config_failure(exc, content, service):
     return error
 
 
+def _store_subscription_downloads(prepared_providers):
+    """Save the subscription nodes a preparation downloaded; True when it saved any.
+
+    The same validated nodes and hosts the publication would save afterwards,
+    written the way a manual subscription update writes them.
+    """
+    from backend.utils.provider_delivery import commit_cache_updates
+    updates = {}
+    for item in prepared_providers:
+        for update in item.get('cache_updates', []):
+            updates[update[0]] = update
+    if not updates:
+        return False
+    commit_cache_updates(updates.values())
+    return True
+
+
+def _saved_subscriptions_only(_sub_id, _url, **_kwargs):
+    """Rendering again after saving never downloads: a subscription that failed
+    to download keeps the fallback it had in the first rendering."""
+    raise ConnectionError('本次发布已经尝试过下载这个订阅，不再重复下载')
+
+
 def _prepare_transactional_content(agent, config_data, *, base_url='', deployment_id=None,
-                                   prefer_cached=False, progress=None, detail_progress=None, phase_progress=None):
-    """Materialize exactly the files used by a push, without publishing or saving caches."""
+                                   prefer_cached=False, progress=None, detail_progress=None, phase_progress=None,
+                                   store_downloads=False):
+    """Materialize exactly the files used by a push, without publishing.
+
+    Caches are saved only with ``store_downloads`` (a real publication): a
+    subscription without a current node cache is downloaded, validated with the
+    whole provider graph, saved like a manual update, and the Mihomo main file
+    and providers are then rendered again from the saved nodes. Without that,
+    the first push renders the downloaded body (original key order, no
+    subscription hosts) while every later content check renders the saved
+    nodes, so a just-published device would show 「有变更，待推送」.
+    With a current cache nothing is downloaded or saved and nothing is rendered twice.
+    """
     import yaml
     from backend.agents.deployment_bundle import build_deployment_bundle
     from backend.utils.provider_delivery import prepare_provider_bundle
@@ -1247,15 +1281,22 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
         phase_progress(f'正在生成 {service_name} config.yaml 并检查基础配置', force=True)
     provider_downloads, custom_files, prepared_providers = [], [], []
     if service_type == 'mihomo':
+        from backend.converters.mihomo import node_conversions
         from backend.utils.proxy_server_dns import reported_core_version
-        config_content = generate_mihomo_config(config_data, base_url=base_url,
-                                                sync_lan_hosts=True, preflight_providers=False,
-                                                region_probe=bool(agent.get('domain_discovery_enabled')),
-                                                mihomo_core_version=reported_core_version(agent))
-        try:
-            main = yaml.safe_load(config_content)
-        except yaml.YAMLError as exc:
-            raise _generated_config_failure(exc, config_content, 'Mihomo') from exc
+        conversions = {}  # Sub-Store results of URI nodes, reused when rendering again
+
+        def generate_main(reuse=False):
+            with node_conversions(conversions, reuse=reuse):
+                content = generate_mihomo_config(config_data, base_url=base_url,
+                                                 sync_lan_hosts=True, preflight_providers=False,
+                                                 region_probe=bool(agent.get('domain_discovery_enabled')),
+                                                 mihomo_core_version=reported_core_version(agent))
+            try:
+                return content, yaml.safe_load(content)
+            except yaml.YAMLError as exc:
+                raise _generated_config_failure(exc, content, 'Mihomo') from exc
+
+        config_content, main = generate_main()
         if is_full_tun(config_data):
             # Without TUN the main router's forwarded connections would loop.
             require_full_tun_generated(main)
@@ -1276,6 +1317,31 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
             if source and gateway_was_used(config_data, agent, source):
                 linux_gateway.require_gateway_off_kept(get_agent_manager(), agent)
         provider_downloads = get_mihomo_provider_downloads(config_data, base_url=base_url, main_config=main)
+        if provider_downloads:
+            from functools import partial
+            from backend.utils.sub_store_client import get_subscription_proxies_yaml
+            subscription_fetch = (partial(get_subscription_proxies_yaml, prefer_cached=True)
+                                  if prefer_cached else None)
+            with node_conversions(conversions):
+                prepared_providers = prepare_provider_bundle(config_data, main, render_all=True,
+                                                             allow_transport_fallback=False,
+                                                             subscription_fetch=subscription_fetch,
+                                                             progress=phase_progress)
+            if store_downloads and _store_subscription_downloads(prepared_providers):
+                # Saved subscriptions add their hosts to the main file and are
+                # rendered from the saved nodes: the same data and serialization
+                # as the content check after this push. In the main file only
+                # hosts-derived sections change; proxy-providers and
+                # rule-providers stay the same.
+                if phase_progress is not None:
+                    phase_progress('已保存新下载的订阅节点，正在按保存的节点重新生成 config.yaml', force=True)
+                config_content, main = generate_main(reuse=True)
+                with node_conversions(conversions, reuse=True):
+                    prepared_providers = prepare_provider_bundle(config_data, main, render_all=True,
+                                                                 allow_transport_fallback=False,
+                                                                 subscription_fetch=_saved_subscriptions_only)
+            provider_downloads = [{key: item[key] for key in ('name', 'url', 'local_path', 'content')}
+                                  for item in prepared_providers]
         from backend.common.linux_gateway import gateway_settings
         if gateway_settings(config_data)['enabled']:
             # Same list get_mihomo_ruleset_downloads builds from a second
@@ -1286,17 +1352,6 @@ def _prepare_transactional_content(agent, config_data, *, base_url='', deploymen
                                  if provider.get('type') == 'http' and provider.get('url')]
         else:
             ruleset_downloads = get_mihomo_ruleset_downloads(config_data, base_url=base_url)
-        if provider_downloads:
-            from functools import partial
-            from backend.utils.sub_store_client import get_subscription_proxies_yaml
-            subscription_fetch = (partial(get_subscription_proxies_yaml, prefer_cached=True)
-                                  if prefer_cached else None)
-            prepared_providers = prepare_provider_bundle(config_data, main, render_all=True,
-                                                         allow_transport_fallback=False,
-                                                         subscription_fetch=subscription_fetch,
-                                                         progress=phase_progress)
-            provider_downloads = [{key: item[key] for key in ('name', 'url', 'local_path', 'content')}
-                                  for item in prepared_providers]
     elif service_type == 'mosdns':
         config_content = generate_mosdns_config(config_data, base_url=base_url)
         ruleset_downloads = get_mosdns_ruleset_downloads(config_data, base_url=base_url)
@@ -1528,10 +1583,13 @@ def push_config_to_agent(agent_id):
 
         prepared = _prepare_transactional_content(agent, config_data, base_url=base_url,
                                                    deployment_id=deployment_id, progress=rule_progress,
-                                                   detail_progress=rule_detail, phase_progress=preparation_detail)
+                                                   detail_progress=rule_detail, phase_progress=preparation_detail,
+                                                   store_downloads=True)
         bundle = prepared['bundle']
         prepared_providers = prepared['prepared_providers']
         # Publish caches only after all files and the exact graph are ready.
+        # (Subscriptions downloaded for this push were validated with that
+        # graph and saved during preparation, so the files use the saved nodes.)
         if prepared_providers:
             commit_provider_bundle(profile_id, prepared_providers)
         agent_manager.record_deployment(agent_id, deployment_id, {
