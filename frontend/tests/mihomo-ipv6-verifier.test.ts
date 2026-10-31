@@ -105,3 +105,17 @@ describe('Mihomo verification lifecycle', () => {
     expect(agentApi.getIPv6Verification).toHaveBeenCalledTimes(count)
   })
 })
+
+
+it('offers the same verification action when an automatic result needs more evidence', async () => {
+  vi.mocked(agentApi.verifyIPv6).mockResolvedValue(response(report({ status: 'warning', checks: [
+    { id: 'runtime_node_ipv6_transport', label: '节点 IPv6', status: 'unknown', message: '未取得 IPv6 连接证据。' },
+  ] })))
+  const wrapper = await render({ auto: true, deploymentId: 'current' })
+  const retry = wrapper.findAll('button').find(button => button.text() === '验证连接与分流')!
+  expect(retry).toBeDefined()
+  expect(retry.attributes('disabled')).toBeUndefined()
+  await retry.trigger('click')
+  await flushPromises()
+  expect(agentApi.verifyIPv6).toHaveBeenCalledTimes(2)
+})

@@ -56,8 +56,9 @@ describe('Mihomo per-device IPv6 workflow', () => {
     expect(agentApi.ipv6Readiness).toHaveBeenCalledExactlyOnceWith('gw', 'bound')
     expect(agentApi.prepareIPv6).not.toHaveBeenCalled()
     expect(agentApi.verifyIPv6).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('主路由 · IPv6 Fake-IP 路由')
-    expect(wrapper.text()).toContain('检查已保存的基础配置')
+    expect(wrapper.text()).not.toContain('主路由 · IPv6 Fake-IP 路由')
+    expect(wrapper.findAll('[data-ipv6-check-group]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('待验证的项目会提示下一步操作')
   })
 
   it('sends the inspected interface and plan token only after rechecking the same binding', async () => {
@@ -67,7 +68,7 @@ describe('Mihomo per-device IPv6 workflow', () => {
     expect(agentApi.summaries).toHaveBeenCalledTimes(2)
     expect(agentApi.prepareIPv6).toHaveBeenCalledExactlyOnceWith('gw', { profile_id: 'bound', interface: 'eth0', check_token: 'verified-token' })
     expect(button(wrapper, '补齐缺少的配置')).toBeUndefined()
-    expect(wrapper.text()).toContain('连接结果需单独验证')
+    expect(wrapper.text()).toContain('补齐操作已完成，请查看检查结果。')
   })
 
   it('blocks an action when the selected device is rebound rather than silently choosing the remaining one', async () => {
@@ -160,7 +161,8 @@ describe('Mihomo per-device IPv6 workflow', () => {
     expect(agentApi.verifyIPv6).toHaveBeenCalledExactlyOnceWith('gw', { profile_id: 'bound', expected_config_revision: 7 })
     expect(agentApi.prepareIPv6).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('未配置')
-    expect(wrapper.text()).toContain('主路由 · IPv6 Fake-IP 路由')
+    expect(wrapper.text()).not.toContain('主路由 · IPv6 Fake-IP 路由')
+    expect(wrapper.findAll('[data-ipv6-check-group]')).toHaveLength(3)
     expect(button(wrapper, '补齐缺少的配置')).toBeDefined()
   })
 

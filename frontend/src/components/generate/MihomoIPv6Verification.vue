@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { LoaderCircle, RefreshCw } from '@lucide/vue'
 import { agentApi } from '@/api'
+import { buildMihomoIPv6Summary } from '@/lib/mihomoIPv6Summary'
 import { Button } from '@/components/ui/button'
 import MihomoIPv6VerificationResult from './MihomoIPv6VerificationResult.vue'
 import MihomoIPv6CheckSummary from './MihomoIPv6CheckSummary.vue'
@@ -21,6 +22,8 @@ let disposed = false
 let started = 0
 const validRevision = computed(() => Number.isInteger(props.configRevision) && props.configRevision! >= 0)
 const running = computed(() => verification.value?.status === 'running')
+const canRetryAutomatic = computed(() => verification.value && !running.value
+  && buildMihomoIPv6Summary({ verification: verification.value }).some(group => group.tone !== 'success'))
 const current = (session: number) => !disposed && props.open && session === generation
 const failureMessage = (failure: any) => failure?.response?.data?.message || failure?.message || '验收结果暂时无法读取，请重试。'
 
@@ -115,7 +118,7 @@ onUnmounted(() => { disposed = true; generation++; clearTimeout(timer) })
     <MihomoIPv6VerificationResult v-else-if="verification && verification.status !== 'running'" :verification="verification" :compact="auto" />
     <div class="flex flex-wrap gap-2">
       <slot name="actions" />
-      <Button v-if="!auto || error" type="button" variant="outline" class="min-h-11" :disabled="disabled || pending || running || !validRevision" @click="start"><RefreshCw class="size-3.5" aria-hidden="true" />验证连接与分流</Button>
+      <Button v-if="!auto || error || canRetryAutomatic" type="button" variant="outline" class="min-h-11" :disabled="disabled || pending || running || !validRevision" @click="start"><RefreshCw class="size-3.5" aria-hidden="true" />验证连接与分流</Button>
       <Button v-if="message || (error && running)" type="button" variant="ghost" class="min-h-11" :disabled="pending" @click="error = ''; message = ''; started = Date.now(); read(generation)">重新读取结果</Button>
     </div>
   </section>
