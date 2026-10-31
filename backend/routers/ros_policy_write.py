@@ -389,7 +389,7 @@ def _restore_routes(driver, steps, ids, remapped, failures):
         for position, (index, values) in enumerate(chunk[:count]):
             if position not in added['rows']:
                 failure = added['failure']
-                errors[index] = str(failure[1]) if failure and failure[0] == position else UNCERTAIN
+                errors[index] = str(failure[1]) if failure and failure[0] == position else UNCERTAIN.format(path=ROUTES)
                 continue
             row = added['rows'][position]
             try:

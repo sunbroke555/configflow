@@ -1,4 +1,7 @@
-"""Bounded, strict classification of sources used by automatic IPv4 routing.
+"""Bounded, strict classification of sources used by automatic IP routing.
+
+IPv4 networks feed the static and policy routes; public IPv6 networks feed the
+RouterOS IPv6 rule-set routes (``ipv6_routes``), each capped separately.
 
 Domain rules in classical sources are valid but never resolved to addresses.
 Unlike the permissive converter used by manual previews, an automatic job must
@@ -47,7 +50,7 @@ def classify(content, behavior='classical'):
         lines = document['payload']
     if len(lines) > MAX_LINES:
         raise RouterError('规则条目超过 100000 条，停止自动同步')
-    networks, domains, ignored, invalid, examples = set(), 0, 0, 0, []
+    networks, networks6, domains, ignored, invalid, examples = set(), set(), 0, 0, 0, []
     total = 0
     for index, raw in enumerate(lines, 1):
         if not isinstance(raw, str):
@@ -97,6 +100,10 @@ def classify(content, behavior='classical'):
                 networks.add(str(network))
                 if len(networks) > MAX_IPS:
                     raise RouterError('有效 IPv4 超过 20000 条，请使用手动发布')
+            elif network.version == 6 and network.prefixlen > 0 and network.is_global:
+                networks6.add(str(network))
+                if len(networks6) > MAX_IPS:
+                    raise RouterError('有效 IPv6 超过 20000 条，请使用手动发布')
             else:
                 ignored += 1
             continue
@@ -112,7 +119,7 @@ def classify(content, behavior='classical'):
         detail = '纯 IP 规则集含有域名或无效条目' if behavior == 'ipcidr' else '规则包含无法安全识别的条目'
         raise RouterError(f'{detail}：{invalid} 条（第 {"、".join(map(str, examples))} 行）')
     return {'version': hashlib.sha256(content.encode()).hexdigest(), 'ipv4': sorted(networks),
-            'ip_count': len(networks), 'domain_count': domains, 'ignored_count': ignored, 'invalid_count': 0}
+            'ipv6': sorted(networks6), 'ip6_count': len(networks6), 'ip_count': len(networks), 'domain_count': domains, 'ignored_count': ignored, 'invalid_count': 0}
 
 
 def selected_sources(config, router):
@@ -177,6 +184,8 @@ def load_sources(config, router, download=None):
                             'library_id': key}
         if sum(value['ip_count'] for value in records.values()) > MAX_IPS:
             raise RouterError('所选规则集的有效 IPv4 合计超过 20000 条，请使用手动发布')
+        if sum(value['ip6_count'] for value in records.values()) > MAX_IPS:
+            raise RouterError('所选规则集的有效 IPv6 合计超过 20000 条，请使用手动发布')
     return contents, records
 
 
@@ -186,7 +195,8 @@ def loader(contents):
 
 def ip_loader(records):
     """Use the classified IP set, without reparsing remote YAML for each consumer."""
-    values = {key: '\n'.join(item['ipv4']) or '# no routable IPv4' for key, item in records.items()}
+    values = {key: '\n'.join(item['ipv4'] + item.get('ipv6', [])) or '# no routable IP'
+              for key, item in records.items()}
     return loader(values)
 
 
@@ -199,3 +209,6 @@ def check_updates(previous, current):
             raise RouterError(f'本地规则集「{record["name"]}」已修改，请手动预览发布')
         if old['ip_count'] > 0 and record['ip_count'] == 0:
             raise RouterError(f'规则集「{record["name"]}」的有效 IPv4 从 {old["ip_count"]} 条变为 0，保留 ROS 原状态，请人工确认')
+        # Baselines from before IPv6 routes carry no IPv6 count.
+        if old.get('ip6_count', 0) > 0 and record['ip6_count'] == 0:
+            raise RouterError(f'规则集「{record["name"]}」的有效 IPv6 从 {old["ip6_count"]} 条变为 0，保留 ROS 原状态，请人工确认')

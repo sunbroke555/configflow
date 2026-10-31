@@ -47,6 +47,8 @@ def restrict_plan(plan, baseline):
     for stage in plan['stages']:
         if stage['key'] == 'nat_bypass' and nat is not None:
             continue  # only destination members of the enrolled NAT list rule
+        if stage['key'] == 'ipv6_routes':
+            continue  # rule_sync kept only additions/removals for the enrolled gateway
         if stage['key'] != 'routes' and stage['ops']:
             raise RouterError(f'本次更新还需要修改「{stage["title"]}」，请手动预览发布')
     route_stage = next(stage for stage in plan['stages'] if stage['key'] == 'routes')
@@ -169,7 +171,7 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
     if next_manifest:
         next_manifest['resources'] = copy.deepcopy(retained)
     ids = {path: {row['.id'] for row in rows} for path, rows in live.items()}
-    journal, log = [], []
+    journal, log, undo6 = [], [], None
     try:
         ensure_current(force=True)
         for path, values in additions:
@@ -215,6 +217,14 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
             ensure_current()
             _delete_addresses(driver, members, journal)
             log.extend({'status': 'ok', 'summary': f'删除 {item["config"].get("address")}'} for item in members)
+        routes6 = next((op for stage in plan['stages'] if stage['key'] == 'ipv6_routes' for op in stage['ops']), None)
+        if routes6 is not None:
+            # IPv6 destinations go after the IPv4 ones: their own batches and
+            # proofs; a later failure undoes them before the IPv4 journal.
+            ensure_current()
+            from backend.routers import ipv6_routes
+            undo6 = ipv6_routes.apply(driver, routes6)
+            log.append({'status': 'ok', 'summary': routes6['summary']})
         driver.ros_policy_manifest = next_manifest
         # Exclude unrelated cf-prefixed static routes deliberately preserved above.
         checks = {**plan['checks'], 'removed_routes': [item['id'] for item in removals if item['path'] == ROUTES]}
@@ -229,13 +239,27 @@ def _apply_delta(driver, desired, plan, baseline, ensure_current, operations):
             _verify('ipv6_fakeip', checks, driver, None)
         if checks.get('ipv6_dns') is not None:
             _verify('ipv6_dns', checks, driver, None)
+        if checks.get('ipv6_routes') is not None:
+            _verify('ipv6_routes', checks, driver, None)
         ensure_current(force=True)
     except (RouterError, RuntimeError) as error:
+        problems = []
+        if undo6 is not None:
+            from backend.routers import ipv6_routes
+            try:
+                ipv6_routes.restore(driver, undo6)
+            except RouterError as rollback_error:
+                problems.append(str(rollback_error))
         try:
             restore(driver, {'steps': list(reversed(journal)), 'previous': previous,
                              'retained': (previous or {}).get('resources', []) + retained_nat})
         except RouterError as rollback_error:
-            raise RouterRollbackError(f'{error}；{rollback_error}') from error
+            problems.append(str(rollback_error))
+        if problems:
+            raise RouterRollbackError(f'{error}；{"；".join(problems)}') from error
         raise
     members = (len(nat['dst_add']), len(nat['dst_remove'])) if nat is not None else (0, 0)
-    return {'added': len(additions) + members[0], 'removed': len(removals) + members[1], 'log': log[-20:]}
+    routes6 = next((op for stage in plan['stages'] if stage['key'] == 'ipv6_routes' for op in stage['ops']), None)
+    members6 = (len(routes6['adds']), len(routes6['deletes'])) if routes6 else (0, 0)
+    return {'added': len(additions) + members[0] + members6[0],
+            'removed': len(removals) + members[1] + members6[1], 'log': log[-20:]}

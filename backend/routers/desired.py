@@ -1,8 +1,9 @@
 """Compute what the upstream router should contain for the side-gateway setup.
 
-Only IPv4 is handled in P0.  Proxy CIDRs are the mihomo fake-ip range plus the
-public IP-CIDR entries of rule sets explicitly selected on the router (typically
-Telegram, whose clients connect by IP without DNS).  Rule sets are not inferred
+Proxy CIDRs are the mihomo fake-ip range plus the public IP-CIDR entries of
+rule sets explicitly selected on the router (typically Telegram, whose clients
+connect by IP without DNS).  Their public IP-CIDR6 entries are listed separately
+as ``ipv6_cidrs``: only RouterOS routes them, through ``ipv6_routes``.  Rule sets are not inferred
 from policies: other IP rules usually have domain counterparts that already reach
 mihomo through fake-ip, and the active choice of a select group is unknown.
 """
@@ -60,8 +61,9 @@ def _direct_only_groups(config: Dict[str, Any]) -> set:
     return names
 
 
-def _public_ipv4_networks(lines: str) -> List[ipaddress.IPv4Network]:
-    result = []
+def _public_networks(lines: str):
+    """Public IPv4 and IPv6 networks of converted IP lines, as two lists."""
+    result, result6 = [], []
     for raw in lines.splitlines():
         value = raw.strip()
         if not value or value.startswith('#'):
@@ -70,13 +72,15 @@ def _public_ipv4_networks(lines: str) -> List[ipaddress.IPv4Network]:
             network = ipaddress.ip_network(value, strict=False)
         except ValueError:
             continue
-        if isinstance(network, ipaddress.IPv4Network) and network.prefixlen > 0 and network.is_global:
-            result.append(network)
-    return result
+        if network.prefixlen > 0 and network.is_global:
+            (result if network.version == 4 else result6).append(network)
+    return result, result6
 
 
-def merge_sources(sources: Dict[ipaddress.IPv4Network, List[str]]) -> List[Dict[str, Any]]:
-    """Collapse the source networks; each result lists every source name inside it."""
+def merge_sources(sources: Dict[Any, List[str]]) -> List[Dict[str, Any]]:
+    """Collapse the source networks (one address family); each result lists every source name inside it."""
+    if not sources:
+        return []
     collapsed = sorted(ipaddress.collapse_addresses(sources))
     # Collapsed networks are disjoint and cover every source, so each source lies
     # in the last one starting at or before it: a bisect, not a scan per network.
@@ -110,6 +114,7 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
         warnings.append(message)
         blocking_warnings.append(message)
     sources: Dict[ipaddress.IPv4Network, List[str]] = {}
+    sources6: Dict[ipaddress.IPv6Network, List[str]] = {}
     fake_ip = fake_ip_network(config)
     sources[fake_ip] = ['fake-ip']
 
@@ -138,8 +143,11 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
         if not content:
             incomplete(f'规则集「{name}」没有本地缓存，未计入其中的 IP 段')
             continue
-        for network in _public_ipv4_networks(convert_rule_content_for_mosdns(content, 'ip')):
+        networks, networks6 = _public_networks(convert_rule_content_for_mosdns(content, 'ip'))
+        for network in networks:
             sources.setdefault(network, []).append(name)
+        for network in networks6:
+            sources6.setdefault(network, []).append(name)
 
     proxy_cidrs = merge_sources(sources)
 
@@ -149,6 +157,7 @@ def compute_desired(config: Dict[str, Any], proxy_gateway: Optional[str],
         'fake_ip_range': str(fake_ip),
         'proxy_gateway': proxy_gateway or '',
         'proxy_cidrs': proxy_cidrs,
+        'ipv6_cidrs': merge_sources(sources6),
         'warnings': warnings,
         'blocking_warnings': blocking_warnings,
     }

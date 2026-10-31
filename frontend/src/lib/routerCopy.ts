@@ -1,4 +1,4 @@
-import { optionCopy } from './optionCopy'
+import { optionCopy, optionHelp } from './optionCopy'
 
 export const routerCopy = {
   endpointROS: optionCopy('填写路由器地址，确认版本支持访问方式。',
@@ -19,9 +19,11 @@ export const routerCopy = {
   returnRouting: optionCopy('回复需要经过主路由返回时开启，默认关闭。',
     '网络要求 Mihomo 的回复先经过主路由，再返回设备时开启。',
     '自动维护所需的回流规则：主路由转给 Mihomo 的连接，回复都经主路由返回，规则集网段变化不需要改动回流规则。iKuai 开启后改用排除 Mihomo 的端口分流，关闭则改回静态路由。关闭后发布时会移除 Agent 写入的回流规则，其他路由器仍在使用时保留。'),
-  staticRules: optionCopy('所选规则集里的 IPv4 网段由主路由送到 Mihomo；fake-ip 网段自动包含。',
+  staticRules: optionCopy('所选规则集里的 IP 网段由主路由送到 Mihomo；fake-ip 网段自动包含。',
     'Telegram 等不查域名、直接连 IP 的应用需要选择。',
-    '主路由将目标 IP 的连接送到 Mihomo。fake-ip 网段始终包含；经 OxiDNS 获得 fake-ip 的网站无需重复选择对应 IP 规则集。'),
+    '主路由将目标 IP 的连接送到 Mihomo。fake-ip 网段始终包含；经 OxiDNS 获得 fake-ip 的网站无需重复选择对应 IP 规则集。RouterOS 在 Mihomo 使用 IPv6 时同时路由其中的公网 IPv6 网段；iKuai 只处理 IPv4。'),
+  ipv6Routes: optionHelp('RouterOS；Mihomo 使用 IPv6（YAML 顶层 ipv6，默认开启）且开启 TUN，规则集含公网 IPv6 网段。',
+    '下一跳与 IPv6 Fake-IP 相同：优先唯一的链路本地地址并带 LAN 接口，否则用唯一的 ULA。无法唯一确定时只跳过本项，不猜测。只删除本功能添加的路由，自动规则同步会更新网段增减。'),
   policyRules: optionCopy('只让指定设备访问这些 IP 时，交给代理网关。',
     '来源取当前空间已保存的 OxiDNS 智能分流 IPv4 设备或网段。',
     '保留更具体的直连例外并排除 Mihomo 自身。与静态组互斥，移组自动取消原选择；fake-ip 仍走静态路由。需同步发布 OxiDNS。'),

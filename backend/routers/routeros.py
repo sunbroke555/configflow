@@ -642,6 +642,9 @@ class RouterOSDriver(RouterDriver):
         if kind in ('ipv6_fakeip_replace', 'ipv6_fakeip_restore'):
             from backend.routers import ipv6_fakeip
             return (ipv6_fakeip.apply if kind == 'ipv6_fakeip_replace' else ipv6_fakeip.restore)(self, op)
+        if kind in ('ipv6_routes_replace', 'ipv6_routes_restore'):
+            from backend.routers import ipv6_routes
+            return (ipv6_routes.apply if kind == 'ipv6_routes_replace' else ipv6_routes.restore)(self, op)
         if kind == 'ipv6_dns_update':
             from backend.routers import ipv6_dns
             return ipv6_dns.apply(self, op)

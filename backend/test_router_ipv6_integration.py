@@ -225,6 +225,9 @@ def enroll_ipv6_sync(environment, monkeypatch, ownership, mode):
         {'.id': '*A6', 'address': 'fdda::1/64', 'interface': 'bridge', 'disabled': 'false'}]
     driver.rows[ipv6_fakeip.IPV4_ADDRESSES] = [
         {'.id': '*A4', 'address': '192.168.0.1/24', 'interface': 'bridge', 'disabled': 'false'}]
+    # Read by the same-port firewall hint; an empty filter has nothing to report.
+    for path in (ipv6_fakeip.FILTER, ipv6_fakeip.ADDRESS_LISTS, '/interface', '/interface/list', '/interface/list/member'):
+        driver.rows.setdefault(path, [])
     manifest = {'version': 1, 'spec': {'cidr': 'fc00::/64', 'gateway': 'fdda::3%bridge'},
                 'resources': [{'path': ipv6_fakeip.ROUTES, 'id': '*V6', 'config': ipv6_fakeip.stable(row)}]}
     if ownership != 'owned':

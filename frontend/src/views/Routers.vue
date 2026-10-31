@@ -243,6 +243,16 @@
             <p class="m-0 text-[12.5px] leading-relaxed text-muted-foreground">根据已保存的 Mihomo 配置，把对应 IPv6 网段交给 Mihomo；改动随上方「预览发布」一起应用。</p>
             <p v-for="blocker in ipv6FakeIP.blockers || []" :key="blocker" role="alert" class="m-0 text-[12.5px] leading-relaxed text-destructive-accent [overflow-wrap:anywhere]">{{ blocker }}</p>
             <p v-for="warning in ipv6FakeIP.warnings || []" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <div v-if="ipv6FakeIP.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-fakeip-command>
+              <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+                <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyCommand(ipv6FakeIP.fix_command)">
+                  <Copy class="size-3.5" aria-hidden="true" />复制
+                </Button>
+              </div>
+              <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6FakeIP.fix_command }}</pre>
+              <p class="m-0 text-muted-foreground">只放行从这个 LAN 口进、又从同一口转出的连接，放在「drop invalid」之前；执行后重新生成差异报告确认。</p>
+            </div>
             <p v-if="!ipv6FakeIP.items.length" class="m-0 text-[12.5px] text-muted-foreground">{{ !ipv6FakeIP.enabled ? '当前保存的配置未启用 IPv6 Fake-IP。' : '暂无可确认的 IPv6 Fake-IP 路由，请查看上方提示。' }}</p>
           </div>
           <div v-if="ipv6FakeIP.items.length" class="cf-table-wrap">
@@ -256,6 +266,50 @@
                   <td role="cell" data-label="说明" class="cf-record-wide min-w-0 text-[12px] whitespace-normal text-muted-foreground [overflow-wrap:anywhere]">
                     <p class="m-0">{{ item.detail || '—' }}</p>
                     <p v-if="item.status === 'borrowed'" class="mt-1 mb-0">本次仅沿用，不接管；关闭 IPv6 Fake-IP 后不会自动撤销这条路由。</p>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div v-if="ipv6Routes" class="min-w-0 border-t border-border" data-router-ipv6-routes>
+          <div class="flex min-w-0 flex-col gap-2 px-5 py-4 max-md:px-4 max-sm:px-3">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <h3 class="m-0 min-w-0 text-[13px] font-semibold">IPv6 规则集路由</h3>
+              <span :class="['chip', ipv6FakeIPStatusInfo(ipv6RoutesStatus).chip]">{{ ipv6FakeIPStatusInfo(ipv6RoutesStatus).label }}</span>
+              <FieldHelp label="IPv6 规则集路由说明" :text="routerCopy.ipv6Routes" />
+            </div>
+            <p class="m-0 text-[12.5px] leading-relaxed text-muted-foreground">
+              {{ ipv6Routes.enabled ? '所选规则集中的公网 IPv6 网段指向这台 Mihomo；改动随上方「预览发布」一起应用。' : 'Mihomo 已关闭 IPv6，发布时撤回本功能添加的 IPv6 路由。' }}
+              <template v-if="ipv6Routes.gateway">下一跳 <span class="font-mono [overflow-wrap:anywhere]">{{ ipv6Routes.gateway }}</span>。</template>
+            </p>
+            <p v-for="reason in ipv6Routes.skip" :key="reason" role="alert" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ reason }}</p>
+            <p v-if="ipv6Routes.skip.length" class="m-0 text-[12.5px] text-muted-foreground">其他路由、规则和 DNS 照常发布，只有这一项保留现状。</p>
+            <p v-for="warning in ipv6RoutesWarnings" :key="warning" role="status" class="m-0 text-[12.5px] leading-relaxed text-warning-accent [overflow-wrap:anywhere]">{{ warning }}</p>
+            <p v-if="ipv6RoutesFixShared" class="m-0 text-[12.5px] leading-relaxed text-warning-accent" data-router-ipv6-routes-fix-shared>IPv6 防火墙会丢弃同口转发的连接，放行命令见上方「IPv6 Fake-IP 分流路由」，同一条命令覆盖这两项。</p>
+            <div v-else-if="ipv6Routes.fix_command" class="min-w-0 space-y-1.5 text-[12.5px]" data-router-ipv6-routes-command>
+              <div class="flex min-h-8 items-center justify-between gap-2 max-md:min-h-11">
+                <p class="m-0 min-w-0 font-medium">在 RouterOS 终端执行</p>
+                <Button variant="ghost" size="sm" class="shrink-0 px-2 text-xs max-md:min-h-11" aria-label="复制 IPv6 同口转发放行命令" @click="copyCommand(ipv6Routes.fix_command)">
+                  <Copy class="size-3.5" aria-hidden="true" />复制
+                </Button>
+              </div>
+              <pre class="m-0 min-w-0 overflow-x-auto whitespace-pre rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs leading-relaxed text-foreground">{{ ipv6Routes.fix_command }}</pre>
+              <p class="m-0 text-muted-foreground">只放行从这个 LAN 口进、又从同一口转出的连接，放在「drop invalid」之前；执行后重新生成差异报告确认。</p>
+            </div>
+            <p v-if="!ipv6Routes.items.length" class="m-0 text-[12.5px] text-muted-foreground">所选规则集没有需要处理的公网 IPv6 网段。</p>
+          </div>
+          <div v-if="ipv6Routes.items.length && !ipv6Routes.skip.length" class="cf-table-wrap">
+            <table class="cf-table cf-mobile-records w-full table-fixed" aria-label="IPv6 规则集路由" role="table">
+              <thead role="rowgroup"><tr role="row"><th role="columnheader">网段</th><th role="columnheader">来源</th><th role="columnheader">状态</th><th role="columnheader">说明</th></tr></thead>
+              <tbody role="rowgroup">
+                <tr v-for="item in ipv6Routes.items" :key="item.cidr" role="row">
+                  <td role="cell" data-label="网段" class="min-w-0 font-mono text-[12px] whitespace-normal [overflow-wrap:anywhere]">{{ item.cidr }}</td>
+                  <td role="cell" data-label="来源" class="min-w-0 text-[12px] whitespace-normal text-muted-foreground">{{ item.sources.join('、') || '—' }}</td>
+                  <td role="cell" data-label="状态"><span :class="['chip', ipv6FakeIPStatusInfo(item.status).chip]">{{ ipv6FakeIPStatusInfo(item.status).label }}</span></td>
+                  <td role="cell" data-label="说明" class="cf-record-wide min-w-0 text-[12px] whitespace-normal text-muted-foreground [overflow-wrap:anywhere]">
+                    <p class="m-0">{{ item.detail || '—' }}</p>
+                    <p v-if="item.status === 'borrowed'" class="mt-1 mb-0">本次仅沿用，不接管；关闭 Mihomo IPv6 后不会自动撤销这条路由。</p>
                   </td>
                 </tr>
               </tbody>
@@ -683,6 +737,7 @@ Fake-IP 和未选入这项策略的规则集，仍按上方的静态路由设置
             <div class="[&_[role=combobox]]:min-h-11">
               <MultiSelect :model-value="form.ip_rule_sets" trigger-id="router-ip-rule-sets" :options="ruleSetOptions" placeholder="仅 fake-ip 网段" @update:model-value="selectStaticRuleSets" />
             </div>
+            <p v-if="form.type === 'ikuai'" class="m-0 mt-1.5 text-[12px] leading-relaxed text-muted-foreground" data-router-ikuai-ipv6-note>iKuai 只发布 IPv4 网段，规则集中的 IPv6 网段不会处理。</p>
           </FormField>
           <FormField v-if="showPolicyOption" label="使用策略路由的 IP 规则集" html-for="router-policy-rule-sets" v-bind="routerCopy.policyRules">
             <div class="[&_[role=combobox]]:min-h-11">
@@ -828,12 +883,22 @@ type Status = 'synced' | 'adoptable' | 'conflict' | 'missing' | 'extra' | 'not_r
 type ReportSummary = Partial<Record<Status, number>>
 type DhcpDnsStatus = 'disabled' | 'synced' | 'pending' | 'unknown'
 type IPv6FakeIPStatus = 'synced' | 'missing' | 'pending' | 'conflict' | 'unknown' | 'disabled' | 'borrowed'
+interface IPv6RoutesReport {
+  enabled: boolean
+  status: IPv6FakeIPStatus
+  gateway: string
+  items: { cidr: string; sources: string[]; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
+  skip: string[]
+  warnings: string[]
+  fix_command?: string
+}
 interface IPv6FakeIPReport {
   enabled: boolean
   status: IPv6FakeIPStatus
   items: { cidr: string; gateway: string; status: IPv6FakeIPStatus; detail: string }[]
   warnings: string[]
   blockers: string[]
+  fix_command?: string
 }
 
 type IPv6DnsStatus = 'disabled' | 'not_required' | 'synced' | 'pending' | 'unknown' | 'blocked'
@@ -1019,11 +1084,26 @@ const busyAction = ref<'probe' | 'report' | ''>('')
 const report = ref<any>(null)
 const reportSummary = computed(() => (report.value?.summary || {}) as ReportSummary)
 const ipv6FakeIP = computed(() => report.value?.ipv6_fakeip as IPv6FakeIPReport | undefined)
+const ipv6Routes = computed(() => report.value?.ipv6_routes as IPv6RoutesReport | undefined)
+// A skipped item is left as it is: show it as unconfirmed, never as in sync.
+const ipv6RoutesStatus = computed(() => ipv6Routes.value?.skip.length ? 'unknown' : ipv6Routes.value?.status || 'unknown')
+// One same-port accept covers Fake-IP and rule-set routes: show it once, in the Fake-IP card above.
+const ipv6RoutesFixShared = computed(() => !!ipv6Routes.value?.fix_command && ipv6Routes.value.fix_command === ipv6FakeIP.value?.fix_command)
+const ipv6RoutesWarnings = computed(() => (ipv6Routes.value?.warnings || [])
+  .filter(warning => !ipv6RoutesFixShared.value || !(ipv6FakeIP.value?.warnings || []).includes(warning)))
 const dhcpDns = computed(() => report.value?.dhcp_dns as DhcpDnsReport | undefined)
 const dhcpDnsStatus = computed(() => DHCP_DNS_STATUS[dhcpDns.value?.status || 'disabled'])
 const ipv6Dns = computed(() => report.value?.ipv6_dns as IPv6DnsReport | undefined)
 const ipv6DnsStatus = computed(() => IPV6_DNS_STATUS[ipv6Dns.value?.status || 'unknown'] || IPV6_DNS_STATUS.unknown)
 const ipv6DnsMessage = computed(() => ipv6Dns.value?.message || IPV6_DNS_MESSAGE[ipv6Dns.value?.status || 'unknown'])
+async function copyCommand(command?: string) {
+  try {
+    await copyText(command || '')
+    notify.success('命令已复制。')
+  } catch {
+    notify.error('复制失败，请手动选择命令。')
+  }
+}
 async function copyIPv6DnsCommand() {
   try {
     await copyText(ipv6Dns.value?.fix_command || '')
