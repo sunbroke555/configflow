@@ -68,3 +68,6 @@ Anything else that looks unused still has to be reported in the hand-back, not d
   trojan, hysteria/hysteria2, inline YAML) exactly as Python, including silently dropping other schemes
   (tuic, anytls, wireguard, …). After the Go server passes parity, switch Surge/Loon to Sub-Store
   conversion like Mihomo and delete the built-in parser (maintainer agreed, 2026-11-14).
+- Commented Mihomo base-config editor (C11): CRLF documents with comments or blank lines between entries
+  are refused (Python edits them but writes mixed `\r\r\n`/`\n`). Deferred by the maintainer
+  (2026-11-15); decide near the end of the rewrite whether to reproduce it (est. 1–2 agent days).

@@ -831,8 +831,9 @@ Questions for the maintainer (from this audit):
    server does not support. Not ported; C03 keeps Python's "no safe recovery source" behaviour.
 2. **C11 editor refusals / C02 yamlx limits**: the small items (lone `-`, null item comments,
    `!!binary`/`!!map`/`!!seq`/`!!set`, block collection expanded in a flow collection, yamlx `1,000` in flow
-   collections and `!!int '0x-1F'`) are fixed during the modules' adversarial review. The CRLF case is an
-   open item pending the maintainer's decision; it does not block other modules.
+   collections and `!!int '0x-1F'`) are fixed during the modules' adversarial review. The CRLF case is
+   deferred by the maintainer (2026-11-15): recorded as a to-do, decided near the end of the rewrite; it
+   does not block C11 from becoming `verified` (listed as an accepted, deferred difference).
 3. **Config modules that call agents/routers code** (C18, C27, C34, C36, C37): do not copy those
    functions. Declare a small interface or hook in the config package for exactly what is called (same
    pattern as `repo.Hooks`), with a fail-closed or explicitly-documented default, and list it under the
