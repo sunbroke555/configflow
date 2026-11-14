@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -140,27 +141,129 @@ var escapes = map[rune]string{
 	0x85: "N", 0xa0: "_", 0x2028: "L", 0x2029: "P",
 }
 
-// doubleQuoted is write_double_quoted for a one-line value.
-func doubleQuoted(s string) string {
-	var b strings.Builder
-	b.WriteByte('"')
-	for _, r := range s {
-		if r == '"' || r == '\\' || r == 0x85 || r == 0x2028 || r == 0x2029 || r == 0xfeff || !(r >= 0x20 && r <= 0x7e || printableRune(r) && r >= 0xa0) {
-			if e, ok := escapes[r]; ok {
-				b.WriteString(`\` + e)
-			} else if r <= 0xff {
-				fmt.Fprintf(&b, `\x%02X`, r)
-			} else if r <= 0xffff {
-				fmt.Fprintf(&b, `\u%04X`, r)
-			} else {
-				fmt.Fprintf(&b, `\U%08X`, r)
-			}
-			continue
+// foldDouble is write_double_quoted: it returns the physical pieces of the
+// quoted text. piece 0 continues the current line; every later piece starts
+// a new line indented by indent (the caller writes the indentation). column
+// is the column after the opening quote has been written; split enables
+// folding (not for simple keys). nonl is ruamel's no_newline flag: when it
+// is set, the first fold writes no line break and clears it.
+func foldDouble(text string, column, indent, width int, split bool, nonl *bool) []string {
+	rs := []rune(text)
+	n := len(rs)
+	var pieces []string
+	cur := `"`
+	start, end := 0, 0
+	for end <= n {
+		var ch rune
+		has := end < n
+		if has {
+			ch = rs[end]
 		}
-		b.WriteRune(r)
+		if !has || ch == '"' || ch == '\\' || ch == 0x85 || ch == 0x2028 || ch == 0x2029 || ch == 0xfeff ||
+			!(ch >= 0x20 && ch <= 0x7e || ch >= 0xa0 && ch <= 0xd7ff || ch >= 0xe000 && ch <= 0xfffd || ch >= 0x10000) {
+			if start < end {
+				column += end - start
+				cur += string(rs[start:end])
+				start = end
+			}
+			if has {
+				var data string
+				if e, ok := escapes[ch]; ok {
+					data = `\` + e
+				} else if ch <= 0xff {
+					data = fmt.Sprintf(`\x%02X`, ch)
+				} else if ch <= 0xffff {
+					data = fmt.Sprintf(`\u%04X`, ch)
+				} else {
+					data = fmt.Sprintf(`\U%08X`, ch)
+				}
+				column += len(data)
+				cur += data
+				start = end + 1
+			}
+		}
+		if end > 0 && end < n-1 && (ch == ' ' || start >= end) && column+(end-start) > width && split {
+			need := needBackslash(rs, start, end)
+			data := ""
+			if start < end {
+				data = string(rs[start:end])
+			}
+			if need {
+				data += `\`
+			}
+			if start < end {
+				start = end
+			}
+			column += utf8.RuneCountInString(data)
+			cur += data
+			if nonl != nil && *nonl {
+				// write_indent with no_newline: no break; pad up to indent
+				*nonl = false
+				if column < indent {
+					cur += spaces(indent - column)
+					column = indent
+				}
+			} else {
+				pieces = append(pieces, cur)
+				cur = ""
+				column = indent
+			}
+			if rs[start] == ' ' {
+				if !need {
+					start++
+				} else {
+					column++
+					cur += `\`
+				}
+			}
+		}
+		end++
 	}
-	b.WriteByte('"')
-	return b.String()
+	cur += `"`
+	pieces = append(pieces, cur)
+	return pieces
+}
+
+// needBackslash is the need_backslash decision of write_double_quoted
+// (ruamel 0.19: a fold before a word that is followed by a plain space
+// needs no escaped line end).
+func needBackslash(rs []rune, start, end int) bool {
+	sp := -1
+	for i := end; i < len(rs); i++ {
+		if rs[i] == ' ' {
+			sp = i
+			break
+		}
+	}
+	if sp < 0 {
+		return true // ValueError
+	}
+	for i := end; i < sp; i++ {
+		if rs[i] == '\n' {
+			sp = i
+			break
+		}
+	}
+	if sp+1 >= len(rs) {
+		return true // IndexError
+	}
+	if rs[sp] == '\n' && rs[sp+1] != ' ' {
+		return true
+	}
+	for _, r := range rs[end:sp] {
+		if r == '"' || r == '\'' {
+			return true
+		}
+	}
+	if rs[sp+1] == ' ' || rs[sp+1] == '\n' || string(rs[end-1:end+1]) == "  " || start == end {
+		return true
+	}
+	return false
+}
+
+// doubleQuoted is write_double_quoted for a value that needs no folding.
+func doubleQuoted(s string) string {
+	return foldDouble(s, 0, 0, 1<<30, false, nil)[0]
 }
 
 // scalarText returns the text written for a non-literal scalar node and

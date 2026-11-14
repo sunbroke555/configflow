@@ -50,14 +50,10 @@ func TestCommentedCorpus(t *testing.T) {
 		wantChanged := compact(t, want.Value("changed"))
 		gotConfig := profile.GetObject("mihomo").GetString("custom_config")
 		if compact(t, jsonx.ListOf(changed)) != wantChanged || gotConfig != want.GetString("config") {
-			cat := "mismatch"
-			if strings.Contains(in.GetString("config"), "&") || strings.Contains(in.GetString("config"), "*") {
-				cat = "mismatch_anchors"
-			}
-			stats[cat]++
-			if cat == "mismatch" && shown < 4 {
+			stats["mismatch"]++
+			if shown < 10 {
 				shown++
-				t.Errorf("row %d new=%v\nSRC:\n%q\nDIFF:\n%s", i, in.Value("new"), in.GetString("config"), firstDiff(gotConfig, want.GetString("config")))
+				t.Errorf("row %d new=%v\nSRC:\n%s\nDIFF:\n%s", i, in.Value("new"), in.GetString("config"), firstDiff(gotConfig, want.GetString("config")))
 			}
 			continue
 		}

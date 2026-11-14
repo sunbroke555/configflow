@@ -155,6 +155,88 @@ func rejectMerge(n *node, seen map[*node]bool) error {
 	return nil
 }
 
+func collectAliased(n *node, aliased map[*node]bool, seen map[*node]bool) {
+	if n == nil || seen[n] {
+		return
+	}
+	seen[n] = true
+	if n.kind == kAlias {
+		aliased[n.target] = true
+		return
+	}
+	for _, e := range n.entries {
+		collectAliased(e.value, aliased, seen)
+	}
+	for _, it := range n.items {
+		collectAliased(it.value, aliased, seen)
+	}
+}
+
+func hasComment(r *rec) bool { return r != nil && (r.eol != nil || len(r.gap) > 0) }
+
+// subtreeCommented reports a comment anywhere inside n (its own entries' and
+// items' lines).
+func subtreeCommented(n *node, seen map[*node]bool) bool {
+	if n == nil || seen[n] || n.kind == kAlias {
+		return false
+	}
+	seen[n] = true
+	if len(n.flowComments) > 0 {
+		return true
+	}
+	for _, e := range n.entries {
+		if hasComment(&e.rec) || subtreeCommented(e.value, seen) {
+			return true
+		}
+	}
+	for _, it := range n.items {
+		if hasComment(&it.rec) || subtreeCommented(it.value, seen) {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectCommentedAliases declines documents where an alias, or a node that
+// an alias refers to, sits on a line with a comment (or holds comments).
+// ruamel attaches such comments to the shared node and then moves or
+// repeats them in ways that are not emulated (for example
+// `listeners: [*base] # list` gets the anchor line's comment as well).
+// cur is the record of the source line the node is written on.
+func rejectCommentedAliases(n *node, cur *rec, aliased map[*node]bool, seen map[*node]bool) error {
+	if n == nil {
+		return nil
+	}
+	if n.kind == kAlias || aliased[n] {
+		if hasComment(cur) || (n.kind != kAlias && subtreeCommented(n, map[*node]bool{})) {
+			return unsupported("comment next to an anchor or alias")
+		}
+	}
+	if n.kind == kAlias || seen[n] {
+		return nil
+	}
+	seen[n] = true
+	for _, e := range n.entries {
+		r := &e.rec
+		if n.flow {
+			r = cur
+		}
+		if err := rejectCommentedAliases(e.value, r, aliased, seen); err != nil {
+			return err
+		}
+	}
+	for _, it := range n.items {
+		r := &it.rec
+		if n.flow {
+			r = cur
+		}
+		if err := rejectCommentedAliases(it.value, r, aliased, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var removedComment = func(line string) string {
 	t := strings.TrimLeft(line, " \t\n\r\f\v")
 	if strings.HasPrefix(t, "#") {
@@ -187,6 +269,13 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 	if err := rejectMerge(doc.root, map[*node]bool{}); err != nil {
 		return "", err
 	}
+	aliased := map[*node]bool{}
+	collectAliased(doc.root, aliased, map[*node]bool{})
+	if len(aliased) > 0 {
+		if err := rejectCommentedAliases(doc.root, nil, aliased, map[*node]bool{}); err != nil {
+			return "", err
+		}
+	}
 	if doc.root.kind != kMap {
 		return "", unsupported("root is not a mapping")
 	}
@@ -201,6 +290,15 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 	if listeners.kind != kSeq {
 		return "", unsupported("listeners is not a sequence")
 	}
+	// document['listeners'] = CommentedSeq(original): a copy, so a shared
+	// (anchored) sequence keeps its other users unchanged.
+	shallow := &node{kind: kSeq, flow: listeners.flow}
+	for _, it := range listeners.items {
+		cp := *it
+		shallow.items = append(shallow.items, &cp)
+	}
+	le.value = shallow
+	listeners = shallow
 	preLines := map[*item][]string{}
 	for _, index := range indexes {
 		if index < 0 || index >= len(listeners.items) {
