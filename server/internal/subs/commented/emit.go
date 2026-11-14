@@ -1,6 +1,7 @@
 package commented
 
 import (
+	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -16,6 +17,8 @@ type emitter struct {
 	yaml12   bool
 	// openEnded: the last scalar was a block scalar that keeps trailing newlines
 	openEnded bool
+	genNames  map[*node]string // generated anchors (id001, ...)
+	genCount  int
 	// noNewline is ruamel's no_newline: set for the first item of a block
 	// sequence whose start carries a comment (an end-of-line comment or
 	// comment/blank lines after the key); the first wrap inside that item
@@ -88,14 +91,37 @@ func (e *emitter) resolve(n *node) (target *node, alias string, prefix string) {
 // peekResolve is resolve without marking the node as written.
 func (e *emitter) peekResolve(n *node) (target *node, alias string, prefix string) {
 	target = n
+	mode := scalarAnchorMode(target, e.yaml12)
 	if n.kind == kAlias {
 		target = n.target
+		mode = scalarAnchorMode(target, e.yaml12)
 		if e.seen[target] {
-			return target, "*" + n.name, ""
+			switch mode {
+			case anchorKeep:
+				return target, "*" + n.name, ""
+			case anchorGenerated:
+				return target, "*" + e.genNames[target], ""
+			}
 		}
 	}
-	if target.anchor != "" && (target.kind == kScalar || e.refs[target] >= 2) {
+	if target.anchor == "" {
+		return target, "", ""
+	}
+	switch {
+	case target.kind != kScalar:
+		if e.refs[target] >= 2 {
+			prefix = "&" + target.anchor
+		}
+	case mode == anchorKeep:
 		prefix = "&" + target.anchor
+	case mode == anchorGenerated && e.refs[target] >= 2:
+		name, ok := e.genNames[target]
+		if !ok {
+			e.genCount++
+			name = fmt.Sprintf("id%03d", e.genCount)
+			e.genNames[target] = name
+		}
+		prefix = "&" + name
 	}
 	return target, "", prefix
 }
@@ -128,8 +154,8 @@ func (e *emitter) emitMap(n *node, col int, lead string) {
 func (e *emitter) resolveKey(k *node) (*node, string, string) { return k, "", "" }
 
 func isStringPlain(raw string) bool {
-	t, null, err := plainOut(raw)
-	return err == nil && !null && t == raw
+	t, tag, err := plainScalar(raw, false)
+	return err == nil && (tag == "str" || tag == "merge" || tag == "value") && t == raw
 }
 
 // emitValue writes head (everything before the value on the first line)
@@ -299,6 +325,9 @@ func (e *emitter) emitSeq(n *node, col int, lead string, underMap bool) {
 				e.out = append(e.out, head)
 				e.gap(it.dashBreak)
 				e.emitMap(target, col+2, spaces(col+2))
+			} else if target.kind == kSeq && nullItemWithComment(target) {
+				e.fail(unsupported("comment on an empty item of a nested sequence"))
+				return
 			} else if target.kind == kMap {
 				e.emitMap(target, col+2, head+" ")
 			} else {
@@ -614,4 +643,53 @@ func (e *emitter) writeFlow(head string, n *node, indent int, nonl bool) ([]stri
 		return nil, w.err
 	}
 	return append(w.lines, string(w.cur)), nil
+}
+
+const (
+	anchorKeep = iota
+	anchorDrop
+	anchorGenerated
+)
+
+// scalarAnchorMode: the round-trip constructor builds a plain Python value
+// (no place for an anchor, aliases written out in full: ints and floats are
+// not tracked) for null, sexagesimal numbers, infinities and NaN; an octal
+// integer (OctalInt, written as a plain int) and a date are tracked by
+// identity, so the serializer gives them a generated anchor (id001, ...)
+// when they are used twice.
+func scalarAnchorMode(n *node, yaml12 bool) int {
+	if n.kind != kScalar || n.style != sPlain {
+		return anchorKeep
+	}
+	switch resolveTag(n.raw, yaml12) {
+	case "null":
+		return anchorDrop
+	case "int":
+		s := strings.TrimLeft(strings.ReplaceAll(n.raw, "_", ""), "+-")
+		if strings.HasPrefix(s, "0o") || !yaml12 && len(s) > 1 && s[0] == '0' && s[1] != 'b' && s[1] != 'x' {
+			return anchorGenerated
+		}
+		if !yaml12 && strings.Contains(s, ":") {
+			return anchorDrop
+		}
+	case "float":
+		s := strings.ToLower(strings.TrimLeft(strings.ReplaceAll(n.raw, "_", ""), "+-"))
+		if s == ".inf" || s == ".nan" || !yaml12 && strings.Contains(s, ":") {
+			return anchorDrop
+		}
+	case "timestamp":
+		if reDate.MatchString(n.raw) {
+			return anchorGenerated
+		}
+	}
+	return anchorKeep
+}
+
+func nullItemWithComment(n *node) bool {
+	for _, it := range n.items {
+		if it.value.kind == kScalar && it.value.style == sPlain && rNull.MatchString(it.value.raw) && it.rec.eol != nil {
+			return true
+		}
+	}
+	return false
 }

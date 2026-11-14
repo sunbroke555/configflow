@@ -2,36 +2,12 @@ package commented
 
 import (
 	"fmt"
-	"math/big"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 )
 
-var (
-	boolWords = map[string]bool{
-		"yes": true, "Yes": true, "YES": true, "true": true, "True": true, "TRUE": true, "on": true, "On": true, "ON": true,
-		"no": false, "No": false, "NO": false, "false": false, "False": false, "FALSE": false, "off": false, "Off": false, "OFF": false,
-	}
-	ruamelOnlyBool  = map[string]bool{"y": true, "Y": true, "n": true, "N": true}
-	nullWords       = map[string]bool{"~": true, "null": true, "Null": true, "NULL": true, "": true}
-	reDecInt        = regexp.MustCompile(`^[-+]?(0|[1-9][0-9_]*)$`)
-	reOctal         = regexp.MustCompile(`^[-+]?0[0-7_]+$`)
-	reBin           = regexp.MustCompile(`^[-+]?0b[0-1_]+$`)
-	reHex           = regexp.MustCompile(`^[-+]?0x[0-9a-fA-F_]+$`)
-	reFloat         = regexp.MustCompile(`^[-+]?([0-9][0-9_]*)\.[0-9_]*([eE][-+][0-9]+)?$|^\.[0-9_]+([eE][-+][0-9]+)?$`)
-	reInf           = regexp.MustCompile(`^[-+]?\.(inf|Inf|INF)$`)
-	reNaN           = regexp.MustCompile(`^\.(nan|NaN|NAN)$`)
-	reSexa          = regexp.MustCompile(`^[-+]?[1-9][0-9_]*(:[0-5]?[0-9])+$`)
-	reSexaFloat     = regexp.MustCompile(`^[-+]?[0-9][0-9_]*(:[0-5]?[0-9])+\.[0-9_]*$`)
-	reDate          = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
-	reTimestamp     = regexp.MustCompile(`^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}([Tt]|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(\.[0-9]*)?([ \t]*(Z|[-+][0-9]{1,2}(:[0-9]{2})?))?$`)
-	reDecInt12      = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
-	reHex12         = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
-	reFloat12       = regexp.MustCompile(`^-?[0-9]+\.[0-9]+$`)
-	reStrLooksFloat = regexp.MustCompile(`^[-+]\.[0-9]+$`)
-	reOctal12       = regexp.MustCompile(`^0o[0-7]+$`)
-)
+var reDate = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 
 // plainOut is how ruamel (YAML 1.1 load, YAML 1.2 dump, preserve_quotes)
 // writes a plain scalar of the source: its text, and whether it is null.
@@ -42,94 +18,44 @@ func plainOut(raw string) (text string, null bool, err error) {
 // plainOutMode: yaml12 is true under an explicit `---` (the document then
 // loads with YAML 1.2 rules, where yes/no/on/off are plain strings).
 func plainOutMode(raw string, yaml12 bool) (text string, null bool, err error) {
-	if nullWords[raw] {
-		return "", true, nil
+	text, tag, err := plainScalar(raw, yaml12)
+	return text, tag == "null", err
+}
+
+// plainScalar resolves a plain scalar of the source with the load version's
+// rules, constructs it as the round-trip constructor does and returns the
+// text the representer writes plus the resolved tag.
+func plainScalar(raw string, yaml12 bool) (text, tag string, err error) {
+	if raw == "-" || raw == "?" || raw == ":" {
+		// an indicator on its own: a nested collection or a quoted string in ruamel
+		return "", "", unsupported("lone indicator")
 	}
-	if yaml12 {
-		switch raw {
-		case "true", "True", "TRUE":
-			return "true", false, nil
-		case "false", "False", "FALSE":
-			return "false", false, nil
+	tag = resolveTag(raw, yaml12)
+	switch tag {
+	case "null":
+		return "", tag, nil
+	case "bool":
+		switch strings.ToLower(raw) {
+		case "yes", "true", "on", "y":
+			return "true", tag, nil
 		}
-		if _, isBool := boolWords[raw]; isBool || ruamelOnlyBool[raw] {
-			return raw, false, nil
+		return "false", tag, nil
+	case "int", "float":
+		text, err = numberText(raw, tag, yaml12)
+		return text, tag, err
+	case "timestamp":
+		if reDate.MatchString(raw) {
+			return raw, tag, nil
 		}
-		switch {
-		case reDecInt12.MatchString(raw), reHex12.MatchString(raw), reFloat12.MatchString(raw):
-			return raw, false, nil
-		case reDecInt.MatchString(raw), reOctal.MatchString(raw), reBin.MatchString(raw), reHex.MatchString(raw), reInf.MatchString(raw),
-			reNaN.MatchString(raw), reSexa.MatchString(raw), reSexaFloat.MatchString(raw), reFloat.MatchString(raw), reDate.MatchString(raw),
-			reTimestamp.MatchString(raw), reOctal12.MatchString(raw), reStrLooksFloat.MatchString(raw):
-			return "", false, unsupported("number-like scalar in a YAML 1.2 document")
-		}
-		return raw, false, nil
+		return "", tag, unsupported("timestamp")
+	case "merge", "value":
+		return raw, tag, nil
 	}
-	if v, ok := boolWords[raw]; ok {
-		if v {
-			return "true", false, nil
-		}
-		return "false", false, nil
+	if resolveTag(raw, true) != "str" {
+		// a string that YAML 1.2 would read as something else
+		return "'" + strings.ReplaceAll(raw, "'", "''") + "'", tag, nil
 	}
-	if ruamelOnlyBool[raw] {
-		return "", false, unsupported("y/n scalar changes meaning")
-	}
-	switch {
-	case reDecInt.MatchString(raw):
-		if strings.Contains(raw, "_") {
-			return "", false, unsupported("underscore integer")
-		}
-		t := strings.TrimPrefix(raw, "+")
-		if t == "-0" {
-			t = "0"
-		}
-		return t, false, nil
-	case reOctal.MatchString(raw):
-		if strings.Contains(raw, "_") {
-			return "", false, unsupported("underscore octal")
-		}
-		neg := strings.HasPrefix(raw, "-")
-		digits := strings.TrimLeft(raw, "+-")
-		n, ok := new(big.Int).SetString(digits, 8)
-		if !ok {
-			return "", false, unsupported("octal")
-		}
-		if neg {
-			n.Neg(n)
-		}
-		return n.String(), false, nil
-	case reBin.MatchString(raw), reHex.MatchString(raw):
-		if strings.Contains(raw, "_") || strings.HasPrefix(raw, "+") {
-			return "", false, unsupported("underscore or signed radix integer")
-		}
-		return raw, false, nil
-	case reInf.MatchString(raw):
-		if strings.HasPrefix(raw, "+") {
-			return "", false, unsupported("signed infinity")
-		}
-		if strings.HasPrefix(raw, "-") {
-			return "-.inf", false, nil
-		}
-		return ".inf", false, nil
-	case reNaN.MatchString(raw):
-		return ".nan", false, unsupported("NaN never compares equal")
-	case reSexaFloat.MatchString(raw), reSexa.MatchString(raw):
-		return "", false, unsupported("sexagesimal number")
-	case reFloat.MatchString(raw):
-		if strings.Contains(raw, "_") || strings.HasPrefix(raw, "+") || strings.ContainsAny(raw, "eE") {
-			return "", false, unsupported("float form")
-		}
-		return raw, false, nil
-	case reDate.MatchString(raw):
-		return raw, false, nil
-	case reTimestamp.MatchString(raw):
-		return "", false, unsupported("timestamp")
-	case reOctal12.MatchString(raw):
-		return "", false, unsupported("0o octal scalar")
-	case reStrLooksFloat.MatchString(raw):
-		return "'" + raw + "'", false, nil
-	}
-	return raw, false, nil
+	return raw, tag, nil
 }
 
 func printableRune(r rune) bool {

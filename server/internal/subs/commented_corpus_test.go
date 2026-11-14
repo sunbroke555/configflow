@@ -13,7 +13,7 @@ import (
 // of the Python code (ruamel.yaml round trip) byte for byte. Rows the Go
 // editor declines (ErrUnsupported) are counted separately: Python produced
 // output for them (or failed too).
-func TestCommentedCorpus(t *testing.T) { runCommentedCorpus(t, "commented.jsonl.gz", 335) }
+func TestCommentedCorpus(t *testing.T) { runCommentedCorpus(t, "commented.jsonl.gz", 227) }
 
 // TestCommentedAnchorsCorpus covers anchors, aliases and merge keys around
 // listeners, with comments at every position (testdata/gen.py
@@ -28,6 +28,12 @@ func TestCommentedAnchorsCorpus(t *testing.T) {
 // row may be refused.
 func TestCommentedRealisticCorpus(t *testing.T) {
 	runCommentedCorpus(t, "commented_realistic.jsonl.gz", 0)
+}
+
+// TestCommentedScalarsCorpus covers YAML 1.1 / 1.2 plain scalar forms
+// (numbers, sexagesimal, octal, underscores, floats) in every position.
+func TestCommentedScalarsCorpus(t *testing.T) {
+	runCommentedCorpus(t, "commented_scalars.jsonl.gz", 16)
 }
 
 func runCommentedCorpus(t *testing.T, file string, maxDeclined int) {

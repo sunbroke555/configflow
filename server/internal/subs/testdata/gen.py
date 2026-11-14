@@ -1462,3 +1462,43 @@ def commented_realistic_rows():
 
 
 dump('commented_realistic.jsonl', commented_realistic_rows())
+
+
+# ------------------------------------------------- commented: plain scalar forms
+SCALAR_FORMS = [
+    '1:30', '-1:30', '+1:30', '190:20:30', '1:30.5', '-1:30.5', '1_0:30', '0:30', '1:30:00.25', '1:60', '1:5',
+    '0o17', '0o0', '-0o17', '+0o17', '0o1_7', '1_000', '-1_000', '+1_000', '-100_000', '1__0', '1_', '_1',
+    '0b1_0', '0b_10', '0b10_', '-0b1_0', '0x_1F', '0x1f', '0x1F', '0xaB', '0x1_f', '-0x1F', '-0b101', '+0x1F',
+    '+0b1', '0x0', '0b0', '0x00ff', '01_7', '0_17', '012', '-012', '+012', '00', '08', '09', '0', '+0', '-0',
+    '1_0.5', '1_000.5_0', '+1', '+1.5', '-1.5', '1.', '-1.', '+1.', '.5', '-.5', '+.5', '0.50', '00.5', '-00.5',
+    '1.0e+3', '1.5e3', '1.5E3', '1.5e-3', '-1.5e+03', '+1.5e3', '1e3', '1E3', '-1e3', '1.e+3', '0.000125e+5',
+    '12.5e-1', '1_0.5e1', '.5e+3', '1.0e+300', '123456789012345678901234567890', '1.7976931348623157e+308',
+    '+.inf', '-.inf', '.Inf', '+.INF', '.inf', '.nan', '2024-01-01', '2024-1-1', '2024-01-01_12:00:00',
+    '1.2.3', '1:2:3:4', '1_000_000', '0b', '0x', '+', '-', '1-1', '0.1.1', '1,000', '1e', 'e3', '0e0', '00e1',
+]
+
+
+def commented_scalar_rows():
+    rows = []
+    for pre in ('', '---\n'):
+        for form in SCALAR_FORMS:
+            sources = [
+                f'{pre}a: {form}\nlisteners:\n- {{name: x, proxy: Pinned}}\n',
+                f'{pre}a:\n- {form}\n- {form} # c\nlisteners:\n- name: x\n  proxy: Pinned\n',
+                f'{pre}a: [{form}, x, {{k: {form}}}]\nlisteners:\n- {{name: x, proxy: Pinned}}\n',
+                f'{pre}listeners:\n- name: x\n  port: {form}\n  proxy: Pinned\n',
+                f'{pre}a: &n {form}\nb: *n\nlisteners:\n- {{name: x, proxy: Pinned, port: {form}}}\n',
+            ]
+            for text in sources:
+                for new_name in ('Renamed', None):
+                    profile = {'mihomo': {'custom_config': text}}
+                    try:
+                        out = {'changed': ml.relink_group_listeners(profile, 'Pinned', new_name),
+                               'config': profile['mihomo']['custom_config']}
+                    except BaseException as exc:  # noqa: BLE001
+                        out = {'error': str(exc), 'type': type(exc).__name__}
+                    rows.append({'fn': 'relink_group_listeners', 'in': {'config': text, 'old': 'Pinned', 'new': new_name}, 'out': out})
+    return rows
+
+
+dump('commented_scalars.jsonl', commented_scalar_rows())
