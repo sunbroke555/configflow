@@ -1,0 +1,273 @@
+// Package logs holds the routes of backend/routes/logs.py (blueprint
+// "logs", prefix /api/logs): tail, info and clear of the application log.
+// The blueprint has no require_auth; the global gate protects it.
+package logs
+
+import (
+	"bufio"
+	"bytes"
+	"errors"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+	"unicode/utf8"
+
+	"configflow/internal/httpx"
+	"configflow/internal/jsonx"
+	"configflow/internal/rules"
+)
+
+// Register adds the logs blueprint.
+func Register(r *httpx.Router) {
+	r.GET("/api/logs/tail", "logs.get_logs", getLogs)
+	r.GET("/api/logs/info", "logs.get_log_info", getLogInfo)
+	r.POST("/api/logs/clear", "logs.clear_logs", clearLogs)
+}
+
+// LogFilePath is get_log_file_path(); tests replace it.
+var LogFilePath = getLogFilePath
+
+// openFile is open(); tests replace it.
+var openFile = func(path string) (io.ReadCloser, error) { return os.Open(path) }
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func getLogFilePath() string {
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/data"
+	}
+	if !exists(dataDir) {
+		dataDir = "."
+	}
+	defaultLogFile := pathJoin(dataDir, "app.log")
+	logFile := os.Getenv("LOG_FILE")
+	if logFile == "" {
+		logFile = defaultLogFile
+	}
+	logPath := pathStr(logFile)
+	if !exists(logPath) {
+		for _, candidate := range []string{pathJoin(dataDir, "app.log"), "./app.log", "data/app.log",
+			"logs/app.log", "/var/log/configflow/app.log", "app.log"} {
+			if exists(candidate) {
+				logPath = pathStr(candidate)
+				break
+			}
+		}
+	}
+	return logPath
+}
+
+// pathStr is str(Path(p)): redundant slashes and "." segments removed.
+func pathStr(p string) string {
+	if p == "" {
+		return "."
+	}
+	absolute := strings.HasPrefix(p, "/")
+	var parts []string
+	for _, part := range strings.Split(p, "/") {
+		if part != "" && part != "." {
+			parts = append(parts, part)
+		}
+	}
+	joined := strings.Join(parts, "/")
+	if absolute {
+		if strings.HasPrefix(p, "//") && !strings.HasPrefix(p, "///") {
+			return "//" + joined
+		}
+		return "/" + joined
+	}
+	if joined == "" {
+		return "."
+	}
+	return joined
+}
+
+func pathJoin(dir, name string) string { return pathStr(dir + "/" + name) }
+
+func errorResponse(err error, withLogs bool) *httpx.Response {
+	payload := jsonx.Obj("success", false, "error", pyOSErrorText(err))
+	if withLogs {
+		payload.Set("logs", []any{})
+		payload.Set("total_lines", 0)
+	}
+	return httpx.JSONStatus(500, payload)
+}
+
+func getLogs(c *httpx.Ctx) (*httpx.Response, error) {
+	logPath := LogFilePath()
+	lines := c.ArgInt("lines", 100)
+	search := c.ArgDefault("search", "")
+	levelFilter := strings.ToUpper(c.ArgDefault("level", ""))
+	lines = min(lines, 10000)
+	if !exists(logPath) {
+		return httpx.JSON(jsonx.Obj("success", true, "logs", []any{}, "total_lines", 0,
+			"message", "日志文件不存在: "+logPath)), nil
+	}
+	file, err := openFile(logPath)
+	if err != nil {
+		return errorResponse(err, true), nil
+	}
+	var logLines []string
+	total := 0
+	err = readLines(file, func(line string) {
+		total++
+		logLines = append(logLines, line)
+		if lines > 0 && int64(len(logLines)) > lines {
+			logLines = logLines[1:]
+		}
+	})
+	file.Close()
+	if err != nil {
+		return errorResponse(err, true), nil
+	}
+	var level *rules.PyRegex
+	if levelFilter != "" {
+		level, err = rules.CompilePyRegex(`\b`+levelFilter+`\b`, true)
+		if err != nil {
+			return errorResponse(err, true), nil
+		}
+	}
+	searchLower := pyLower(search)
+	filtered := []any{}
+	for _, line := range logLines {
+		if search != "" && !strings.Contains(pyLower(line), searchLower) {
+			continue
+		}
+		if level != nil && !level.Search(line) {
+			continue
+		}
+		filtered = append(filtered, strings.TrimRight(line, "\n"))
+	}
+	return httpx.JSON(jsonx.Obj("success", true, "logs", filtered, "total_lines", total,
+		"filtered_lines", len(filtered), "log_file", logPath)), nil
+}
+
+// readLines iterates a text file like Python's text mode with
+// encoding="utf-8", errors="ignore" and universal newlines: invalid bytes
+// are dropped, "\r\n" and "\r" become "\n", each line keeps its "\n".
+func readLines(r io.Reader, line func(string)) error {
+	reader := bufio.NewReaderSize(r, 64*1024)
+	var current bytes.Buffer
+	pendingCR := false
+	flush := func() {
+		line(dropInvalidUTF8(current.Bytes()))
+		current.Reset()
+	}
+	for {
+		b, err := reader.ReadByte()
+		if err == io.EOF {
+			if pendingCR {
+				current.WriteByte('\n')
+				flush()
+			} else if current.Len() > 0 {
+				flush()
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if pendingCR {
+			pendingCR = false
+			current.WriteByte('\n')
+			flush()
+			if b == '\n' {
+				continue
+			}
+		}
+		switch b {
+		case '\r':
+			pendingCR = true
+		case '\n':
+			current.WriteByte('\n')
+			flush()
+		default:
+			current.WriteByte(b)
+		}
+	}
+}
+
+func dropInvalidUTF8(b []byte) string {
+	if utf8.Valid(b) {
+		return string(b)
+	}
+	var out strings.Builder
+	for len(b) > 0 {
+		r, size := utf8.DecodeRune(b)
+		if r != utf8.RuneError || size > 1 {
+			out.Write(b[:size])
+		}
+		b = b[size:]
+	}
+	return out.String()
+}
+
+// pyLower is str.lower() closely enough for log search (Go's simple case
+// mapping; Python's special full mappings such as U+0130 differ).
+func pyLower(s string) string { return strings.ToLower(s) }
+
+func getLogInfo(c *httpx.Ctx) (*httpx.Response, error) {
+	logPath := LogFilePath()
+	if !exists(logPath) {
+		return httpx.JSON(jsonx.Obj("success", true, "exists", false, "path", logPath)), nil
+	}
+	info, err := os.Stat(logPath)
+	if err != nil {
+		return errorResponse(err, false), nil
+	}
+	size := info.Size()
+	modified, created := fileTimes(info)
+	return httpx.JSON(jsonx.Obj("success", true, "exists", true, "path", logPath, "size", size,
+		"size_mb", jsonx.Float(pyRound2(float64(size)/(1024*1024))),
+		"modified", isoformat(modified), "created", isoformat(created))), nil
+}
+
+// pyRound2 is round(x, 2): correctly rounded, ties to even.
+func pyRound2(x float64) float64 {
+	v, _ := strconv.ParseFloat(strconv.FormatFloat(x, 'f', 2, 64), 64)
+	return v
+}
+
+// isoformat is datetime.fromtimestamp(t).isoformat(): local time, with
+// microseconds only when they are not zero.
+func isoformat(t time.Time) string {
+	t = t.Local()
+	if t.Nanosecond()/1000 == 0 {
+		return t.Format("2006-01-02T15:04:05")
+	}
+	return t.Format("2006-01-02T15:04:05.000000")
+}
+
+func clearLogs(c *httpx.Ctx) (*httpx.Response, error) {
+	logPath := LogFilePath()
+	if !exists(logPath) {
+		return httpx.Message(200, true, "日志文件不存在"), nil
+	}
+	if err := os.WriteFile(logPath, nil, 0o666); err != nil {
+		return errorResponse(err, false), nil
+	}
+	return httpx.Message(200, true, "日志已清空"), nil
+}
+
+// pyOSErrorText is str(OSError): "[Errno 2] No such file or directory: 'path'".
+func pyOSErrorText(err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		var errno syscall.Errno
+		if errors.As(pe.Err, &errno) {
+			message := errno.Error()
+			if message != "" {
+				message = strings.ToUpper(message[:1]) + message[1:]
+			}
+			return "[Errno " + strconv.Itoa(int(errno)) + "] " + message + ": " + jsonx.Repr(pe.Path)
+		}
+	}
+	return err.Error()
+}

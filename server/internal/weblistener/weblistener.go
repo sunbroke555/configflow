@@ -1,0 +1,489 @@
+// Package weblistener is the port of backend/utils/web_listener.py for a
+// server that is its own web front end: the port the web UI listens on
+// (CONFIGFLOW_WEB_PORT, else the port saved from the settings page in
+// DATA_DIR/web-listener.json, else 80), the IPv6 listener next to the IPv4
+// one, and changing the port from the settings page without a restart.
+//
+// Python rendered an nginx configuration, reloaded nginx and checked the new
+// listener with a random token on /_configflow/listener-health. Here the Go
+// process opens the new sockets itself, checks them with the same health
+// request and token, saves the port, and only then closes the old sockets
+// (connections in progress finish on them). Messages and status codes are
+// Python's, except that the nginx-specific failures cannot happen.
+package weblistener
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"configflow/internal/jsonx"
+)
+
+// HealthPath is the listener check path.
+const HealthPath = "/_configflow/listener-health"
+
+// Error is WebListenerError: a message for the user and the HTTP status.
+type Error struct {
+	Message string
+	Status  int
+}
+
+func (e *Error) Error() string { return e.Message }
+
+func fail(message string, status int) *Error { return &Error{Message: message, Status: status} }
+
+// Server is what the manager serves on its sockets.
+type Server interface {
+	// Serve accepts connections on l until it is closed.
+	Serve(l net.Listener) error
+	// SetListenerToken sets the answer of HealthPath.
+	SetListenerToken(token string)
+	// ListenerToken returns it.
+	ListenerToken() string
+}
+
+// Manager owns the web listener sockets.
+type Manager struct {
+	// DataDir holds web-listener.json and web-listener.lock.
+	DataDir string
+	Server  Server
+	// HealthTimeout bounds the check of a new listener (5 s).
+	HealthTimeout time.Duration
+	// Getenv is os.Getenv (tests).
+	Getenv func(string) string
+	// LookupEnv is os.LookupEnv (tests).
+	LookupEnv func(string) (string, bool)
+
+	mu     sync.Mutex
+	active *active
+}
+
+type active struct {
+	port      int
+	ipv6      bool
+	token     string
+	listeners []net.Listener
+}
+
+func (m *Manager) getenv(name string) string {
+	if m.Getenv != nil {
+		return m.Getenv(name)
+	}
+	return os.Getenv(name)
+}
+
+func (m *Manager) lookupEnv(name string) (string, bool) {
+	if m.LookupEnv != nil {
+		return m.LookupEnv(name)
+	}
+	return os.LookupEnv(name)
+}
+
+func (m *Manager) statePath() string { return filepath.Join(m.DataDir, "web-listener.json") }
+func (m *Manager) lockPath() string  { return filepath.Join(m.DataDir, "web-listener.lock") }
+
+// checkPort is _port: an int (not a bool) in 1..65535.
+func checkPort(value any) (int, error) {
+	n, ok := value.(jsonx.Number)
+	v, fits := n.Int64()
+	if !ok || !fits || v < 1 || v > 65535 {
+		if i, isInt := value.(int); isInt && i >= 1 && i <= 65535 {
+			return i, nil
+		}
+		return 0, fail("Web 端口须为 1–65535 的整数", 400)
+	}
+	return int(v), nil
+}
+
+// lock is _lock: a non-blocking flock on web-listener.lock.
+func (m *Manager) lock() (func(), error) {
+	if err := os.MkdirAll(m.DataDir, 0o777); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(m.lockPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fail("Web 端口正在更新，请稍后重试", 409)
+		}
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}, nil
+}
+
+// EnvironmentPort is _environment_port(name, default).
+func (m *Manager) EnvironmentPort(name string, def int) (int, error) {
+	raw, ok := m.lookupEnv(name)
+	if !ok {
+		raw = strconv.Itoa(def)
+	}
+	raw = strings.TrimFunc(raw, isPySpace)
+	if len([]rune(raw)) > 5 || !isASCIIDecimal(raw) {
+		return 0, fail(name+" 须为 1–65535 的整数", 400)
+	}
+	value, _ := strconv.Atoi(raw)
+	if value < 1 || value > 65535 {
+		return 0, fail(name+" 须为 1–65535 的整数", 400)
+	}
+	return value, nil
+}
+
+func isASCIIDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isPySpace(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n', '\v', '\f', '\r', 0x1c, 0x1d, 0x1e, 0x1f, 0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200a
+}
+
+// selection is _selection: the port and where it comes from.
+func (m *Manager) selection() (int, string, error) {
+	if _, ok := m.lookupEnv("CONFIGFLOW_WEB_PORT"); ok {
+		port, err := m.EnvironmentPort("CONFIGFLOW_WEB_PORT", 80)
+		return port, "environment", err
+	}
+	data, err := os.ReadFile(m.statePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return 80, "default", nil
+	}
+	unreadable := fail("无法读取已保存的 Web 端口；可设置 CONFIGFLOW_WEB_PORT 恢复访问", 503)
+	if err != nil {
+		return 0, "", unreadable
+	}
+	saved, err := jsonx.Parse(data)
+	object, ok := saved.(*jsonx.Object)
+	if err != nil || !ok {
+		return 0, "", unreadable
+	}
+	value, present := object.Get("port")
+	if !present {
+		return 0, "", unreadable
+	}
+	port, err := checkPort(value)
+	if err != nil {
+		return 0, "", unreadable
+	}
+	return port, "saved", nil
+}
+
+// Port is the port the listener should use now (for startup messages).
+func (m *Manager) Port() (int, error) {
+	port, _, err := m.selection()
+	return port, err
+}
+
+func (m *Manager) checkReserved(port int) error {
+	backend, err := m.EnvironmentPort("CONFIGFLOW_BACKEND_PORT", 5001)
+	if err != nil {
+		return err
+	}
+	subStore, err := m.EnvironmentPort("SUB_STORE_BACKEND_API_PORT", 3001)
+	if err != nil {
+		return err
+	}
+	if backend == subStore {
+		return fail("ConfigFlow 后端与 Sub-Store 须使用不同的端口", 409)
+	}
+	if port == backend || port == subStore {
+		service := "Sub-Store"
+		if port == backend {
+			service = "ConfigFlow 后端"
+		}
+		return fail("端口 "+strconv.Itoa(port)+" 已保留给 "+service+"，请选择其他端口", 409)
+	}
+	return nil
+}
+
+// ipv6Available is _ipv6_available.
+func ipv6Available() bool {
+	l, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		return false
+	}
+	l.Close()
+	return true
+}
+
+// listen opens the IPv4 and (when available) IPv6 sockets of a port.
+func listen(port int, ipv6 bool) ([]net.Listener, error) {
+	var listeners []net.Listener
+	addresses := [][2]string{{"tcp4", "0.0.0.0:" + strconv.Itoa(port)}}
+	if ipv6 {
+		addresses = append(addresses, [2]string{"tcp6", "[::]:" + strconv.Itoa(port)})
+	}
+	for _, address := range addresses {
+		l, err := net.Listen(address[0], address[1])
+		if err != nil {
+			for _, open := range listeners {
+				open.Close()
+			}
+			if errors.Is(err, syscall.EADDRINUSE) {
+				return nil, fail("端口 "+strconv.Itoa(port)+" 已被占用，请选择其他端口", 409)
+			}
+			return nil, fail("无法监听端口 "+strconv.Itoa(port)+"，请检查权限和网络配置", 409)
+		}
+		listeners = append(listeners, l)
+	}
+	return listeners, nil
+}
+
+// randomToken is secrets.token_hex(16).
+func randomToken() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+func (m *Manager) serve(listeners []net.Listener) {
+	for _, l := range listeners {
+		go func(l net.Listener) { _ = m.Server.Serve(l) }(l)
+	}
+}
+
+// Start is prepare_listener at startup: open the selected port (IPv4, and
+// IPv6 when the host supports it) and serve on it.
+func (m *Manager) Start() (*jsonx.Object, error) {
+	unlock, err := m.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	port, _, err := m.selection()
+	if err != nil {
+		return nil, err
+	}
+	if err := m.checkReserved(port); err != nil {
+		return nil, err
+	}
+	ipv6 := ipv6Available()
+	listeners, err := listen(port, ipv6)
+	if err != nil {
+		return nil, err
+	}
+	token := randomToken()
+	m.Server.SetListenerToken(token)
+	m.mu.Lock()
+	m.active = &active{port: port, ipv6: ipv6, token: token, listeners: listeners}
+	m.mu.Unlock()
+	m.serve(listeners)
+	return m.status()
+}
+
+// Close closes the listener sockets.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active != nil {
+		for _, l := range m.active.listeners {
+			l.Close()
+		}
+	}
+}
+
+func (m *Manager) status() (*jsonx.Object, error) {
+	port, source, err := m.selection()
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	current := m.active
+	m.mu.Unlock()
+	if current == nil {
+		return nil, fail("Web 监听配置尚未初始化，请重启容器", 503)
+	}
+	if current.port != port {
+		return nil, fail("Web 监听配置与保存的端口不一致，请重启容器", 503)
+	}
+	status := jsonx.Obj("supported", true, "port", port, "editable", source != "environment",
+		"ipv6", current.ipv6, "source", source)
+	if source == "environment" {
+		status.Set("message", "端口由 CONFIGFLOW_WEB_PORT 指定；移除该环境变量并重建容器后可在此修改")
+	}
+	return status, nil
+}
+
+// Unsupported is listener_status() of a deployment whose web front end is
+// not served by this process.
+func Unsupported() *jsonx.Object {
+	return jsonx.Obj("supported", false, "port", nil, "editable", false, "ipv6", false, "source", "default",
+		"message", "当前部署不支持在 Web 中修改监听端口，请通过部署配置调整")
+}
+
+// Status is listener_status(). A nil manager is the unsupported deployment.
+func (m *Manager) Status() (*jsonx.Object, error) {
+	if m == nil {
+		return Unsupported(), nil
+	}
+	unlock, err := m.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return m.status()
+}
+
+// Update is update_listener(port): move the web listener to another port.
+func (m *Manager) Update(value any) (*jsonx.Object, error) {
+	port, err := checkPort(value)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		if err := (&Manager{}).checkReserved(port); err != nil {
+			return nil, err
+		}
+		return nil, fail("当前部署不支持在 Web 中修改监听端口", 503)
+	}
+	if err := m.checkReserved(port); err != nil {
+		return nil, err
+	}
+	unlock, err := m.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	status, err := m.status()
+	if err != nil {
+		return nil, err
+	}
+	if editable, _ := status.Value("editable").(bool); !editable {
+		return nil, fail(status.GetString("message"), 409)
+	}
+	if port == int(status.GetInt("port")) {
+		return status, nil
+	}
+	m.mu.Lock()
+	old := m.active
+	m.mu.Unlock()
+	ipv6 := ipv6Available()
+	listeners, err := listen(port, ipv6)
+	if err != nil {
+		return nil, err
+	}
+	token := randomToken()
+	m.Server.SetListenerToken(token)
+	m.serve(listeners)
+	restore := func() {
+		for _, l := range listeners {
+			l.Close()
+		}
+		m.Server.SetListenerToken(old.token)
+	}
+	if err := m.waitHealthy(port, ipv6, token); err != nil {
+		restore()
+		return nil, err
+	}
+	if err := atomicWrite(m.statePath(), []byte(`{"port": `+strconv.Itoa(port)+"}\n"), 0o600); err != nil {
+		restore()
+		return nil, fail("保存 Web 端口失败，已恢复原配置", 503)
+	}
+	m.mu.Lock()
+	m.active = &active{port: port, ipv6: ipv6, token: token, listeners: listeners}
+	m.mu.Unlock()
+	for _, l := range old.listeners {
+		l.Close()
+	}
+	return m.status()
+}
+
+func (m *Manager) waitHealthy(port int, ipv6 bool, token string) error {
+	timeout := m.HealthTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if healthy(port, ipv6, token) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fail("Nginx 未能在新端口提供服务，已尝试恢复原端口", 503)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func healthy(port int, ipv6 bool, token string) bool {
+	hosts := []string{"127.0.0.1"}
+	if ipv6 {
+		hosts = append(hosts, "[::1]")
+	}
+	client := &http.Client{Timeout: 300 * time.Millisecond, Transport: &http.Transport{DisableKeepAlives: true, Proxy: nil}}
+	for _, host := range hosts {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		req, _ := http.NewRequestWithContext(ctx, "GET", "http://"+host+":"+strconv.Itoa(port)+HealthPath, nil)
+		req.Header.Set("Connection", "close")
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			return false
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode != 200 || strings.TrimSpace(string(body)) != token {
+			return false
+		}
+	}
+	return true
+}
+
+func atomicWrite(path string, content []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".")
+	if err != nil {
+		return err
+	}
+	temporary := f.Name()
+	defer os.Remove(temporary)
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
+}

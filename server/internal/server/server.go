@@ -1,0 +1,117 @@
+// Package server wires the application together: every route package, the
+// repository hooks owned by the HTTP layer, and the notification sources.
+// cmd/configflow and the differential tests build the application here.
+//
+// Adding a route package: append its Register to routePackages (in the
+// position of its blueprint in backend/routes/__init__.py; tasks and the
+// notification list stay last because they only register once every
+// provider is wired). Adding a background loop or a repository hook: do it
+// from the package's own Register/Wire function with lifecycle.Loop or
+// repo.RegisterHooks; list that function in wirePackages.
+package server
+
+import (
+	"errors"
+	"os"
+	"strconv"
+	"strings"
+
+	apiauth "configflow/internal/api/auth"
+	apilogs "configflow/internal/api/logs"
+	apinotifications "configflow/internal/api/notifications"
+	apisettings "configflow/internal/api/settings"
+	apistats "configflow/internal/api/stats"
+	apitasks "configflow/internal/api/tasks"
+	"configflow/internal/auth"
+	"configflow/internal/httpx"
+	"configflow/internal/notifications"
+	"configflow/internal/repo"
+	"configflow/internal/tasks"
+	"configflow/internal/utilx"
+)
+
+// routePackages are the Register functions of the ported blueprints.
+var routePackages = []func(*httpx.Router){
+	apiauth.Register,
+	apisettings.Register,
+	apilogs.Register,
+	apistats.Register,
+}
+
+// lateRoutePackages register after everything else is wired.
+var lateRoutePackages = []func(*httpx.Router){
+	apitasks.Register,
+	apinotifications.Register,
+}
+
+// wirePackages run before the routes are registered (hooks, loops,
+// providers).
+var wirePackages = []func(){
+	wireCore,
+}
+
+func wireCore() {
+	notifications.SetSources(notifications.Sources{ListTasks: tasks.ListTasks})
+	repo.RegisterHooks(repo.Hooks{DefaultServerDomain: defaultServerDomain})
+}
+
+// defaultServerDomain is what load_config stores outside a container:
+// http://<local ip>:<backend port>.
+func defaultServerDomain() string {
+	address, err := BackendAddressFromEnv()
+	port := 5001
+	if err == nil {
+		port = address.Port
+	}
+	return "http://" + utilx.GetLocalIP() + ":" + strconv.Itoa(port)
+}
+
+// NewApp builds the full application: wiring, every route package, the
+// authentication gate.
+func NewApp() *httpx.App {
+	for _, wire := range wirePackages {
+		wire()
+	}
+	app := httpx.New()
+	for _, register := range routePackages {
+		register(app.Router)
+	}
+	for _, register := range lateRoutePackages {
+		register(app.Router)
+	}
+	auth.Install(app)
+	return app
+}
+
+// BackendAddress is http_server.backend_address().
+type BackendAddress struct {
+	Host string
+	Port int
+}
+
+// BackendAddressFromEnv validates CONFIGFLOW_BACKEND_PORT (default 5001) and
+// CONFIGFLOW_BACKEND_HOST (default 0.0.0.0) like http_server.backend_address.
+func BackendAddressFromEnv() (BackendAddress, error) {
+	raw, ok := os.LookupEnv("CONFIGFLOW_BACKEND_PORT")
+	if !ok {
+		raw = "5001"
+	}
+	raw = strings.TrimSpace(raw)
+	valid := raw != "" && len(raw) <= 5
+	for i := 0; i < len(raw) && valid; i++ {
+		valid = raw[i] >= '0' && raw[i] <= '9'
+	}
+	port, _ := strconv.Atoi(raw)
+	if !valid || port < 1 || port > 65535 {
+		return BackendAddress{}, errors.New("CONFIGFLOW_BACKEND_PORT must be an integer between 1 and 65535")
+	}
+	host, ok := os.LookupEnv("CONFIGFLOW_BACKEND_HOST")
+	if !ok {
+		host = "0.0.0.0"
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return BackendAddress{}, errors.New("CONFIGFLOW_BACKEND_HOST must not be empty")
+	}
+	return BackendAddress{Host: host, Port: port}, nil
+}
