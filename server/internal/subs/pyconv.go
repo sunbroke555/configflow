@@ -1,6 +1,7 @@
 package subs
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"net/netip"
@@ -386,8 +387,17 @@ func pyIPAddress(s string) (ipInfo, bool) {
 	return ipInfo{text: a.String(), unspecified: a.IsUnspecified(), multicast: a.IsMulticast(), loopback: a.IsLoopback()}, true
 }
 
-// formatV6 is str(IPv6Address) of Python 3.11 (no dotted tail for mapped).
+// formatV6 is str(IPv6Address) of Python 3.11 (IPv4-mapped addresses keep the dotted tail).
 func formatV6(b [16]byte) string {
+	mapped := true
+	for i := 0; i < 10; i++ {
+		if b[i] != 0 {
+			mapped = false
+		}
+	}
+	if mapped && b[10] == 0xff && b[11] == 0xff {
+		return fmt.Sprintf("::ffff:%d.%d.%d.%d", b[12], b[13], b[14], b[15])
+	}
 	h := make([]uint16, 8)
 	for i := range h {
 		h[i] = uint16(b[2*i])<<8 | uint16(b[2*i+1])

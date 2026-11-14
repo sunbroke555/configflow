@@ -337,3 +337,201 @@ def parser_rows():
 
 
 dump('parser.jsonl', parser_rows())
+
+
+# --------------------------------------------------------------------- filter
+from backend.utils import subscription_filter as sf  # noqa: E402
+
+PATTERNS = ['香港|HK', '^(?!.*剩余).*$', '(', '[a-z', '(?i)^hk', r'\d+', '(?<=a)b', r'(a)\1', '*', 'a{2,1}', '(?P<n>x)', '^(?!.*(过期|流量)).*$',
+            ' x ', '\\', '(?x) a b', '.*', 'a++', '(?>a)', r'\p{L}', '日本|JP', '^HK', 'HK$', r'(?i)jp\s*\d', '(?!x)', '(?<!a)b', 'x{3}', 'a{1,2}?',
+            '[^\\w]', r'\bhk\b', '(?s).', '^$', '', '   ', '(?P<a>x)(?P=a)', '[[:alpha:]]', '\\Qa\\E', '(?i)香港', 'a|', '|', '(?:)', '^(?=.*香港)(?!.*IPLC).*$',
+            'x{1001}', '(?#c)x', r'\N{DIGIT ONE}', '(?(1)a|b)', 'a**', '+', '?', '(?', '(?P<1>a)', r'\8', r'[\d-x]', '(a)(b)', '(?i:a)b', '(?-i:A)']
+NAMES_F = ['香港 01', '日本 01', 'HK-02', 'hk 03', 'JP 5', '剩余流量 100G', '过期时间 2026', 'IPLC 香港', 'a', 'b', 'ab', 'x', 'xxx', 'axb', '', ' ',
+           'Name With Spaces', '123', 'abcabc', 'ÀÉ', 'ǅ', '\n', 'a\nb', 'AbA', '_', '😀']
+
+
+def filter_rows():
+    rows = []
+    values = [None, 123, 1.5, True, [], {}, '', ' ', '\t']
+    for p in PATTERNS:
+        values += [p, ' ' + p + ' ', p + '\n']
+    for v in values:
+        rows.append({'fn': 'validate_regex_filter', 'in': v, 'out': call(sf.validate_regex_filter, v)})
+    for p in PATTERNS:
+        for variant in (p, ' ' + p + ' '):
+            for sub in ({'regex_filter': variant, 'name': 'S'}, ):
+                items = [{'name': n} for n in NAMES_F] + ['str', None, 5, {'nom': 'x'}, {'name': 5}, {'name': None}, {'name': ['香港']}]
+                R.shuffle(items)
+                rows.append({'fn': 'filter_subscription_items', 'in': {'sub': sub, 'items': items},
+                             'out': call(sf.filter_subscription_items, sub, items)})
+    for sub in (None, 5, 'x', [], {}, {'regex_filter': 5}, {'regex_filter': None}, {'regex_filter': ['a']}):
+        items = [{'name': 'a'}, 'x']
+        rows.append({'fn': 'filter_subscription_items', 'in': {'sub': sub, 'items': items}, 'out': call(sf.filter_subscription_items, sub, items)})
+    rows.append({'fn': 'filter_subscription_items', 'in': {'sub': {'regex_filter': 'a'}, 'items': None}, 'out': call(sf.filter_subscription_items, {'regex_filter': 'a'}, None)})
+    return rows
+
+
+dump('filter.jsonl', filter_rows())
+
+# ---------------------------------------------------------------------- hosts
+from backend.utils import subscription_hosts as sh  # noqa: E402
+
+DOMS = ['jp-node.example.net', 'hk-node.example.net', 'Node.Example.Org.', 'a.test', 'b.test', 'c.test', 'x.example.com', 'node_1.test',
+        'bad_label-.test', 'localhost', '198.51.100.1', 'example', '例子.test', '-a.test', 'a' * 64 + '.test', ('a.' * 130) + 'com', '1.2.3']
+VALS = ['198.51.100.12', '2001:db8::12', '2001:DB8:0:0:0:0:0:12', '::ffff:192.0.2.1', 'fe80::1%eth0', '0.0.0.0', '::', '224.0.0.1', 'ff02::1',
+        'jp-entry.example.org', 'lan', 'Entry.Example.ORG.', '192.0.2.1,192.0.2.2', '010.0.0.1', '1.2.3', ' 192.0.2.5 ', 'node.test', '~', '']
+
+
+def hosts_value():
+    r = R.random()
+    if r < .55:
+        return pick(VALS)
+    if r < .8:
+        return [pick(VALS) for _ in range(R.choice([0, 1, 1, 2, 3, 9]))]
+    return pick([{'a': 1}, 5, None, True, [1, 2], [None], [['x']], 1.5])
+
+
+def yaml_scalar(v):
+    import yaml
+    return yaml.safe_dump(v, default_flow_style=True, allow_unicode=True).strip().removesuffix('\n...').strip()
+
+
+def hosts_text():
+    n = R.choice([0, 1, 2, 3, 5, 12])
+    keys = []
+    for _ in range(n):
+        k = pick(DOMS + ['*.example.net', '+.example.net', '.example.net', 'google.com', 'ok.test', 'dup.test', '"quoted.test"', "'single.test'"])
+        keys.append(k)
+    style = R.randrange(5)
+    key_word = pick(['hosts', 'hosts', 'hosts', '"hosts"', "'hosts'", 'hosts '])
+    pre = pick(['proxies: []\n', 'mixed-port: 7890\nproxies:\n  - {name: a, type: http, server: a.test, port: 80}\n', '', '# hosts: x\n', '\n',
+                'proxies:\n  - name: n\n    type: http\n    hosts: ignored\n', 'dns:\n  hosts: nope\n'])
+    post = pick(['', 'proxy-groups: []\n', 'rules: []\n', '# trailing\n', 'x: 1\n'])
+    nl = pick(['\n', '\n', '\n', '\r\n', ' ', '\x1c'])
+    if style == 0:
+        body = key_word + ': {' + ', '.join(f'{k}: {yaml_scalar(hosts_value())}' for k in keys) + '}\n'
+    elif style == 1:
+        body = key_word + ':\n' + ''.join(f'  {k}: {yaml_scalar(hosts_value())}\n' for k in keys)
+    elif style == 2:
+        body = key_word + ':\n' + ''.join(f'  {k}:\n' + ''.join(f'  - {pick(VALS)}\n' for _ in range(R.choice([1, 2]))) for k in keys)
+    elif style == 3:
+        body = key_word + ':\n' + ''.join(f'  # c\n  {k}: {pick(VALS)}\n\n' for k in keys)
+    else:
+        body = key_word + pick([': [198.51.100.1]\n', ': 5\n', ':\n', ': ~\n', ': "text"\n', ':\n  a.test: [unclosed\n', ': {a: 1\n', ':\n\t bad: tab\n'])
+    text = pre + body + post
+    if nl != '\n':
+        text = text.replace('\n', nl)
+    return text
+
+
+def hosts_rows():
+    rows = []
+    texts = ['no hosts here', '', 'hosts', 'c3M6Ly9ZV1Z6TFRJMU5pMW5ZMjA2Y0dGemMzZHZjbVE9QDE5OC41MS4xMDAuMTo4Mzg4I2hvc3Rz',
+             'proxies: []\nhosts: {node.test: 198.51.100.4}\n', 'hosts:\n  node.test:\n  - 198.51.100.4\nproxies: []\n']
+    texts += [hosts_text() for _ in range(900)]
+    big = {f'n{i}.test': '198.51.100.1' for i in range(1030)}
+    import yaml
+    texts.append(yaml.safe_dump({'proxies': [], 'hosts': big}))
+    texts.append(yaml.safe_dump({'proxies': [], 'hosts': {'a.test': 'b.test', 'b.test': 'a.test'}}))
+    records = []
+    for t in texts:
+        out = call(sh.extract_subscription_hosts, t)
+        records.append(out)
+        rows.append({'fn': 'extract_subscription_hosts', 'in': t, 'out': out})
+    good = [r for r in records if isinstance(r, dict) and 'entries' in r]
+    for _ in range(300):
+        a, b = R.choice(good + [None, {}]), R.choice(good + [None, {}])
+        rows.append({'fn': 'hosts_digest', 'in': a, 'out': call(sh.hosts_digest, a)})
+        rows.append({'fn': 'describe_change', 'in': {'previous': a, 'current': b}, 'out': call(sh.describe_change, a, b)})
+    for v in ['*.a.test', '+.a.test', '.a.test', 'a.test', 'A.TEST.', 'x.*.test', '*.*.test', '+.', '.', '', 5, None, 'a.test '] :
+        for d in ['a.test', 'x.a.test', 'y.x.a.test', 'b.test', 'x.b.test', 'a.x.test']:
+            rows.append({'fn': '_matches', 'in': {'pattern': v, 'domain': d}, 'out': call(sh._matches, v, d)})
+    rows += merge_rows(good)
+    return rows
+
+
+def merge_rows(good):
+    rows = []
+    for case in range(700):
+        nsub = R.choice([1, 1, 2, 3])
+        subs, caches = [], {}
+        for i in range(nsub):
+            sid = f's{i}'
+            rec = R.choice(good) if good and R.random() < .9 else None
+            servers = []
+            if rec:
+                servers = list(rec['entries'])
+            nodes = []
+            for j in range(R.choice([1, 2, 4])):
+                server = pick(servers) if servers and R.random() < .75 else pick(['other.example.com', '203.0.113.9', 'jp-node.example.net', ''])
+                nodes.append({'name': pick(['HK 01', 'JP 01', 'SG 01', 'X', f'n{j}']), 'type': 'socks5', 'server': server, 'port': 1})
+            if R.random() < .1:
+                nodes.append('junk')
+            url = f'https://sub.test/{sid}' if R.random() < .9 else None
+            sub = {'id': sid, 'name': pick(['机场', 'Air', f'Sub {i}', '']), 'url': url, 'enabled': R.random() < .9}
+            if R.random() < .3:
+                sub['regex_filter'] = pick(['HK', 'JP|HK', '^(?!.*SG).*$', '(', ' ', 'zzz'])
+            subs.append(sub)
+            meta = {'url': url if R.random() < .9 else 'https://sub.test/rotated'}
+            if rec is not None:
+                meta['hosts'] = rec
+            caches[sid] = {'nodes': nodes, 'metadata': meta} if R.random() < .95 else None
+        aggs = []
+        if R.random() < .4:
+            aggs.append({'id': 'agg', 'name': 'Agg', 'enabled': R.random() < .9, 'subscriptions': [s['id'] for s in subs if R.random() < .7],
+                         'nodes': ['imp'] if R.random() < .5 else [], 'regex_filter': pick(['', 'JP|Imported', '(', 'HK', None])})
+        cfg_nodes = [{'id': 'imp', 'name': 'Imported', 'enabled': True, 'server': pick(['jp-node.example.net', 'x.example.com']),
+                      'subscription_id': pick([s['id'] for s in subs])},
+                     {'id': 'own', 'name': 'Own', 'enabled': True, 'server': 'google.com'}]
+        config = {'subscriptions': subs, 'subscription_aggregations': aggs, 'nodes': cfg_nodes}
+        providers = {}
+        for s in subs:
+            if R.random() < .85:
+                q = pick(['', '?token=t', '?regex=HK', '?regex=%E9%A6%99&exclude_regex=SG', '?regex=(&x=1', '?exclude_regex=JP', '?regex=+'])
+                providers[s['name'] or s['id']] = {'type': 'http', 'url': f"https://panel.test/api/subscriptions/{s['id']}/proxies{q}"}
+        for a in aggs:
+            if R.random() < .85:
+                q = pick(['', '?regex=JP', '?exclude_regex=HK'])
+                providers['Agg'] = {'type': 'http', 'url': f"https://panel.test/api/aggregations/{a['id']}/proxies{q}"}
+        if R.random() < .1:
+            providers['Odd'] = pick([5, {'url': 5}, {'url': 'https://x/api/subscriptions/nope/proxies'}, {'url': 'https://x/%73ubscriptions/s0'}])
+        main = {'proxy-providers': providers}
+        if R.random() < .6:
+            main['hosts'] = pick([{'jp-node.example.net': '192.0.2.10', '+.wild.example.net': '192.0.2.11'}, {'+.example.org': 'jp-node.example.net'},
+                                  {}, 'notdict', {'a': ['1.1.1.1']}])
+        inline = []
+        for n in cfg_nodes:
+            if R.random() < .5:
+                inline.append({'node': n, 'proxy': R.choice([None, {'server': 'hk-node.example.net'}, {}, {'server': 'jp-node.example.net'}])})
+        user_keys = [pick(['jp-node.example.net', '+.wild.example.net', '*.example.net', 'x.example.com'])] if R.random() < .3 else []
+        mosdns_keys = [pick(['hk-node.example.net', 'x.example.com'])] if R.random() < .3 else []
+        scenario = {'main': main, 'config': config, 'caches': caches, 'user_keys': user_keys, 'mosdns_keys': mosdns_keys, 'inline': inline}
+        rows.append({'fn': 'merge_subscription_hosts', 'in': scenario, 'out': run_merge(scenario)})
+    return rows
+
+
+def run_merge(sc):
+    import backend.utils.subscription_cache as sc_mod
+    tmp = tempfile.mkdtemp()
+    paths = {}
+    for sid in sc['caches']:
+        p = os.path.join(tmp, sid)
+        open(p, 'w').write(sid)
+        paths[sid] = p
+    saved = (sc_mod._get_cache_path, sc_mod.load_subscription_cache)
+    sc_mod._get_cache_path = lambda sid: paths.get(sid, os.path.join(tmp, 'missing-' + str(sid)))
+    sc_mod.load_subscription_cache = lambda sid: copy.deepcopy(sc['caches'].get(sid))
+    sh._index.clear()
+    main = copy.deepcopy(sc['main'])
+    merged = {}
+    try:
+        inline = [(copy.deepcopy(i['node']), copy.deepcopy(i['proxy'])) for i in sc['inline']]
+        report = call(sh.merge_subscription_hosts, main, copy.deepcopy(sc['config']), user_keys=sc['user_keys'],
+                      mosdns_keys=sc['mosdns_keys'], inline_proxies=inline, merged_out=merged)
+    finally:
+        sc_mod._get_cache_path, sc_mod.load_subscription_cache = saved
+        sh._index.clear()
+    return {'report': report, 'main': main, 'merged': merged}
+
+
+dump('hosts.jsonl', hosts_rows())

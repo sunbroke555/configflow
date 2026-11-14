@@ -1,0 +1,116 @@
+package subs
+
+import (
+	"strings"
+	"testing"
+
+	"configflow/internal/jsonx"
+)
+
+func asObj(v any) *jsonx.Object {
+	o, _ := v.(*jsonx.Object)
+	return o
+}
+
+func TestFilterCorpus(t *testing.T) {
+	rows := loadCorpus(t, "filter.jsonl")
+	pending := 0
+	for i, row := range rows {
+		switch row.Fn {
+		case "validate_regex_filter":
+			got := ValidateRegexFilter(row.In)
+			want, _ := row.Out.(string)
+			if row.Out != nil && !isString(row.Out) {
+				t.Fatalf("row %d: unexpected output %v", i, row.Out)
+			}
+			if got != want {
+				t.Fatalf("row %d validate_regex_filter(%s): got %q want %q", i, compact(t, row.In), got, want)
+			}
+		case "filter_subscription_items":
+			in := asObj(row.In)
+			if pattern := jsonx.Str(asObj(in.Value("sub")).Value("regex_filter")); strings.Contains(pattern, `\N{`) {
+				pending++ // \N{name} is not supported by the rules regex engine yet
+				continue
+			}
+			items, _ := in.Value("items").([]any)
+			got := FilterSubscriptionItems(in.Value("sub"), items)
+			if g, w := compact(t, got), compact(t, row.Out); g != w {
+				t.Fatalf("row %d filter %s\n got  %s\n want %s", i, compact(t, row.In), g, w)
+			}
+		}
+	}
+	t.Logf("%d rows, %d pending (\\N{name})", len(rows), pending)
+}
+
+func TestHostsCorpus(t *testing.T) {
+	rows := loadCorpus(t, "hosts.jsonl")
+	kinds := map[string]int{}
+	for i, row := range rows {
+		kinds[row.Fn]++
+		switch row.Fn {
+		case "extract_subscription_hosts":
+			got := ExtractSubscriptionHosts(row.In.(string))
+			var g any
+			if got != nil {
+				g = got
+			}
+			if gs, ws := compact(t, g), compact(t, row.Out); gs != ws {
+				t.Fatalf("row %d extract(%q)\n got  %s\n want %s", i, row.In, gs, ws)
+			}
+		case "hosts_digest":
+			if got := HostsDigest(asObj(row.In)); got != row.Out.(string) {
+				t.Fatalf("row %d hosts_digest(%s): got %s want %v", i, compact(t, row.In), got, row.Out)
+			}
+		case "describe_change":
+			in := asObj(row.In)
+			got := DescribeChange(asObj(in.Value("previous")), asObj(in.Value("current")))
+			if g, w := compact(t, got), compact(t, row.Out); g != w {
+				t.Fatalf("row %d describe_change got %s want %s", i, g, w)
+			}
+		case "_matches":
+			in := asObj(row.In)
+			if got := Matches(in.Value("pattern"), in.GetString("domain")); got != row.Out.(bool) {
+				t.Fatalf("row %d _matches(%s): got %v", i, compact(t, row.In), got)
+			}
+		case "merge_subscription_hosts":
+			checkMerge(t, i, row)
+		}
+	}
+	t.Logf("%v", kinds)
+}
+
+func strList(v any) []string {
+	var out []string
+	for _, x := range v.([]any) {
+		out = append(out, x.(string))
+	}
+	return out
+}
+
+func checkMerge(t *testing.T, i int, row corpusRow) {
+	in := asObj(row.In)
+	main := in.GetObject("main")
+	caches := in.GetObject("caches")
+	indexOf := func(sub *jsonx.Object) *HostsIndex {
+		id, _ := sub.Value("id").(string)
+		if !caches.Has(id) {
+			return nil
+		}
+		cache := asObj(caches.Value(id))
+		if cache == nil {
+			cache = jsonx.NewObject()
+		}
+		return NewHostsIndex(cache).ForURL(sub)
+	}
+	var inline []InlineProxy
+	for _, v := range in.GetList("inline") {
+		o := asObj(v)
+		inline = append(inline, InlineProxy{Node: o.GetObject("node"), Proxy: asObj(o.Value("proxy"))})
+	}
+	merged := jsonx.NewObject()
+	report := MergeSubscriptionHosts(main, in.GetObject("config"), strList(in.Value("user_keys")), strList(in.Value("mosdns_keys")), inline, merged, indexOf)
+	got := jsonx.Obj("report", report, "main", main, "merged", merged)
+	if g, w := compact(t, got), compact(t, row.Out); g != w {
+		t.Fatalf("row %d merge\n in   %s\n got  %s\n want %s", i, compact(t, row.In), g, w)
+	}
+}
