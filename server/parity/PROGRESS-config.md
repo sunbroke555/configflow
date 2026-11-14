@@ -823,3 +823,21 @@ Questions for the maintainer (from this audit):
 - `_rebuild_corrupt_locked` (rebuild a damaged database from a matching `config.json`) is not ported; Go refuses with a restore hint. Accept as part of the legacy decision?
 - Commented editor open items (C11) and the yamlx limits (C02): implement or accept?
 - Cross-domain order: C18 (Mihomo generation), C27 (rule DNS), C34 (artifacts), C36 (setup), C37 (domain discovery) call agents/routers code. Compat copies in config, or let those agents/routers modules go first?
+
+## Coordinator decisions (2026-11-15)
+
+1. **Corrupt-database rebuild from `config.json`** (`_rebuild_corrupt_locked`) is part of the legacy
+   decision: `config.json` only exists in data dirs migrated from the pre-SQLite format, which the Go
+   server does not support. Not ported; C03 keeps Python's "no safe recovery source" behaviour.
+2. **C11 editor refusals / C02 yamlx limits**: the small items (lone `-`, null item comments,
+   `!!binary`/`!!map`/`!!seq`/`!!set`, block collection expanded in a flow collection, yamlx `1,000` in flow
+   collections and `!!int '0x-1F'`) are fixed during the modules' adversarial review. The CRLF case is an
+   open item pending the maintainer's decision; it does not block other modules.
+3. **Config modules that call agents/routers code** (C18, C27, C34, C36, C37): do not copy those
+   functions. Declare a small interface or hook in the config package for exactly what is called (same
+   pattern as `repo.Hooks`), with a fail-closed or explicitly-documented default, and list it under the
+   module as "provided by <domain>". The agents/routers module that ports the Python function registers
+   the implementation. The domain differential runs only after the providers exist.
+4. Edge differences found in C03 spot checks (dangling symlink `lexists` vs `exists`, non-string agent
+   name, non-object `mosdns`) go to the C03 reviewer: match Python's observable behaviour, except that a
+   Python crash (500) may become a handled error — document each.
