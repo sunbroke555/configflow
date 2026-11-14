@@ -1272,7 +1272,20 @@ def anchor_sources():
                         lines = form + ['shared:', E('- ' + alias, sc)] + tail
                         out.append([top] + lines if top else lines)
             out.append(([top] if top else []) + ['pol: &pol Pinned', 'listeners:', '- name: x', E('  proxy: *pol', bc), '- name: y', '  proxy: Pinned'])
-    return ['\n'.join(lines) + '\n' for lines in out]
+    texts = ['\n'.join(lines) + '\n' for lines in out]
+    # head comment only / inner comment only on an aliased block collection
+    for head in ('', ' # base'):
+        for inner in ('', ' # k'):
+            if not head and not inner:
+                continue
+            block = f'shared: &base{head}\n  name: pinned\n  k: 1{inner}\n  proxy: Pinned\n'
+            for tail in ('listeners:\n- *base\n', 'listeners:\n- *base\nb: *base\n', 'listeners:\n- *base\nb:\n- *base\n',
+                         'listeners:\n- <<: *base\n  port: 1\n', 'listeners: [*base]\n',
+                         'listeners:\n- name: q\n  proxy: Pinned\nb: *base\n', 'listeners:\n- name: q\n  proxy: Pinned\n'):
+                texts.append(block + tail)
+            texts.append(f'top: &t{head}\n  - 1\n  - 2{inner}\nlisteners:\n- {{name: q, proxy: Pinned}}\nb: *t\n')
+            texts.append(f'shared: &base{head}\n\n  # pre\n  name: x{inner}\nlisteners:\n- name: q\n  proxy: Pinned\nb: *base\n')
+    return texts
 
 
 def commented_anchor_rows():

@@ -29,11 +29,14 @@ rows stay documented as is.
   - Category tags: block-context `!!str` (TaggedScalar kept), `!!int/!!float/!!bool/!!null` and verbatim
     `!<tag:yaml.org,2002:..>` (constructed + represented); `commented_blocks` corpus 1112 rows (9c916e0e).
   - Category comment on a bare dash line holding a nested block: comment and following lines move above
-    the dash at their column, before removed-key comments.
+    the dash at their column, before removed-key comments (365fe740).
+  - Category alias to commented block: head comment (`key: &a # c` on a block collection) kept on the node,
+    written on its own line (and above the dash of an expansion); inner comments travel with copies;
+    merged entries carry no comments; ruamel-crash combination refused; anchors corpus extended to 1965 rows.
 
 ## Current counts (refused / rows; mismatches 0 everywhere)
 - commented (random): 118 / 2411 — CRLF with comments 118.
-- commented_anchors: 336 / 1884 — alias to a commented block collection 336 (+24 Python crashes).
+- commented_anchors: 33 / 1965 — commented block collection expanded inside a flow collection 33 (+24 Python crashes, Go refuses them too).
 - commented_realistic: 0 / 4911.
 - commented_scalars: 16 / 2080 — yamlx cannot parse source (`1,000` in flow) 8, lone indicator `-` 4,
   comment on null item of nested seq 4.
@@ -43,8 +46,8 @@ rows stay documented as is.
 Nothing half-written.
 
 ## Next
-1. CRLF documents with comments (118): reproduce ruamel's mixed `\r\r\n` / `\n` output.
-2. Alias to commented block (336): estimate; likely report instead of implementing.
+1. CRLF documents (decided: report with estimate, not implemented) with comments (118): reproduce ruamel's mixed `\r\r\n` / `\n` output.
+2. Alias to commented block expanded in flow (33): report with estimate.
 3. Hand-back with per-category leftovers (count, minimal example, reason).
 
 ## Decisions and findings

@@ -78,6 +78,10 @@ type node struct {
 	// bracket: ruamel keeps it on the collection itself (comment[0]), so it
 	// travels with the collection to alias expansions and copies.
 	post *comment
+	// head: the end-of-line comment after the anchor of an anchored block
+	// collection (`key: &a # c`); ruamel keeps it on the collection and
+	// writes it on its own line before the collection's content
+	head *comment
 	// endGap: comment lines written after a block mapping's last entry
 	endGap []string
 }

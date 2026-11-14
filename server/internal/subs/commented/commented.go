@@ -195,7 +195,8 @@ func materialize(m *node) (lead []string, err error) {
 	moved = append(moved, merge.rec.trail...)
 	for _, e := range source.entries {
 		if !own[keyIdentity(e.key)] && !isMergeKey(e.key) {
-			entries = append(entries, &entry{key: e.key, value: e.value, rec: copyRec(e.rec)})
+			// CommentedMap(result.items()) copies only the listener's own comments
+			entries = append(entries, &entry{key: e.key, value: e.value})
 		}
 	}
 	if len(moved) > 0 {
@@ -233,6 +234,10 @@ func attachComments(n *node, seen map[*node]bool) {
 			return
 		}
 		switch {
+		case !inSeq && v.anchor != "" && !v.flow && (v.kind == kMap || v.kind == kSeq):
+			c := *r.eol
+			v.head = &c
+			r.eol = nil
 		case v.kind == kAlias:
 			r.trail = append([]string{spaces(r.eol.col) + r.eol.text}, r.gap...)
 			r.eol, r.gap = nil, nil
@@ -249,23 +254,6 @@ func attachComments(n *node, seen map[*node]bool) {
 	for _, it := range n.items {
 		fix(it.value, &it.rec, true)
 		attachComments(it.value, seen)
-	}
-}
-
-func collectAliased(n *node, aliased map[*node]bool, seen map[*node]bool) {
-	if n == nil || seen[n] {
-		return
-	}
-	seen[n] = true
-	if n.kind == kAlias {
-		aliased[n.target] = true
-		return
-	}
-	for _, e := range n.entries {
-		collectAliased(e.value, aliased, seen)
-	}
-	for _, it := range n.items {
-		collectAliased(it.value, aliased, seen)
 	}
 }
 
@@ -292,45 +280,6 @@ func subtreeCommented(n *node, seen map[*node]bool) bool {
 		}
 	}
 	return false
-}
-
-// rejectCommentedAliases declines documents where a block collection that an
-// alias refers to has a comment on its header line or inside: ruamel then
-// writes the alias expansion as a flow collection with comments spread over
-// broken lines, which is not emulated. cur is the record of the source line
-// the node starts on.
-func rejectCommentedAliases(n *node, cur *rec, aliased map[*node]bool, seen map[*node]bool) error {
-	if n == nil {
-		return nil
-	}
-	if aliased[n] && !n.flow && (n.kind == kMap || n.kind == kSeq) {
-		if hasComment(cur) || subtreeCommented(n, map[*node]bool{}) {
-			return unsupported("comment in or on an aliased block collection")
-		}
-	}
-	if n.kind == kAlias || seen[n] {
-		return nil
-	}
-	seen[n] = true
-	for _, e := range n.entries {
-		r := &e.rec
-		if n.flow {
-			r = cur
-		}
-		if err := rejectCommentedAliases(e.value, r, aliased, seen); err != nil {
-			return err
-		}
-	}
-	for _, it := range n.items {
-		r := &it.rec
-		if n.flow {
-			r = cur
-		}
-		if err := rejectCommentedAliases(it.value, r, aliased, seen); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 var removedComment = func(line string) string {
@@ -364,13 +313,6 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 	}
 	if err := rejectMerge(doc.root, map[*node]bool{}); err != nil {
 		return "", err
-	}
-	aliased := map[*node]bool{}
-	collectAliased(doc.root, aliased, map[*node]bool{})
-	if len(aliased) > 0 {
-		if err := rejectCommentedAliases(doc.root, nil, aliased, map[*node]bool{}); err != nil {
-			return "", err
-		}
 	}
 	attachComments(doc.root, map[*node]bool{})
 	if doc.root.kind != kMap {
@@ -423,6 +365,12 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 				}
 				comments = append(comments, en.rec.gap...)
 				replacement.entries = append(replacement.entries[:at], replacement.entries[at+1:]...)
+				if len(comments) > 0 && replacement.head != nil {
+					// ruamel's emitter fails (AssertionError) on a listener that
+					// keeps its own head comment and gets the removed key's
+					// comment set before it
+					return "", unsupported("removed key comment on a listener with its own comment")
+				}
 				if len(comments) > 0 {
 					var texts []string
 					for _, c := range comments {

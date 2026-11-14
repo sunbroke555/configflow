@@ -19,7 +19,7 @@ func TestCommentedCorpus(t *testing.T) { runCommentedCorpus(t, "commented.jsonl.
 // listeners, with comments at every position (testdata/gen.py
 // anchor_sources).
 func TestCommentedAnchorsCorpus(t *testing.T) {
-	runCommentedCorpus(t, "commented_anchors.jsonl.gz", 336)
+	runCommentedCorpus(t, "commented_anchors.jsonl.gz", 33)
 }
 
 // TestCommentedRealisticCorpus covers the Mihomo base configs found in the

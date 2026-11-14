@@ -312,6 +312,12 @@ func (e *emitter) emitValueOnly(head string, v *node, r *rec, seqCol, childCol i
 			e.lineNoWidth(lines[len(lines)-1], r)
 			return
 		}
+		if target.head != nil {
+			// the collection's own comment: on its own line, at its column
+			withHead := *r
+			withHead.gap = append([]string{spaces(target.head.col) + target.head.text}, r.gap...)
+			r = &withHead
+		}
 		e.line(join(head, prefix), r, nil)
 		if target.kind == kMap {
 			e.emitMap(target, childCol, spaces(childCol))
@@ -334,6 +340,10 @@ func (e *emitter) emitSeq(n *node, col int, lead string, underMap bool) {
 		v := it.value
 		target, alias, prefixA := e.peekResolve(v)
 		compact := alias == "" && target.kind != kScalar && !target.flow && !(target.kind == kMap && len(target.entries) == 0) && !(target.kind == kSeq && len(target.items) == 0)
+		if compact && target.head != nil {
+			e.out = append(e.out, spaces(target.head.col)+target.head.text)
+			e.noteComment(target.head.text)
+		}
 		if compact && (it.rec.eol != nil || len(it.rec.gap) > 0) {
 			// a comment on a bare dash line (and the lines up to the first
 			// entry) moves above the dash, at its column, before the comments
@@ -489,6 +499,10 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 			w.plain(text, indent, true)
 		}
 	case kSeq:
+		if !target.flow && (target.head != nil || subtreeCommented(target, map[*node]bool{})) {
+			w.fail(unsupported("commented block collection expanded inside a flow collection"))
+			return
+		}
 		w.space()
 		w.put("[")
 		w.ws = true
@@ -512,6 +526,10 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 		w.nonl = false
 		w.postComment(target, parent)
 	default:
+		if !target.flow && (target.head != nil || subtreeCommented(target, map[*node]bool{})) {
+			w.fail(unsupported("commented block collection expanded inside a flow collection"))
+			return
+		}
 		single := inSeq && len(target.entries) == 1 && prefix == ""
 		if !single {
 			w.space()
