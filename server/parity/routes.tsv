@@ -113,11 +113,11 @@ GET	/api/aggregations/<agg_id>/preview	routes.aggregations.preview_aggregation_n
 GET	/api/aggregations/<agg_id>/provider	routes.aggregations.get_aggregation_provider		todo
 GET	/api/aggregations/<resource_id>/health-impact	routes.aggregations.health_impact		todo
 POST	/api/aggregations/reorder	routes.aggregations.reorder_aggregations		todo
-POST	/api/auth/login	routes.auth.login		todo
-GET	/api/auth/status	routes.auth.auth_status		todo
-GET	/api/auth/verify	routes.auth.verify		todo
-GET	/api/backup/config	routes.settings.backup_config		todo
-POST	/api/backup/config	routes.settings.backup_config		todo
+POST	/api/auth/login	routes.auth.login	internal/api/auth	done
+GET	/api/auth/status	routes.auth.auth_status	internal/api/auth	done
+GET	/api/auth/verify	routes.auth.verify	internal/api/auth	done
+GET	/api/backup/config	routes.settings.backup_config	internal/api/settings	done
+POST	/api/backup/config	routes.settings.backup_config	internal/api/settings	done
 POST	/api/backup/now	routes.settings.backup_now		todo
 POST	/api/backup/test	routes.settings.test_backup		todo
 GET	/api/client-devices	routes.client_devices.client_devices		todo
@@ -125,9 +125,9 @@ PUT	/api/client-devices	routes.client_devices.client_devices		todo
 GET	/api/client-devices/discovery	routes.client_devices.client_device_discovery		todo
 POST	/api/client-devices/fixed-ip/apply	routes.client_devices.apply_fixed_ip		todo
 POST	/api/client-devices/fixed-ip/preview	routes.client_devices.preview_fixed_ip		todo
-DELETE	/api/config-token	routes.settings.handle_config_token		todo
-GET	/api/config-token	routes.settings.handle_config_token		todo
-POST	/api/config-token	routes.settings.handle_config_token		todo
+DELETE	/api/config-token	routes.settings.handle_config_token	internal/api/settings	done
+GET	/api/config-token	routes.settings.handle_config_token	internal/api/settings	done
+POST	/api/config-token	routes.settings.handle_config_token	internal/api/settings	done
 GET	/api/config/<profile_id>/loon	routes.config.get_profile_loon_config		todo
 GET	/api/config/<profile_id>/loon/<filename>	routes.config.get_profile_loon_config		todo
 GET	/api/config/<profile_id>/mihomo	routes.config.get_profile_mihomo_config		todo
@@ -188,9 +188,9 @@ POST	/api/generate/oxidns	routes.generate.generate_oxidns		todo
 POST	/api/generate/oxidns/preview	routes.generate.preview_oxidns		todo
 POST	/api/generate/surge	routes.generate.generate_surge		todo
 POST	/api/generate/surge/preview	routes.generate.preview_surge		todo
-POST	/api/logs/clear	routes.logs.clear_logs		todo
-GET	/api/logs/info	routes.logs.get_log_info		todo
-GET	/api/logs/tail	routes.logs.get_logs		todo
+POST	/api/logs/clear	routes.logs.clear_logs	internal/api/logs	done
+GET	/api/logs/info	routes.logs.get_log_info	internal/api/logs	done
+GET	/api/logs/tail	routes.logs.get_logs	internal/api/logs	done
 GET	/api/mosdns/api-settings	routes.mosdns.handle_mosdns_api_settings		todo
 POST	/api/mosdns/api-settings	routes.mosdns.handle_mosdns_api_settings		todo
 GET	/api/mosdns/cache-settings	routes.mosdns.handle_mosdns_cache_settings		todo
@@ -218,8 +218,8 @@ GET	/api/nodes/latency/settings	routes.nodes.node_latency_settings		todo
 POST	/api/nodes/latency/settings	routes.nodes.node_latency_settings		todo
 POST	/api/nodes/parse-lines	routes.nodes.parse_node_lines		todo
 POST	/api/nodes/reorder	routes.nodes.reorder_nodes		todo
-GET	/api/notifications	routes.notifications.list_notifications		todo
-POST	/api/notifications/read	routes.notifications.read_notifications		todo
+GET	/api/notifications	routes.notifications.list_notifications	internal/api/notifications	wip
+POST	/api/notifications/read	routes.notifications.read_notifications	internal/api/notifications	done
 POST	/api/oxidns/common-settings	routes.oxidns.read_oxidns_common_settings		todo
 POST	/api/oxidns/common-settings/apply	routes.oxidns.apply_oxidns_common_settings		todo
 POST	/api/oxidns/editor	routes.oxidns.prepare_oxidns_editor		todo
@@ -340,23 +340,23 @@ GET	/api/rules/local/<name>	routes.rules.get_local_rule		todo
 POST	/api/rules/match-test	routes.rules.match_test_rule		todo
 PUT	/api/rules/policy	routes.rules.set_rule_policy		todo
 POST	/api/rules/reorder	routes.rules.reorder_rules		todo
-GET	/api/server-domain	routes.settings.handle_server_domain		todo
-POST	/api/server-domain	routes.settings.handle_server_domain		todo
+GET	/api/server-domain	routes.settings.handle_server_domain	internal/api/settings	done
+POST	/api/server-domain	routes.settings.handle_server_domain	internal/api/settings	done
 GET	/api/settings/dependencies	routes.settings.list_third_party_dependencies		todo
 POST	/api/settings/dependencies/sub-store/mode	routes.settings.set_sub_store_mode		todo
 POST	/api/settings/dependencies/sub-store/update	routes.settings.update_sub_store_dependency		todo
-GET	/api/settings/rule-fetch-proxy	routes.settings.handle_rule_fetch_proxy		todo
-POST	/api/settings/rule-fetch-proxy	routes.settings.handle_rule_fetch_proxy		todo
-GET	/api/settings/subscription-aggregation	routes.settings.handle_subscription_aggregation		todo
-POST	/api/settings/subscription-aggregation	routes.settings.handle_subscription_aggregation		todo
-GET	/api/settings/web-port	routes.settings.handle_web_port		todo
-POST	/api/settings/web-port	routes.settings.handle_web_port		todo
+GET	/api/settings/rule-fetch-proxy	routes.settings.handle_rule_fetch_proxy	internal/api/settings	done
+POST	/api/settings/rule-fetch-proxy	routes.settings.handle_rule_fetch_proxy	internal/api/settings	done
+GET	/api/settings/subscription-aggregation	routes.settings.handle_subscription_aggregation	internal/api/settings	done
+POST	/api/settings/subscription-aggregation	routes.settings.handle_subscription_aggregation	internal/api/settings	done
+GET	/api/settings/web-port	routes.settings.handle_web_port	internal/api/settings	done
+POST	/api/settings/web-port	routes.settings.handle_web_port	internal/api/settings	done
 GET	/api/setup	routes.setup.setup_sessions		todo
 POST	/api/setup	routes.setup.setup_sessions		todo
 GET	/api/setup/<session_id>	routes.setup.setup_session		todo
 PATCH	/api/setup/<session_id>	routes.setup.setup_session		todo
 POST	/api/setup/<session_id>/<operation>	routes.setup.setup_action		todo
-GET	/api/stats/overview	routes.stats.get_overview		todo
+GET	/api/stats/overview	routes.stats.get_overview	internal/api/stats	done
 GET	/api/subscriptions	routes.subscriptions.handle_subscriptions		todo
 POST	/api/subscriptions	routes.subscriptions.handle_subscriptions		todo
 GET	/api/subscriptions/<resource_id>/health-impact	routes.subscriptions.health_impact		todo
@@ -369,10 +369,10 @@ GET	/api/subscriptions/health	routes.subscriptions.subscriptions_health		todo
 GET	/api/subscriptions/proxies	routes.subscriptions.get_all_subscription_proxies		todo
 POST	/api/subscriptions/reorder	routes.subscriptions.reorder_subscriptions		todo
 GET	/api/subscriptions/test	routes.subscriptions.test_subscription_route		todo
-GET	/api/tasks	routes.tasks.get_tasks		todo
-PUT	/api/tasks/interval	routes.tasks.set_interval		todo
-POST	/api/tasks/run	routes.tasks.run_task		todo
-GET	/api/version	routes.settings.get_version		todo
+GET	/api/tasks	routes.tasks.get_tasks	internal/api/tasks	wip
+PUT	/api/tasks/interval	routes.tasks.set_interval	internal/api/tasks	wip
+POST	/api/tasks/run	routes.tasks.run_task	internal/api/tasks	wip
+GET	/api/version	routes.settings.get_version	internal/api/settings	done
 DELETE	/mcp	mcp_server.server.unsupported_transport		todo
 GET	/mcp	mcp_server.server.unsupported_transport		todo
 POST	/mcp	mcp_server.server.handle_mcp		todo

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"configflow/internal/jsonx"
+	"configflow/internal/localhttp"
 	"configflow/internal/urlx"
 )
 
@@ -208,7 +209,8 @@ func (c *Ctx) HostURL() string { return c.Scheme() + "://" + c.Host() + "/" }
 // URLRoot is request.url_root: HostURL plus the script root of an in-process
 // dispatch (localhttp).
 func (c *Ctx) URLRoot() string {
-	return c.HostURL()
+	root := strings.TrimRight(localhttp.ScriptRoot(c.Request.Context()), "/")
+	return c.Scheme() + "://" + c.Host() + root + "/"
 }
 
 // ContentLength is request.content_length (ok false when unknown).
