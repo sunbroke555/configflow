@@ -1323,3 +1323,142 @@ def psl_rows():
 
 
 dump('psl.jsonl', psl_rows())
+
+
+# ------------------------------------------------- commented: realistic bases
+MIHOMO_KEYS = {'mixed-port', 'port', 'socks-port', 'redir-port', 'tproxy-port', 'allow-lan', 'bind-address', 'mode',
+               'log-level', 'ipv6', 'external-controller', 'dns', 'tun', 'sniffer', 'listeners', 'proxies',
+               'proxy-groups', 'rules', 'rule-providers', 'proxy-providers', 'hosts', 'profile', 'sub-rules',
+               'geodata-mode', 'unified-delay', 'tcp-concurrent', 'find-process-mode', 'global-client-fingerprint',
+               'secret', 'keep-alive-interval', 'experimental', 'ntp', 'geox-url'}
+
+
+def _mihomo_doc(text):
+    import yaml as _y
+    try:
+        doc = _y.safe_load(text)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(doc, dict) and len(set(map(str, doc)) & MIHOMO_KEYS) >= 1 and all(isinstance(k, str) for k in doc):
+        return doc
+    return None
+
+
+def realistic_bases():
+    """Mihomo base configs as they exist in the repository: the shipped
+    template, its PyYAML / JSON / full-TUN rewrites, YAML literals of the
+    backend tests and YAML blocks of the documentation."""
+    import ast
+    import glob
+    import yaml as _y
+    from backend.common.router_split import full_tun_base_yaml
+    bases = {}
+
+    def add(label, text):
+        if text and text.strip() and text not in bases.values() and _mihomo_doc(text) is not None:
+            bases[label] = text
+    template = json.load(open('backend/config_template.json', encoding='utf-8'))['mihomo']['custom_config']
+    add('template', template)
+    doc = _y.safe_load(template)
+    add('template/safe_dump', _y.safe_dump(doc, allow_unicode=True, sort_keys=False))
+    add('template/json', json.dumps(doc, ensure_ascii=False))
+    try:
+        add('template/full_tun', full_tun_base_yaml(template))
+    except Exception:  # noqa: BLE001
+        pass
+    for path in sorted(glob.glob('backend/test_*.py')):
+        try:
+            tree = ast.parse(open(path, encoding='utf-8').read())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and '\n' in node.value and ':' in node.value:
+                add(f'{path}:{node.lineno}', node.value)
+    for path in sorted(glob.glob('doc/**/*.md', recursive=True) + glob.glob('docs/**/*.md', recursive=True)):
+        text = open(path, encoding='utf-8').read()
+        for i, block in enumerate(re.findall(r'```ya?ml[^\n]*\n(.*?)```', text, re.S)):
+            add(f'{path}#{i}', block)
+    return bases
+
+
+LISTENER_BLOCKS = [
+    # indented, comments
+    lambda old: ('listeners:\n  # 局域网入站\n  - name: mixed-in\n    type: mixed\n    port: 7891\n'
+                 f'    proxy: {old} # 固定走这个策略\n  - name: socks-in\n    type: socks\n    port: 7892\n'
+                 '    listen: 0.0.0.0\n    udp: true\n'),
+    # indentless, no comments
+    lambda old: f'listeners:\n- name: mixed-in\n  type: mixed\n  port: 7891\n  proxy: {old}\n  users: []\n',
+    # flow items
+    lambda old: (f'listeners:\n  - {{name: http-in, type: http, port: 7893, proxy: {old}}}\n'
+                 '  - {name: direct-in, type: mixed, port: 7894, proxy: DIRECT}\n'),
+    # rule + sub-rules, quoted target
+    lambda old: (f'listeners:\n  - name: lan\n    type: mixed\n    port: 7895\n    listen: 0.0.0.0\n'
+                 f'    proxy: "{old}"\n    rule: lan-rules\nsub-rules:\n  lan-rules:\n    - MATCH,DIRECT\n'),
+    # single-quoted, users with auth, blank line between listeners
+    lambda old: (f"listeners:\n  - name: auth-in\n    type: socks\n    port: 7896\n    proxy: '{old}'\n"
+                 '    users:\n      - username: user\n        password: example-pass\n\n'
+                 f'  - name: tproxy-in\n    type: tproxy\n    port: 7897\n    proxy: {old}\n'),
+]
+
+
+def _insert_listeners(base, block, where):
+    nl = '\r\n' if '\r\n' in base else '\n'
+    block = block.replace('\n', nl)
+    if base.lstrip().startswith('{'):
+        return None  # a JSON document cannot take a block section
+    if where == 'end':
+        return base if base.endswith(nl) else base + nl
+    lines = base.split(nl)
+    if where == 'top':
+        start = 0
+        while start < len(lines) and (lines[start].startswith('#') or not lines[start].strip()):
+            start += 1
+    else:  # before dns:
+        start = next((i for i, l in enumerate(lines) if l.startswith('dns:')), None)
+        if start is None:
+            return None
+    return nl.join(lines[:start]) + (nl if start else '') + block + nl.join(lines[start:])
+
+
+def realistic_sources():
+    out = []
+    import yaml as _y
+    for label, base in realistic_bases().items():
+        doc = _mihomo_doc(base)
+        existing = [l.get('proxy') for l in (doc.get('listeners') or []) if isinstance(doc.get('listeners'), list)
+                    and isinstance(l, dict) and isinstance(l.get('proxy'), str)]
+        for old in sorted(set(existing)):
+            out.append((label + '/own', base, old))
+        if 'listeners' in doc:
+            continue
+        for bi, make in enumerate(LISTENER_BLOCKS):
+            for old in ('Pinned', '🚀 节点选择'):
+                block = make(old)
+                for where in ('end', 'top', 'dns'):
+                    if where == 'end':
+                        text = base if base.endswith('\n') else base + '\n'
+                        text += block.replace('\n', '\r\n') if '\r\n' in base else block
+                    else:
+                        text = _insert_listeners(base, block, where)
+                    if text is None or _mihomo_doc(text) is None:
+                        continue
+                    out.append((f'{label}/L{bi}/{where}', text, old))
+                if bi != 0:
+                    break  # the emoji name only with the first block
+    return out
+
+
+def commented_realistic_rows():
+    rows = []
+    for label, text, old in realistic_sources():
+        for new_name in (None, 'Renamed', '🇭🇰 香港 节点'):
+            profile = {'mihomo': {'custom_config': text}}
+            try:
+                out = {'changed': ml.relink_group_listeners(profile, old, new_name), 'config': profile['mihomo']['custom_config']}
+            except BaseException as exc:  # noqa: BLE001
+                out = {'error': str(exc), 'type': type(exc).__name__}
+            rows.append({'fn': 'relink_group_listeners', 'in': {'label': label, 'config': text, 'old': old, 'new': new_name}, 'out': out})
+    return rows
+
+
+dump('commented_realistic.jsonl', commented_realistic_rows())

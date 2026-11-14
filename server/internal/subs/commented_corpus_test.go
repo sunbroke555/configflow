@@ -22,6 +22,14 @@ func TestCommentedAnchorsCorpus(t *testing.T) {
 	runCommentedCorpus(t, "commented_anchors.jsonl.gz", 336)
 }
 
+// TestCommentedRealisticCorpus covers the Mihomo base configs found in the
+// repository (template and its rewrites, test fixtures, documentation) with
+// listeners in the usual layouts (testdata/gen.py realistic_sources). No
+// row may be refused.
+func TestCommentedRealisticCorpus(t *testing.T) {
+	runCommentedCorpus(t, "commented_realistic.jsonl.gz", 0)
+}
+
 func runCommentedCorpus(t *testing.T, file string, maxDeclined int) {
 	rows := loadCorpus(t, file)
 	stats := map[string]int{}
