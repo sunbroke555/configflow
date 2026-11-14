@@ -1,0 +1,421 @@
+// Package redact holds the response-redaction pieces of
+// backend/common/config_export.py: the stored credentials that must never
+// leave the server (current and retired rule proxy tokens, Agent tokens,
+// sensitive system_config fields) and the walk that replaces every string
+// containing one of them, in any URL-encoded form, with "[REDACTED]".
+//
+// The global JSON response hook of internal/httpx uses it for every JSON
+// response; route packages use it for text they show (Agent logs) and for
+// input checks (a config token must not contain an internal token). The rest
+// of config_export.py (sanitize_config_for_output, redact_oxidns_settings)
+// belongs to package #17.
+package redact
+
+import (
+	"context"
+	"slices"
+	"sort"
+	"strings"
+	"unsafe"
+
+	"configflow/internal/jsonx"
+	"configflow/internal/repo"
+	"configflow/internal/urlx"
+)
+
+// Redacted is the replacement text.
+const Redacted = "[REDACTED]"
+
+// SensitiveSystemConfigFields are dropped from every response wherever they
+// appear as an object key (SENSITIVE_SYSTEM_CONFIG_FIELDS).
+var SensitiveSystemConfigFields = map[string]bool{
+	"rule_proxy_token": true, "retired_rule_proxy_tokens": true, "rule_fetch_proxy": true,
+}
+
+const (
+	maxDepth             = 128
+	stringCacheMaxLength = 1024
+	stringCacheSize      = 4096
+)
+
+// Secrets is one snapshot of the credentials to hide, sorted and without
+// duplicates or empty strings (Python: a frozenset). Compare with Equal.
+type Secrets []string
+
+// NewSecrets builds a snapshot from any number of token lists.
+func NewSecrets(lists ...[]string) Secrets {
+	var all []string
+	for _, list := range lists {
+		for _, token := range list {
+			if token != "" {
+				all = append(all, token)
+			}
+		}
+	}
+	sort.Strings(all)
+	return slices.Compact(all)
+}
+
+// Equal is frozenset equality.
+func (s Secrets) Equal(other Secrets) bool { return slices.Equal(s, other) }
+
+// ExternalPayloadSecrets is _external_payload_secrets(system_config): the
+// rule proxy and Agent tokens stored in the repository, plus the sensitive
+// string fields of systemConfig when given (nil: none).
+func ExternalPayloadSecrets(ctx context.Context, systemConfig *jsonx.Object) (Secrets, error) {
+	repository, err := repo.GetRepository(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ruleProxy, err := repository.RuleProxyTokensForSanitization(ctx)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := repository.AgentTokensForSanitization(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var tokens []string
+	for token := range ruleProxy {
+		tokens = append(tokens, token)
+	}
+	for token := range agents {
+		tokens = append(tokens, token)
+	}
+	for field := range SensitiveSystemConfigFields {
+		if text, ok := systemConfig.Value(field).(string); ok && text != "" {
+			tokens = append(tokens, text)
+		}
+	}
+	return NewSecrets(tokens), nil
+}
+
+// RuleProxyTokens is _repository_rule_proxy_tokens() as a snapshot.
+func RuleProxyTokens(ctx context.Context) (Secrets, error) {
+	repository, err := repo.GetRepository(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ruleProxy, err := repository.RuleProxyTokensForSanitization(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var tokens []string
+	for token := range ruleProxy {
+		tokens = append(tokens, token)
+	}
+	return NewSecrets(tokens), nil
+}
+
+// ContainsEncodedSecret is _contains_encoded_secret: whether value contains
+// one of the secrets literally or after any sequence of URL decodings
+// (unquote / unquote_plus), exploring a bounded number of decoding states.
+func ContainsEncodedSecret(value string, secrets Secrets) bool {
+	if len(secrets) == 0 {
+		return false
+	}
+	if !strings.ContainsAny(value, "%+") {
+		return containsAny(value, secrets)
+	}
+	pending := []string{value}
+	seen := map[string]bool{value: true}
+	maxStates := max(1, 2*pyLen(value)+1)
+	maxSteps := 2 * maxStates
+	states, steps := 0, 0
+	for len(pending) > 0 && states < maxStates && steps < maxSteps {
+		current := pending[0]
+		pending = pending[1:]
+		states++
+		if containsAny(current, secrets) {
+			return true
+		}
+		for _, decode := range [...]func(string) string{urlx.Unquote, urlx.UnquotePlus} {
+			if steps >= maxSteps {
+				break
+			}
+			steps++
+			decoded := decode(current)
+			if pyLen(decoded) <= pyLen(current) && !seen[decoded] {
+				seen[decoded] = true
+				pending = append(pending, decoded)
+			}
+		}
+	}
+	return false
+}
+
+func containsAny(value string, secrets Secrets) bool {
+	for _, secret := range secrets {
+		if strings.Contains(value, secret) {
+			return true
+		}
+	}
+	return false
+}
+
+// pyLen is len(str) in code points.
+func pyLen(s string) int {
+	n := 0
+	for range s {
+		n++
+	}
+	return n
+}
+
+// ContainsInternalRuleProxyToken is contains_internal_rule_proxy_token.
+func ContainsInternalRuleProxyToken(ctx context.Context, value string) (bool, error) {
+	secrets, err := RuleProxyTokens(ctx)
+	if err != nil {
+		return false, err
+	}
+	return ContainsEncodedSecret(value, secrets), nil
+}
+
+// SanitizeExternalPayload is sanitize_external_payload(payload, system_config).
+func SanitizeExternalPayload(ctx context.Context, payload any, systemConfig *jsonx.Object) (any, error) {
+	secrets, err := ExternalPayloadSecrets(ctx, systemConfig)
+	if err != nil {
+		return nil, err
+	}
+	return SanitizeWithSecrets(payload, secrets, false), nil
+}
+
+// SanitizeWithSecrets is _sanitize_with_secrets(payload, secrets,
+// sort_dict_keys=...): a copy of payload in which the sensitive system_config
+// keys are dropped, every string (key or value) containing a secret becomes
+// "[REDACTED]", and a container nested 128 levels deep (the root is level 0)
+// or containing itself becomes "[REDACTED]". When two keys redact to the same
+// text the later value wins at the earlier position, as in a Python dict;
+// sortKeys visits keys in sorted order first (what an encode/decode pass with
+// sort_keys=True would have produced). payload is not modified.
+func SanitizeWithSecrets(payload any, secrets Secrets, sortKeys bool) any {
+	s := &sanitizer{secrets: secrets, sortKeys: sortKeys, active: map[containerID]bool{}}
+	return s.visit(payload, 0)
+}
+
+type containerID struct {
+	pointer unsafe.Pointer
+	length  int
+}
+
+type sanitizer struct {
+	secrets  Secrets
+	sortKeys bool
+	active   map[containerID]bool
+	cache    map[string]bool
+}
+
+func (s *sanitizer) visit(value any, depth int) any {
+	switch v := value.(type) {
+	case string:
+		return s.str(v)
+	case *jsonx.Object:
+		if v == nil {
+			return nil
+		}
+		id := containerID{unsafe.Pointer(v), -1}
+		if depth >= maxDepth || s.active[id] {
+			return Redacted
+		}
+		s.active[id] = true
+		defer delete(s.active, id)
+		keys := v.Keys()
+		if s.sortKeys {
+			keys = slices.Clone(keys)
+			sort.Strings(keys)
+		}
+		output := jsonx.NewObject()
+		for _, key := range keys {
+			if SensitiveSystemConfigFields[key] {
+				continue
+			}
+			item, _ := v.Get(key)
+			outKey := s.str(key)
+			output.Set(outKey, s.visit(item, depth+1))
+		}
+		return output
+	case []any:
+		if v == nil {
+			return v
+		}
+		id := containerID{unsafe.Pointer(unsafe.SliceData(v)), len(v)}
+		if depth >= maxDepth || (len(v) > 0 && s.active[id]) {
+			return Redacted
+		}
+		if len(v) > 0 {
+			s.active[id] = true
+			defer delete(s.active, id)
+		}
+		output := make([]any, len(v))
+		for i, item := range v {
+			output[i] = s.visit(item, depth+1)
+		}
+		return output
+	}
+	return value
+}
+
+func (s *sanitizer) str(value string) string {
+	if len(s.secrets) == 0 {
+		return value
+	}
+	var contains bool
+	if pyLen(value) <= stringCacheMaxLength {
+		if s.cache == nil {
+			s.cache = map[string]bool{}
+		}
+		cached, ok := s.cache[value]
+		if !ok {
+			cached = ContainsEncodedSecret(value, s.secrets)
+			if len(s.cache) < stringCacheSize {
+				s.cache[value] = cached
+			}
+		}
+		contains = cached
+	} else {
+		contains = ContainsEncodedSecret(value, s.secrets)
+	}
+	if contains {
+		return Redacted
+	}
+	return value
+}
+
+// quote is urllib.parse.quote(s, safe="").
+func quote(s string) string {
+	return strings.ReplaceAll(urlx.QuotePlus(s), "+", "%20")
+}
+
+func variants(secret string) []string {
+	result := []string{secret}
+	for _, variant := range []string{quote(secret), urlx.QuotePlus(secret)} {
+		if !slices.Contains(result, variant) {
+			result = append(result, variant)
+		}
+	}
+	return result
+}
+
+// RedactSecretsInText is redact_secrets_in_text: replace only the
+// credentials (and their URL-encoded forms) inside multi-line text; a line
+// that still decodes to a credential afterwards is replaced as a whole.
+func RedactSecretsInText(ctx context.Context, text string) (string, error) {
+	if text == "" {
+		return text, nil
+	}
+	secrets, err := ExternalPayloadSecrets(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	return redactText(text, secrets), nil
+}
+
+func redactText(text string, secrets Secrets) string {
+	if !ContainsEncodedSecret(text, secrets) {
+		return text
+	}
+	ordered := slices.Clone([]string(secrets))
+	sort.SliceStable(ordered, func(i, j int) bool { return pyLen(ordered[i]) > pyLen(ordered[j]) })
+	var out strings.Builder
+	for _, line := range splitLinesKeepEnds(text) {
+		for _, secret := range ordered {
+			for _, variant := range variants(secret) {
+				line = strings.ReplaceAll(line, variant, Redacted)
+			}
+		}
+		if ContainsEncodedSecret(line, secrets) {
+			end := ""
+			if strings.HasSuffix(line, "\n") {
+				end = "\n"
+			}
+			line = Redacted + end
+		}
+		out.WriteString(line)
+	}
+	return out.String()
+}
+
+// splitLinesKeepEnds is str.splitlines(keepends=True).
+func splitLinesKeepEnds(text string) []string {
+	var lines []string
+	start := 0
+	runes := []rune(text)
+	for i := 0; i < len(runes); i++ {
+		switch runes[i] {
+		case '\r':
+			if i+1 < len(runes) && runes[i+1] == '\n' {
+				i++
+			}
+		case '\n', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+		default:
+			continue
+		}
+		lines = append(lines, string(runes[start:i+1]))
+		start = i + 1
+	}
+	if start < len(runes) {
+		lines = append(lines, string(runes[start:]))
+	}
+	return lines
+}
+
+// Range is a [Start, End) span in code points.
+type Range struct{ Start, End int }
+
+// StoredSecretFinder is stored_secret_finder(): a function giving the ranges
+// (in code points) of stored credentials inside a text, from one snapshot of
+// them; a text that still decodes to a credential once those are masked is
+// returned as a single range covering it.
+func StoredSecretFinder(ctx context.Context) (func(text string) []Range, error) {
+	secrets, err := ExternalPayloadSecrets(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	var all []string
+	for _, secret := range secrets {
+		for _, variant := range variants(secret) {
+			if !slices.Contains(all, variant) {
+				all = append(all, variant)
+			}
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return pyLen(all[i]) > pyLen(all[j]) })
+	return func(text string) []Range {
+		if len(secrets) == 0 || text == "" || !ContainsEncodedSecret(text, secrets) {
+			return nil
+		}
+		runes := []rune(text)
+		var ranges []Range
+		for _, variant := range all {
+			v := []rune(variant)
+			for start := indexRunes(runes, v, 0); start >= 0; start = indexRunes(runes, v, start+1) {
+				ranges = append(ranges, Range{start, start + len(v)})
+			}
+		}
+		rest := slices.Clone(runes)
+		for _, r := range ranges {
+			for i := r.Start; i < r.End; i++ {
+				rest[i] = 0
+			}
+		}
+		if ContainsEncodedSecret(string(rest), secrets) {
+			return []Range{{0, len(runes)}}
+		}
+		sort.Slice(ranges, func(i, j int) bool {
+			if ranges[i].Start != ranges[j].Start {
+				return ranges[i].Start < ranges[j].Start
+			}
+			return ranges[i].End < ranges[j].End
+		})
+		return ranges
+	}, nil
+}
+
+func indexRunes(haystack, needle []rune, from int) int {
+	for i := from; i+len(needle) <= len(haystack); i++ {
+		if slices.Equal(haystack[i:i+len(needle)], needle) {
+			return i
+		}
+	}
+	return -1
+}
