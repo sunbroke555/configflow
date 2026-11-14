@@ -13,7 +13,7 @@ func asObj(v any) *jsonx.Object {
 }
 
 func TestFilterCorpus(t *testing.T) {
-	rows := loadCorpus(t, "filter.jsonl")
+	rows := loadCorpus(t, "filter.jsonl.gz")
 	pending := 0
 	for i, row := range rows {
 		switch row.Fn {
@@ -43,7 +43,7 @@ func TestFilterCorpus(t *testing.T) {
 }
 
 func TestHostsCorpus(t *testing.T) {
-	rows := loadCorpus(t, "hosts.jsonl")
+	rows := loadCorpus(t, "hosts.jsonl.gz")
 	kinds := map[string]int{}
 	for i, row := range rows {
 		kinds[row.Fn]++

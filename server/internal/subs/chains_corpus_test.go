@@ -33,7 +33,7 @@ func matchError(t *testing.T, where string, err error, want any) bool {
 }
 
 func TestChainsCorpus(t *testing.T) {
-	rows := loadCorpus(t, "chains.jsonl")
+	rows := loadCorpus(t, "chains.jsonl.gz")
 	stats := map[string]int{}
 	for i, row := range rows {
 		in := asObj(row.In)

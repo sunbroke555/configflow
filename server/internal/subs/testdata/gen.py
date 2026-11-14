@@ -14,6 +14,8 @@ UUIDs from a fixed seed). Output: one JSON object per line,
 ensure_ascii=False; key order is the Python dict order.
 """
 import base64
+import gzip
+import io
 import copy
 import json
 import os
@@ -34,7 +36,8 @@ def uid():
 
 
 def dump(path, rows):
-    with open(HERE / path, 'w', encoding='utf-8') as fh:
+    path += '.gz'
+    with gzip.GzipFile(HERE / path, 'wb', mtime=0) as raw, io.TextIOWrapper(raw, encoding='utf-8') as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n')
     print(path, len(rows))
@@ -943,3 +946,90 @@ def chains_rows():
 
 
 dump('chains.jsonl', chains_rows())
+
+
+# ------------------------------------------------------------ proxy_server_dns
+from backend.utils import proxy_server_dns as psd  # noqa: E402
+
+SUFFIXES = ['com', 'org', 'net', 'co.uk', 'github.io', 'blogspot.com', 'com.cn', 'cn', 'invalid', 'lab.invalid', 'test', 'jp', 'co.jp', 'xyz', 'ck',
+            'www.ck', 'kobe.jp', 'city.kobe.jp', 'appspot.com', 'cloudfront.net', 'pages.dev', 'workers.dev', 'herokuapp.com', 'local', 'localhost', 'io', 'museum']
+LABELS = ['a', 'b', 'node', 'hk1', 'jp2', 'example', 'other', 'x-y', 'www', 'sub', 'deep', '1', 'xn--fiq228c', '例子', 'UPPER']
+
+
+def rand_domain():
+    labels = [pick(LABELS) for _ in range(R.randrange(0, 4))]
+    return '.'.join(labels + [pick(['example', 'node', 'air', 'shared'])] + [pick(SUFFIXES)])
+
+
+def dns_main(mode=None):
+    dns = {'enable': True, 'listen': pick(['0.0.0.0:1053', '127.0.0.1:1053', '[::]:53', ':7874', '192.0.2.2:53', '[::1]:1053'])}
+    if R.random() < .9:
+        dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query']
+    if R.random() < .75:
+        dns['enhanced-mode'] = 'fake-ip'
+    if R.random() < .4:
+        dns['fake-ip-filter-mode'] = pick(['blacklist', 'whitelist', 'rule', 'other', None, ''])
+    if R.random() < .5:
+        dns['fake-ip-filter'] = pick([['+.lan', 'time.*.com', 'geosite:cn', 'rule-set:x', 'dns.msftncsi.com'], [], None, 'text', ['+.example.org', '*.node.test'],
+                                      ['DOMAIN,a.example.net,real-ip', 'DOMAIN-SUFFIX,lan,real-ip'], [5, 'x.test']])
+    if R.random() < .35:
+        dns[psd.POLICY_KEY] = pick([{'hk1.example.net': 'udp://127.0.0.1:1053'}, {'+.example.net': '8.8.8.8'}, {'geosite:cn': '223.5.5.5'},
+                                    {'a.example.org, b.example.org': ['127.0.0.1:1053']}, {}, 'x', {'*.example.org': 'tcp://localhost:1053'},
+                                    {'jp1.example.net': ['udp://[::1]:1053', 'udp://127.0.0.1:1053']}, {'hk1.example.net': '0.0.0.0:1053'},
+                                    {'hk1.example.net': 'udp://user@127.0.0.1:99999'}, {'hk1.example.net': '127.0.0.1:0'}])
+    r = R.random()
+    if r < .05:
+        dns['enable'] = pick([False, None, 'true', 1])
+    elif r < .08:
+        dns['use-hosts'] = False
+    elif r < .1:
+        dns['listen'] = pick([None, '', 'x', 'localhost:53', '0.0.0.0'])
+    return dns
+
+
+def dns_rows():
+    rows = []
+    for _ in range(900):
+        domains = [rand_domain() for _ in range(R.randrange(0, 7))]
+        if R.random() < .4 and domains:
+            base = domains[0]
+            domains += [pick(LABELS) + '.' + base.split('.', 1)[-1] for _ in range(R.randrange(1, 3))]
+        rows.append({'fn': 'compress', 'in': sorted(set(domains)), 'out': call(psd.compress, set(domains))})
+    for s in ['0.0.0.0:1053', '[::]:53', ':7874', '127.0.0.1:7874', '192.168.1.2:53', '[::1]:1053', 'localhost:53', '0.0.0.0', '0.0.0.0:0', '', None, 5,
+              ' 127.0.0.1:53 ', '[fe80::1%eth0]:53', '224.0.0.1:53', '[ff02::1]:53', '::1:53', '1.2.3.4:65535', '1.2.3.4:65536', '1.2.3.4:٥٣', '1.2.3.4:+53',
+              '1.2.3.4:5_3', '[::ffff:192.0.2.1]:53', '192.0.2.1:053', '256.1.1.1:53', 'host:53', '[]:53', '[::', ':::53']:
+        rows.append({'fn': 'listener_address', 'in': s, 'out': call(lambda x: list(psd.listener_address(x)), s)})
+    for s in ['v1.19.33', 'v1.19.20', 'v1.19.19', 'Mihomo Meta v1.18.10 linux amd64', '1.20.0', 'alpha-1a2b3c4', '', None, 5, 'V1.19.20', 'mihomo v1.19.20',
+              'meta 1.19.0', '  v2.0.0', 'v١.١٩.٢٠', 'v1.19', 'v1.19.20-alpha', 'vv1.1.1', 'mihomometa 1.1.1', 'v01.019.020', 'v1.19.99999999999999999999']:
+        rows.append({'fn': 'parse_core_version', 'in': s, 'out': call(lambda x: (list(psd.parse_core_version(x)) if psd.parse_core_version(x) else None), s)})
+        rows.append({'fn': 'core_too_old', 'in': s, 'out': call(psd.core_too_old, s)})
+    for _ in range(400):
+        hosts = {}
+        for _ in range(R.randrange(0, 7)):
+            key = pick(['a.test', 'b.test', 'c.test', 'x.test', '+.wild.test', '*.wild.test', '.dot.test', 'n.wild.test', 'W.Test.', ' sp.test '])
+            hosts[key] = pick(['b.test', 'c.test', '198.51.100.1', ['198.51.100.2'], ['n.wild.test'], 'n.wild.test', 'a.test', 'x.test', ['a.test', 'b.test'], 5, None,
+                               'C.TEST.', [], '::1', ['2001:db8::1'], 'y.dot.test'])
+        for d in ['a.test', 'b.test', 'x.test', 'w.wild.test', 'missing.test', 'z.dot.test']:
+            rows.append({'fn': 'final_target', 'in': {'hosts': hosts, 'domain': d}, 'out': call(psd.final_target, hosts, d)})
+    for _ in range(1400):
+        main = {'dns': dns_main()}
+        if R.random() < .9:
+            main['hosts'] = {}
+        merged = {}
+        for _ in range(R.randrange(1, 5)):
+            d = pick(['hk1.example.net', 'jp1.example.net', 'a.example.org', 'b.example.org', 'c.example.com', 'de1.example.net', 'n.test', 'x.github.io', 'y.github.io'])
+            target = pick(['hk1.example.org', 'entry.example.org', 'a.entry.example.org', 'b.entry.example.org', ['198.51.100.9'], 'x.example.co.uk', 'y.example.co.uk',
+                           'e.lab.invalid', 'f.lab.invalid', 'z.github.io'])
+            merged[d] = target
+            if 'hosts' in main:
+                main['hosts'][d] = target[0] if isinstance(target, list) and len(target) == 1 and R.random() < .5 else target
+        if R.random() < .15 and 'hosts' in main:
+            main['hosts']['hk1.example.org'] = pick(['final.example.org', '198.51.100.1', 'a.example.org'])
+        core = pick([None, None, 'v1.19.33', 'v1.19.19', 'alpha-x', 'v1.19.20', '1.18.0'])
+        m = copy.deepcopy(main)
+        report = call(psd.apply_node_dns, m, copy.deepcopy(merged), core_version=core)
+        rows.append({'fn': 'apply_node_dns', 'in': {'main': main, 'merged': merged, 'core_version': core}, 'out': {'report': report, 'main': m}})
+    return rows
+
+
+dump('dns.jsonl', dns_rows())

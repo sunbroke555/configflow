@@ -2,6 +2,7 @@ package subs
 
 import (
 	"bufio"
+	"compress/gzip"
 	"os"
 	"testing"
 
@@ -22,8 +23,12 @@ func loadCorpus(t *testing.T, name string) []corpusRow {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var rows []corpusRow
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(zr)
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
 	for sc.Scan() {
 		v, err := jsonx.Parse(sc.Bytes())

@@ -2,6 +2,7 @@ package subs
 
 import (
 	"fmt"
+	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -39,14 +40,10 @@ var (
 // section; snapshots of different dates can differ for recently added suffixes.
 func registrable(domain string) string {
 	name := domain
-	for i := 0; i < len(name); i++ {
-		if name[i] >= 0x80 {
-			// tldextract converts IDN labels; hosts domains here are validated
-			// ASCII ([a-z0-9_-]), so a non-ASCII name stays exact (no IDNA
-			// dependency; see the hand-back).
-			return ""
-		}
-	}
+	// tldextract converts IDN labels to punycode before matching; only the
+	// suffix labels matter and the list holds them as ASCII, so a non-ASCII
+	// subdomain label needs no conversion. A non-ASCII suffix (IDN TLD) stays
+	// unmatched here (see the hand-back).
 	name = strings.ToLower(name)
 	suffix, icann := publicsuffix.PublicSuffix(name)
 	if !icann && !strings.Contains(suffix, ".") {
@@ -59,7 +56,13 @@ func registrable(domain string) string {
 	if err != nil {
 		return ""
 	}
-	return one
+	// tldextract matches case-insensitively but returns the labels as given.
+	count := strings.Count(one, ".") + 1
+	labels := strings.Split(domain, ".")
+	if count > len(labels) {
+		return one
+	}
+	return strings.Join(labels[len(labels)-count:], ".")
 }
 
 func reversedLabels(s string) []string {
@@ -381,17 +384,10 @@ func FinalTarget(hosts *jsonx.Object, domain string) string {
 	return ""
 }
 
-func numericText(s string) (int64, bool) {
-	n, err := pyIntStr(s)
-	if err != nil {
-		return 0, false
-	}
-	return n.Int64()
-}
-
 // ParseCoreVersion is parse_core_version: (major, minor, patch) of a Mihomo
-// version such as `v1.19.33`, or ok=false.
-func ParseCoreVersion(text any) (version [3]int64, ok bool) {
+// version such as `v1.19.33`, or ok=false. The parts are unbounded like
+// Python ints.
+func ParseCoreVersion(text any) (version [3]*big.Int, ok bool) {
 	s, isStr := text.(string)
 	if !isStr {
 		return version, false
@@ -401,11 +397,11 @@ func ParseCoreVersion(text any) (version [3]int64, ok bool) {
 		return version, false
 	}
 	for i := 0; i < 3; i++ {
-		v, ok := numericText(m[i+1])
-		if !ok {
+		n, err := pyIntStr(m[i+1])
+		if err != nil {
 			return version, false
 		}
-		version[i] = v
+		version[i], _ = n.BigInt()
 	}
 	return version, true
 }
@@ -418,8 +414,8 @@ func CoreTooOld(version any) bool {
 	}
 	min := [3]int64{minCoreMajor, minCoreMinor, minCorePatch}
 	for i := 0; i < 3; i++ {
-		if v[i] != min[i] {
-			return v[i] < min[i]
+		if c := v[i].Cmp(big.NewInt(min[i])); c != 0 {
+			return c < 0
 		}
 	}
 	return false

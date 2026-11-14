@@ -8,7 +8,7 @@ import (
 )
 
 func TestParserCorpus(t *testing.T) {
-	rows := loadCorpus(t, "parser.jsonl")
+	rows := loadCorpus(t, "parser.jsonl.gz")
 	counts := map[string]int{}
 	for i, row := range rows {
 		counts[row.Fn]++

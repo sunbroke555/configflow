@@ -21,7 +21,7 @@ func corpusConvert(node *jsonx.Object) *jsonx.Object {
 }
 
 func TestDialersCorpus(t *testing.T) {
-	rows := loadCorpus(t, "dialers.jsonl")
+	rows := loadCorpus(t, "dialers.jsonl.gz")
 	kinds := map[string]int{}
 	errorsSeen := 0
 	for i, row := range rows {
