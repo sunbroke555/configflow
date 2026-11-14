@@ -85,8 +85,8 @@ type item struct {
 	// dashBreak: comment lines written between a bare dash and the nested
 	// block mapping (a materialized merge key's comment)
 	dashBreak []string
-	value       *node
-	rec         rec
+	value     *node
+	rec       rec
 }
 
 type document struct {
