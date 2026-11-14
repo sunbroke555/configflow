@@ -13,9 +13,10 @@ var filterLogger = logx.Get("backend.utils.subscription_filter")
 // Matcher is a compiled Python regex used with re.search.
 type Matcher interface{ Search(text string) bool }
 
-// compileRegex is re.compile(pattern). A pattern Python accepts but the
-// engine cannot run yields *rules.UnsupportedRegexError (pending until the
-// rules package gains its backtracking fallback).
+// compileRegex is re.compile(pattern) through rules.CompilePyRegex (RE2, or
+// the backtracking engine for look-around, back references and the like).
+// Only \N{name} escapes and repeat counts beyond int32 yield
+// *rules.UnsupportedRegexError: Python would run those patterns.
 func compileRegex(pattern string) (Matcher, error) {
 	re, err := rules.CompilePyRegex(pattern, false)
 	if err != nil {
@@ -50,8 +51,9 @@ func ValidateRegexFilter(value any) string {
 
 // CompileSubscriptionFilter is compile_subscription_filter: nil when no
 // filter is configured or the pattern is invalid. A pattern the Go engine
-// cannot run is also treated as "no filter" until the regexp2 fallback of
-// package rules exists (Python would apply it).
+// cannot run (\N{name}, see compileRegex) is also treated as "no filter",
+// silently; Python would apply it. ValidateRegexFilter accepts such a
+// pattern as Python does.
 func CompileSubscriptionFilter(sub any) Matcher {
 	obj, ok := sub.(*jsonx.Object)
 	if !ok {

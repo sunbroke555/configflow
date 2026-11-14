@@ -9,5 +9,7 @@
 // configs, so nothing here normalises them. Python exceptions that the
 // callers catch map to Go errors or (nil, false) results with the same
 // tolerance. Network access (fetching a subscription) is not part of this
-// package: ParseSubscriptionContent takes the downloaded body.
+// package: subscriptions are downloaded and converted by Sub-Store (#13);
+// ParseURIList only parses the proxy_string of manually added nodes for the
+// Surge and Loon converters.
 package subs

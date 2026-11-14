@@ -28,12 +28,17 @@ func TestFilterCorpus(t *testing.T) {
 			}
 		case "filter_subscription_items":
 			in := asObj(row.In)
-			if pattern := jsonx.Str(asObj(in.Value("sub")).Value("regex_filter")); strings.Contains(pattern, `\N{`) {
-				pending++ // \N{name} is not supported by the rules regex engine yet
-				continue
-			}
 			items, _ := in.Value("items").([]any)
 			got := FilterSubscriptionItems(in.Value("sub"), items)
+			if pattern := jsonx.Str(asObj(in.Value("sub")).Value("regex_filter")); strings.Contains(pattern, `\N{`) {
+				// Documented difference: \N{name} is not supported by the rules
+				// regex engine, the filter is not applied (Python applies it).
+				pending++
+				if g, w := compact(t, got), compact(t, items); g != w {
+					t.Fatalf("row %d: unsupported pattern should leave the items unfiltered", i)
+				}
+				continue
+			}
 			if g, w := compact(t, got), compact(t, row.Out); g != w {
 				t.Fatalf("row %d filter %s\n got  %s\n want %s", i, compact(t, row.In), g, w)
 			}
