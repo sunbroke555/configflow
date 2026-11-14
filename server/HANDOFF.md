@@ -61,11 +61,13 @@ was — the briefs are reproduced in spirit by the template below).
    send it back with `SendMessage`, which resumes the same agent).
 4. When verified: paste its API reference into `PORTING.md` (above "Helpers from a package that is not
    ported yet"), set `done` in `packages.md`, commit (`go: …`, explicit paths) and `git push origin go`.
-5. If an agent is cut off by the usage limit: after the reset, **start a fresh Opus agent** for that package
-   whose brief is "continue package #N from `server/parity/progress/<N>-*.md` and the committed code"
-   (plus the original package brief). Do not resume the old agent with `SendMessage`: resuming reloads its
-   whole transcript (often 300k+ tokens), the progress file is a few kilobytes. `SendMessage` is still the
-   right tool for a short follow-up to an agent that finished normally and is not huge yet.
+5. If an agent is cut off by the usage limit, decide by the size reported in its notification
+   (`subagent_tokens`): **under ~200k → resume it with `SendMessage`** (full continuity, cheap enough);
+   **over ~200k → start a fresh Opus agent** whose brief is "continue package #N from
+   `server/parity/progress/<N>-*.md` and the committed code" plus the original package brief (resuming
+   would reload the whole transcript). Missing features are caught by the package's scope list, the ported
+   test list, `routes.tsv` and the Python differential checks — not by the agent's memory — so a handoff
+   costs some rework at most, never silently dropped scope, as long as the coordinator re-verifies.
 
 Brief template (adapt the package part; the agents already know the rest from PORTING.md):
 
