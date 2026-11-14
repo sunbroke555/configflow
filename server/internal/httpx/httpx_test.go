@@ -326,7 +326,7 @@ func TestCORSHeaders(t *testing.T) {
 	h := res.Header
 	if h.Get("Access-Control-Allow-Origin") != "https://client.example" || h.Get("Vary") != "Origin" ||
 		h.Get("Access-Control-Allow-Headers") != "X-B, authorization" ||
-		h.Get("Access-Control-Allow-Methods") != "GET, HEAD, POST, OPTIONS, PUT, PATCH, DELETE" {
+		h.Get("Access-Control-Allow-Methods") != "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT" {
 		t.Fatal(h)
 	}
 	missing := srv.Get("/api/missing", httpxtest.Header("Origin", "https://o.example"))

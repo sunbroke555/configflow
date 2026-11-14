@@ -5,8 +5,9 @@ import (
 	"strings"
 )
 
-// corsMethods is Flask-CORS's ALL_METHODS joined as it serializes them.
-const corsMethods = "GET, HEAD, POST, OPTIONS, PUT, PATCH, DELETE"
+// corsMethods is Flask-CORS's ALL_METHODS as it serializes them (sorted,
+// joined with ", ").
+const corsMethods = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"
 
 // cors is the after-request function of `CORS(app)` (Flask-CORS 4.0 with
 // default options: every origin, every header, credentials not supported,

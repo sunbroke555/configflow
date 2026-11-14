@@ -52,7 +52,8 @@ func failure(status int, message string) *httpx.Response { return httpx.Message(
 func handleWebPort(c *httpx.Ctx) (*httpx.Response, error) {
 	manager := webListener.Load()
 	result, err := func() (*httpx.Response, error) {
-		if c.Method() == "GET" || c.Method() == "HEAD" {
+		// Python tests request.method == 'GET': HEAD takes the POST branch.
+		if c.Method() == "GET" {
 			status, err := manager.Status()
 			if err != nil {
 				return nil, err
@@ -123,7 +124,7 @@ func handleRuleFetchProxy(c *httpx.Ctx) (*httpx.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.Method() == "GET" || c.Method() == "HEAD" {
+	if c.Method() == "GET" {
 		return httpx.JSON(jsonx.Obj("rule_fetch_proxy", systemSettings(config).GetOr("rule_fetch_proxy", ""))), nil
 	}
 	data := c.JSONObject()
