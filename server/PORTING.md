@@ -274,6 +274,21 @@ interchange). Read `repository.go`, `scope.go`, `hooks.go` doc comments before u
 - `internal/redact`: response/export secret redaction (`SanitizeWithSecrets`, `ExternalPayloadSecrets`,
   `RedactSecretsInText`, …) — #17 builds `config_export` on it.
 
+**`configflow/internal/subs` (package #5)** — manual node strings, subscription hosts/dialers/filters,
+proxy chains, commented Mihomo YAML edits (`subs/commented`), listeners, proxy-server DNS, public suffix.
+- Converters (#6/#7): `ParseURIList`, `ParseYAMLObject`, `ValidateProxyChains`, `LowerProxyChains`,
+  `LowerChainProviders`, `AddDialerGroups(main, config, DialerDeps)`, `AdaptSubscriptionProxies`,
+  `DialerRecord`, `GroupName`, `MergeSubscriptionHosts`, `NewHostsIndex(cache).ForURL`, `ApplyNodeDNS`,
+  `ValidateListenerPolicies`, `FilterSubscriptionItems`. `subs/compat.go` holds a copy of
+  `dialer_references` (`ValidateDialers`, `DialerReferenceError`) for #6 to replace.
+- Sub-Store client (#13): `ExtractSubscriptionHosts`, `ExtractSubscriptionDialers`, `HostsDigest`, `DescribeChange`.
+- Routes (#15/#16): `ValidateRegexFilter`, `RelinkGroupListeners` (`*ListenerReferenceError` unwraps to
+  `rules.StrategyReferenceError`), `CompileSubscriptionFilter`.
+- Deployment/agents (#24/#26): `ReportedCoreVersion`, `OutdatedAgents`, `ParseCoreVersion`, `CoreTooOld`,
+  `ListenerAddress`, `FinalTarget`, `Compress`.
+- Domain discovery (#19): `ExtractDomain(url, includePrivate)` — tldextract 5.1.2 with its bundled
+  snapshot, exactly as the Python code configures it (never `x/net/publicsuffix`).
+
 ## Helpers from a package that is not ported yet
 
 If you need a small helper that belongs to another work package still marked `todo`/`wip` in
