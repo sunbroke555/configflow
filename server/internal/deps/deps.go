@@ -8,6 +8,7 @@
 package deps
 
 import (
+	_ "github.com/dlclark/regexp2"
 	_ "github.com/klauspost/compress/zstd"
 	_ "golang.org/x/net/publicsuffix"
 	_ "golang.org/x/sys/unix"

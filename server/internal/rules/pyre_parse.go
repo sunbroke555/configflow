@@ -158,7 +158,8 @@ type reState struct {
 	flags       int
 	groupdict   map[string]int
 	closed      []bool // index = group number; 0 is the whole pattern
-	lookbehind  int    // -1 for None
+	widths      []reWidth
+	lookbehind  int // -1 for None
 	grouprefpos map[int]int
 }
 
@@ -507,6 +508,7 @@ func (s *reState) checkLookbehindGroup(gid int, t *tokenizer) {
 func (s *reState) openGroup(name string, hasName bool) (int, error) {
 	gid := s.groups()
 	s.closed = append(s.closed, false)
+	s.widths = append(s.widths, reWidth{})
 	if s.groups() > reMaxGroups {
 		return 0, &reError{Msg: "too many groups"}
 	}
@@ -924,6 +926,7 @@ func (t *tokenizer) parseGroup(st *reState, verbose bool, nested int, first bool
 	}
 	if group != 0 {
 		st.closed[group] = true
+		st.widths[group] = st.widthOf(p)
 	}
 	if atomic {
 		return &reNode{op: opAtomic, body: p}, groupNode
@@ -1073,7 +1076,7 @@ func parsePyRegex(pattern string, flags int) (result *parsedRegex, err error) {
 	}()
 	runes := []rune(pattern)
 	t := &tokenizer{src: runes, pattern: runes}
-	st := &reState{flags: flags, groupdict: map[string]int{}, closed: []bool{false}, lookbehind: -1, grouprefpos: map[int]int{}}
+	st := &reState{flags: flags, groupdict: map[string]int{}, closed: []bool{false}, widths: []reWidth{{}}, lookbehind: -1, grouprefpos: map[int]int{}}
 	t.advance()
 	nodes := t.parseSub(st, flags&flagVerbose != 0, 0)
 	if st.flags&flagASCII == 0 {
@@ -1089,5 +1092,101 @@ func parsePyRegex(pattern string, flags int) (result *parsedRegex, err error) {
 			return nil, &reError{Msg: fmt.Sprintf("invalid group reference %d", g), pattern: runes, pos: pos, hasPos: true}
 		}
 	}
+	// The compile phase of Python's re rejects variable-width look-behind.
+	if st.checkLookbehind(nodes) {
+		return nil, &reError{Msg: "look-behind requires fixed-width pattern"}
+	}
 	return &parsedRegex{nodes: nodes, flags: st.flags}, nil
+}
+
+// reWidth is SubPattern.getwidth(): (min, max) match length, saturating.
+type reWidth struct{ lo, hi int64 }
+
+const reMaxWidth = int64(1) << 62
+
+func satAdd(a, b int64) int64 {
+	if a+b > reMaxWidth || a+b < 0 {
+		return reMaxWidth
+	}
+	return a + b
+}
+
+func satMul(a, b int64) int64 {
+	if a != 0 && b > reMaxWidth/a {
+		return reMaxWidth
+	}
+	return a * b
+}
+
+func (st *reState) widthOf(nodes []*reNode) reWidth {
+	var lo, hi int64
+	for _, n := range nodes {
+		switch n.op {
+		case opBranch:
+			i, j := reMaxWidth, int64(0)
+			for _, alt := range n.alts {
+				w := st.widthOf(alt)
+				if w.lo < i {
+					i = w.lo
+				}
+				if w.hi > j {
+					j = w.hi
+				}
+			}
+			lo, hi = satAdd(lo, i), satAdd(hi, j)
+		case opAtomic, opSubpattern:
+			w := st.widthOf(n.body)
+			lo, hi = satAdd(lo, w.lo), satAdd(hi, w.hi)
+		case opMaxRepeat, opMinRepeat, opPossessive:
+			w := st.widthOf(n.body)
+			lo = satAdd(lo, satMul(w.lo, n.min))
+			if n.max == reMaxRepeat && w.hi != 0 {
+				hi = reMaxWidth
+			} else {
+				hi = satAdd(hi, satMul(w.hi, n.max))
+			}
+		case opAny, opIn, opLiteral, opNotLiteral:
+			lo, hi = satAdd(lo, 1), satAdd(hi, 1)
+		case opGroupRef:
+			w := st.widths[n.ref]
+			lo, hi = satAdd(lo, w.lo), satAdd(hi, w.hi)
+		case opGroupRefExists:
+			w := st.widthOf(n.yes)
+			if n.hasNo {
+				o := st.widthOf(n.no)
+				if o.lo < w.lo {
+					w.lo = o.lo
+				}
+				if o.hi > w.hi {
+					w.hi = o.hi
+				}
+			} else {
+				w.lo = 0
+			}
+			lo, hi = satAdd(lo, w.lo), satAdd(hi, w.hi)
+		}
+	}
+	return reWidth{lo, hi}
+}
+
+// checkLookbehind reports a look-behind whose body is not fixed width.
+func (st *reState) checkLookbehind(nodes []*reNode) bool {
+	for _, n := range nodes {
+		if (n.op == opAssert || n.op == opAssertNot) && n.dir < 0 {
+			if w := st.widthOf(n.body); w.lo != w.hi {
+				return true
+			}
+		}
+		for _, children := range [][]*reNode{n.body, n.yes, n.no} {
+			if st.checkLookbehind(children) {
+				return true
+			}
+		}
+		for _, alt := range n.alts {
+			if st.checkLookbehind(alt) {
+				return true
+			}
+		}
+	}
+	return false
 }

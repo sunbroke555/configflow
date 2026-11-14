@@ -91,16 +91,12 @@ func TestCorpusMatch(t *testing.T) {
 				pairs++
 				continue
 			}
-			if matcher.UnsupportedRegexCount() > 0 {
-				skipped++
-				continue
-			}
 			t.Errorf("case %d query %q:\n got  %s\n want %s\n configs %s\n contents %s", n, query,
 				compact(t, got), compact(t, want), compact(t, record.Value("configs")), compact(t, contents))
 		}
 	}
-	t.Logf("%d (rule list, query) pairs equal, %d skipped for RE2-unsupported regexes", pairs, skipped)
-	if pairs < 15000 {
+	t.Logf("%d (rule list, query) pairs equal, %d skipped", pairs, skipped)
+	if skipped != 0 || pairs < 25000 {
 		t.Errorf("only %d pairs compared", pairs)
 	}
 }
@@ -128,9 +124,7 @@ func TestCorpusDirect(t *testing.T) {
 			}
 		}
 		if record.Value("match_domain") != nil {
-			if _, err := CompilePyRegex(value, false); err == nil || IsPyRegexError(err) || !strings.Contains(ruleType, "REGEX") {
-				check("match_domain", MatchDomain(query, ruleType, value))
-			}
+			check("match_domain", MatchDomain(query, ruleType, value))
 		}
 		check("match_ip", MatchIP(query, ruleType, value))
 		check("match_query", MatchQuery(query, ruleType, value))
@@ -185,7 +179,7 @@ func TestCorpusIDNA(t *testing.T) {
 }
 
 func TestCorpusRegex(t *testing.T) {
-	compiled, unsupportedCount := 0, 0
+	re2, backtrack, unsupportedCount, searches := 0, 0, 0, 0
 	for _, record := range corpus(t)["regex"] {
 		pattern, ignore := record.GetString("pattern"), record.GetBool("ignore")
 		flags := 0
@@ -196,7 +190,10 @@ func TestCorpusRegex(t *testing.T) {
 		want, _ := record.Value("error").(string)
 		var named *UnsupportedRegexError
 		if errors.As(err, &named) {
-			unsupportedCount++ // \N{name}: needs a Unicode name table
+			if !strings.Contains(pattern, `\N{`) {
+				t.Errorf("re.compile(%q): unexpectedly unsupported: %v", pattern, err)
+			}
+			unsupportedCount++
 			continue
 		}
 		got := ""
@@ -218,22 +215,29 @@ func TestCorpusRegex(t *testing.T) {
 		}
 		re, err := CompilePyRegex(pattern, ignore)
 		if err != nil {
+			if !strings.Contains(pattern, "4294967294") {
+				t.Errorf("re.compile(%q): not runnable: %v", pattern, err)
+			}
 			unsupportedCount++
 			continue
 		}
-		compiled++
-		texts, searches := record.GetList("texts"), record.GetList("searches")
-		boundary := strings.Contains(pattern, `\b`) || strings.Contains(pattern, `\B`)
+		if re.Engine() == "re2" {
+			re2++
+		} else {
+			backtrack++
+		}
+		texts, expected := record.GetList("texts"), record.GetList("searches")
 		for i, text := range texts {
-			if boundary && (text == "" || !isASCII(text.(string))) {
-				continue // RE2 word boundaries are ASCII-only; documented difference
-			}
-			if re.Search(text.(string)) != searches[i].(bool) {
-				t.Errorf("re.search(%q, %q, ignore=%v) = %v, want %v", pattern, text, ignore, !searches[i].(bool), searches[i])
+			searches++
+			if re.Search(text.(string)) != expected[i].(bool) {
+				t.Errorf("re.search(%q, %q, ignore=%v) [%s] = %v, want %v", pattern, text, ignore, re.Engine(), !expected[i].(bool), expected[i])
 			}
 		}
 	}
-	t.Logf("%d patterns run on RE2 and agree with Python, %d valid patterns are not runnable on RE2", compiled, unsupportedCount)
+	t.Logf("%d patterns on RE2, %d on the backtracking engine, %d unsupported (\\N{name}, repeat counts beyond int32); %d searches equal", re2, backtrack, unsupportedCount, searches)
+	if backtrack < 300 {
+		t.Errorf("only %d fallback patterns in the corpus", backtrack)
+	}
 }
 
 func TestCorpusRuleValueError(t *testing.T) {
@@ -291,6 +295,11 @@ func TestCorpusFilters(t *testing.T) {
 	skipped := 0
 	for _, record := range corpus(t)["filters"] {
 		switch record.GetString("what") {
+		case "names":
+			corpusNodeNames = corpusNodeNames[:0]
+			for _, name := range record.GetList("names") {
+				corpusNodeNames = append(corpusNodeNames, name.(string))
+			}
 		case "backticks":
 			if got := literalBackticks(record.GetString("pattern")); got != record.GetString("result") {
 				t.Errorf("_literal_backticks(%q) = %q, want %q", record.GetString("pattern"), got, record.GetString("result"))
@@ -314,9 +323,7 @@ func TestCorpusFilters(t *testing.T) {
 			case result.Has("exception"):
 				skipped++
 			case err != nil:
-				if strings.Contains(err.Error(), "暂不支持") {
-					skipped++
-				} else if result.GetString("error") != err.Error() {
+				if result.GetString("error") != err.Error() {
 					t.Errorf("filter_candidates(%s, %s) error %q, want %s", compact(t, record.Value("include")), compact(t, record.Value("exclude")), err.Error(), compact(t, result))
 				}
 			default:
@@ -345,7 +352,7 @@ func TestCorpusFilters(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d filter cases skipped (Python raised, or RE2 cannot run the pattern)", skipped)
+	t.Logf("%d filter cases skipped (Python raised)", skipped)
 }
 
 var corpusNodeNames = []string{"US-new", "US-expired", "HK-new", "HK-expired", "US`old", "EU 01", "香港-01", "sg", "", "US-expired-new", "hk-1", "日本 02", "Aé", "x_1", "123"}

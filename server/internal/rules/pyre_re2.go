@@ -7,25 +7,83 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 	"unicode"
+
+	"github.com/dlclark/regexp2"
 )
 
 // UnsupportedRegexError reports a pattern that Python's re accepts but that
-// has no RE2 equivalent (look-around, back references, atomic groups,
-// possessive quantifiers, conditionals, repeat counts above 1000, ...). The
-// caller decides what that means; the matcher treats such a pattern as "does
-// not match", which differs from Python where it would match.
+// neither engine can run. After the backtracking fallback this is only
+// \N{name} escapes (no Unicode name table) and repeat counts beyond the
+// fallback engine's int32 range.
 type UnsupportedRegexError struct{ Reason string }
 
 func (e *UnsupportedRegexError) Error() string {
 	return "regex construct not supported by the Go engine: " + e.Reason
 }
 
-// PyRegex is a compiled Python pattern, executed by Go's regexp (RE2).
-type PyRegex struct{ re *regexp.Regexp }
+// errFallback is the translator's signal that RE2 cannot express a pattern
+// exactly and the backtracking engine must run it.
+var errFallback = errors.New("needs the backtracking engine")
 
-// Search is re.search(...) is not None.
-func (r *PyRegex) Search(text string) bool { return r.re.MatchString(text) }
+// BacktrackTimeout bounds one match of a pattern run by the backtracking
+// engine. A hostile pattern must not hang the server: on timeout the match
+// counts as "no match" and one warning is logged per pattern.
+var BacktrackTimeout = time.Second
+
+var (
+	regexLoggerMu sync.RWMutex
+	regexLogger   Logger = nopLogger{}
+)
+
+// SetRegexLogger sets the logger for backtracking timeouts.
+func SetRegexLogger(logger Logger) {
+	regexLoggerMu.Lock()
+	defer regexLoggerMu.Unlock()
+	if logger == nil {
+		logger = nopLogger{}
+	}
+	regexLogger = logger
+}
+
+// PyRegex is a compiled Python pattern. RE2 runs it when it can do so
+// exactly; otherwise a backtracking engine (regexp2) does.
+type PyRegex struct {
+	re      *regexp.Regexp
+	net     *regexp2.Regexp
+	pattern string
+	warned  atomic.Bool
+}
+
+// Engine names the engine behind the pattern: "re2" or "backtrack"
+// (diagnostics and tests).
+func (r *PyRegex) Engine() string {
+	if r.re != nil {
+		return "re2"
+	}
+	return "backtrack"
+}
+
+// Search is re.search(...) is not None. A timeout of the backtracking engine
+// is "no match" plus a single warning.
+func (r *PyRegex) Search(text string) bool {
+	if r.re != nil {
+		return r.re.MatchString(text)
+	}
+	matched, err := r.net.MatchString(text)
+	if err != nil {
+		if r.warned.CompareAndSwap(false, true) {
+			regexLoggerMu.RLock()
+			logger := regexLogger
+			regexLoggerMu.RUnlock()
+			logger.Warningf("Regex %q exceeded the %s match time limit; treating it as no match", r.pattern, BacktrackTimeout)
+		}
+		return false
+	}
+	return matched
+}
 
 var (
 	regexCacheMu sync.Mutex
@@ -80,19 +138,24 @@ func compilePyRegex(pattern string, ignoreCase bool) (*PyRegex, error) {
 	if err != nil {
 		return nil, err
 	}
-	tr := &translator{ascii: parsed.flags&flagASCII != 0}
-	prefix := flagLetters(parsed.flags, 0)
-	if prefix != "" {
-		tr.b.WriteString("(?" + prefix + ")")
-	}
-	if err := tr.nodes(parsed.nodes); err != nil {
+	if source, err := translateRE2(parsed); err == nil {
+		if re, err := regexp.Compile(source); err == nil {
+			return &PyRegex{re: re, pattern: pattern}, nil
+		}
+		// Too-large repeat counts and similar: let the backtracker try.
+	} else if !errors.Is(err, errFallback) {
 		return nil, err
 	}
-	re, err := regexp.Compile(tr.b.String())
+	source, err := translateNet(parsed)
+	if err != nil {
+		return nil, err
+	}
+	net, err := regexp2.Compile(source, regexp2.None)
 	if err != nil {
 		return nil, &UnsupportedRegexError{Reason: err.Error()}
 	}
-	return &PyRegex{re: re}, nil
+	net.MatchTimeout = BacktrackTimeout
+	return &PyRegex{net: net, pattern: pattern}, nil
 }
 
 func flagLetters(add, del int) string {
@@ -116,16 +179,30 @@ func flagLetters(add, del int) string {
 	return result
 }
 
-type translator struct {
-	b     strings.Builder
-	ascii bool
+// translateRE2 builds the RE2 program, or errFallback where RE2 would differ
+// from Python (look-around, back references, atomic groups, possessive
+// quantifiers, conditionals, Unicode word boundaries, "$" that is not the very
+// end of the pattern).
+func translateRE2(parsed *parsedRegex) (string, error) {
+	tr := &translator{ascii: parsed.flags&flagASCII != 0, multiline: parsed.flags&flagMultiline != 0}
+	if prefix := flagLetters(parsed.flags, 0); prefix != "" {
+		tr.b.WriteString("(?" + prefix + ")")
+	}
+	if err := tr.nodes(parsed.nodes, true); err != nil {
+		return "", err
+	}
+	return tr.b.String(), nil
 }
 
-func unsupported(reason string) error { return &UnsupportedRegexError{Reason: reason} }
+type translator struct {
+	b         strings.Builder
+	ascii     bool
+	multiline bool
+}
 
-func (tr *translator) nodes(nodes []*reNode) error {
-	for _, n := range nodes {
-		if err := tr.node(n); err != nil {
+func (tr *translator) nodes(nodes []*reNode, tail bool) error {
+	for i, n := range nodes {
+		if err := tr.node(n, tail && i == len(nodes)-1); err != nil {
 			return err
 		}
 	}
@@ -140,7 +217,26 @@ func (tr *translator) lit(r rune) {
 	fmt.Fprintf(&tr.b, `\x{%x}`, r)
 }
 
-func (tr *translator) node(n *reNode) error {
+// scoped applies a group's own flags to the translator state for body.
+func (tr *translator) scoped(add, del int, body func() error) error {
+	ascii, multiline := tr.ascii, tr.multiline
+	defer func() { tr.ascii, tr.multiline = ascii, multiline }()
+	if add&flagASCII != 0 {
+		tr.ascii = true
+	}
+	if add&flagUnicode != 0 {
+		tr.ascii = false
+	}
+	if add&flagMultiline != 0 {
+		tr.multiline = true
+	}
+	if del&flagMultiline != 0 {
+		tr.multiline = false
+	}
+	return body()
+}
+
+func (tr *translator) node(n *reNode, tail bool) error {
 	switch n.op {
 	case opLiteral:
 		tr.lit(n.ch)
@@ -173,14 +269,21 @@ func (tr *translator) node(n *reNode) error {
 			tr.b.WriteString(`^`)
 		case atBeginningString:
 			tr.b.WriteString(`\A`)
-		case atBoundary:
-			tr.b.WriteString(`\b`)
-		case atNonBoundary:
-			tr.b.WriteString(`\B`)
-		case atEnd:
-			tr.b.WriteString(`$`)
 		case atEndString:
 			tr.b.WriteString(`\z`)
+		case atEnd:
+			switch {
+			case tr.multiline:
+				tr.b.WriteString(`$`)
+			case tail:
+				// Python's "$" also matches before one final newline; nothing
+				// follows it on this path, so consuming that newline is safe.
+				tr.b.WriteString(`(?:\n?\z)`)
+			default:
+				return errFallback
+			}
+		default: // \b, \B: RE2's are ASCII-only
+			return errFallback
 		}
 	case opBranch:
 		tr.b.WriteString(`(?:`)
@@ -188,15 +291,12 @@ func (tr *translator) node(n *reNode) error {
 			if i > 0 {
 				tr.b.WriteString(`|`)
 			}
-			if err := tr.nodes(alt); err != nil {
+			if err := tr.nodes(alt, tail); err != nil {
 				return err
 			}
 		}
 		tr.b.WriteString(`)`)
 	case opSubpattern:
-		if n.add&(flagASCII|flagLocale) != 0 {
-			return unsupported("scoped (?a:) flag")
-		}
 		flags := flagLetters(n.add, n.del)
 		switch {
 		case n.group != 0 && flags == "":
@@ -206,13 +306,13 @@ func (tr *translator) node(n *reNode) error {
 		default:
 			tr.b.WriteString(`(?` + flags + `:`)
 		}
-		if err := tr.nodes(n.body); err != nil {
+		if err := tr.scoped(n.add, n.del, func() error { return tr.nodes(n.body, tail) }); err != nil {
 			return err
 		}
 		tr.b.WriteString(`)`)
 	case opMaxRepeat, opMinRepeat:
 		tr.b.WriteString(`(?:`)
-		if err := tr.nodes(n.body); err != nil {
+		if err := tr.nodes(n.body, false); err != nil {
 			return err
 		}
 		tr.b.WriteString(`)`)
@@ -224,16 +324,8 @@ func (tr *translator) node(n *reNode) error {
 		if n.op == opMinRepeat {
 			tr.b.WriteString(`?`)
 		}
-	case opPossessive:
-		return unsupported("possessive quantifier")
-	case opAtomic:
-		return unsupported("atomic group")
-	case opAssert, opAssertNot:
-		return unsupported("look-around assertion")
-	case opGroupRef:
-		return unsupported("back reference")
-	case opGroupRefExists:
-		return unsupported("conditional group")
+	default: // possessive, atomic, assertions, references, conditionals
+		return errFallback
 	}
 	return nil
 }

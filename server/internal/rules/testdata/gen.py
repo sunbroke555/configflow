@@ -261,6 +261,22 @@ REGEXES = [
     '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10', '(a)\\10', '\\1' + '(a)', '(?:(?:a))', '((a))', '(?:a|b|c)+', 'x*y+z?', '[a-z]{2,4}', '[0-9a-fA-F:.]+',
 ]
 
+WORDS = ['\u8fc7\u671f', '\u5269\u4f59|\u6d41\u91cf', 'HK', 'US|JP', 'test', '\U0001f1ed\U0001f1f0', 'x']
+LOOK = []
+for w in WORDS:
+    LOOK += [f'^(?!.*({w})).*$', f'^(?=.*({w}))', f'(?<!{w.split("|")[0]})\\d+', f'(?<=\\U0001f1ed\\U0001f1f0 )\\w+', f'({w})\\1', f'(?>{w})x', f'(?:{w})*+x', f'(?:{w})++$',
+             f'(?i)^(?!.*({w}))', f'(?s)(?!{w}).', f'((?:{w}))(?(1)\\d|x)', f'(?P<n>{w})(?P=n)?', f'^(?!(?:{w})$)[^\\n]*', f'{w}(?=\\d)', f'{w}(?!\\d)',
+             f'(?<=({w.split("|")[0]}))x', f'(?=({w}))\\1', f'^.{{0,40}}(?<!{w.split("|")[0]})$', f'(?m)^(?!{w})', f'(?:^|(?<=[ -]))({w})\\b']
+LOOK += [
+    '^(?!.*(\u8fc7\u671f|\u5269\u4f59|\u6d41\u91cf)).*$', '^(?!.*\u8fc7\u671f)(?!.*\u6d41\u91cf).*', '(?<![A-Z])US(?![A-Z])', '(?<=-)\\d{2}$', '\\b\\w+\\b', '\\bUS\\b', '\\Bs', '\\B', '\\b', 'a\\b', '\\bx\\B',
+    '(?a)\\b\\w+\\b', '(?a:\\w+)\\b', '(?a)\\d+', '(?u)\\b\\w', 'a$', 'a$\\n', '(?m)a$', '(?m)^a$', '$', '^$', '$|a', '(?:a$)*', 'a$b', '(a$)', '(a$)|b', 'a\\Z', 'a\\Z|b', '(?:a|b$)c', 'b$(?=\\n)',
+    'a{1001}', 'a{2000,}', '(?:ab){1500}', 'a{4294967294}', 'x{0,1001}y', '(?:a{500}){3}', '(a)|b(?(1)c)', '(a)?(?(1)b|c)', '(a)?(?(1)b)', '(?P<g>a)?(?(g)b|c)', '(?(1)a)', '(a)(?(1)(?(1)b|c)|d)',
+    '(?>a+)b', '(?>a|ab)c', 'a++b', 'a*+a', 'a?+a', '(?:ab)++c', 'a{2,3}+a', '(\\w)\\1', '(a)(b)\\2\\1', '(?i)(a)\\1', '(?:(a)|b)\\1', '(a*)\\1', '(?P<q>[\"\'])x(?P=q)', '(.)(?=.*\\1)', '^(.+)\\1$',
+    '(?<=a|b)c', '(?<=a+)c', '(?<=ab|c)d', '(?<!ab|c)d', '(?<=(a))b', '(?<=\\b)a', '(?<=(?:ab){2})c', '(?<=a{2})b', '(?<=a{1,2})b', '(?<=a*)b', '(?<=(a)\\1)b', '(?<=a)(?<=b)',
+    '(?=a)*', '(?!a)+', '(?=a){2}', '(?:(?=a)a)+', '(?i:(?!A)a)', '(?-i:A)(?i:(?=a))', '(?=\\n)', '(?!\\Z)', '(?<=^)a', '(?<=\\A)a', '(?=.$)',
+    '(?x)(?!a) # c', '(?x)(?<=a) b', '(?s:.)(?<!\\n)', '[^\\W\\d](?!\\d)', '(?![\\W])\\S', '[\\w-](?<![-])', '(?:(?!a).)+', '(?:(?!ab)\\w)+$',
+]
+REGEXES += LOOK
 TEXTS = ['', 'a', 'abc', 'aab', 'aaa', 'b', 'abcabc', 'example.com', 'EXAMPLE.COM', 'a.example.com', 'node12.org', 'text.org', 'x-y.test', '1.2.3.4', '_x.test',
          'a b', '例子', 'case.test', 'bad.test', 'good.test', 'Aé', 'aA', 'ab\ncd', 'AB']
 
@@ -367,10 +383,11 @@ def cache_cases():
 # group_candidates
 # --------------------------------------------------------------------------
 
-FILTER_PATTERNS = [None, '', ' ', 'US', '^US', 'expired', ' (?i)expired ', '(?i)^us-expired(?:-new)?$', '^US-expired(?:-new)?$', 'expired|US`old', 'expired|US\\`old', 'a``b',
+FILTER_PATTERNS = ['^(?!.*(\u8fc7\u671f|\u5269\u4f59|\u6d41\u91cf)).*$', '^(?!.*\u8fc7\u671f)', '(?<![A-Z])US', '\\bHK\\b', '(?i)^(?!.*us)', '(HK).*\\1', '(?>US)-', '\\d++$',
+                   '(?<=-)\\d+$', '(?<=a|bc)x', None, '', ' ', 'US', '^US', 'expired', ' (?i)expired ', '(?i)^us-expired(?:-new)?$', '^US-expired(?:-new)?$', 'expired|US`old', 'expired|US\\`old', 'a``b',
                    '\\\\`', '\\\\\\`', '[', '(', '(?=x)', '(?!x)', '(?<=x)y', '(?P<n>a)(?P=n)', '\\d+', '\\w+', '\\bUS\\b', '^HK', '^(?!US)', '(?i)(?x)a', '(?s)(?i)US', '(?i)', '(?)',
                    '(?aiLmsux)x', '(?ai)x', '(?i)(?s)x', 5, True, ['x'], '.*', '香港|HK', '^[一-鿿]+', '(?i)HK', '[0-9]+x', 'a{1001}', '\\1', '(a)\\1']
-NODE_NAMES = ['US-new', 'US-expired', 'HK-new', 'HK-expired', 'US`old', 'EU 01', '香港-01', 'sg', '', 'US-expired-new', 'hk-1', '日本 02', 'Aé', 'x_1', '123']
+NODE_NAMES = ['\u9999\u6e2f 01 \u8fc7\u671f', '\u9999\u6e2f 02', '\U0001f1ed\U0001f1f0 HK-03', '\u5269\u4f59\u6d41\u91cf 100G', 'US-us', '\u65e5\u672c|JP 05', 'US-new', 'US-expired', 'HK-new', 'HK-expired', 'US`old', 'EU 01', '香港-01', 'sg', '', 'US-expired-new', 'hk-1', '日本 02', 'Aé', 'x_1', '123']
 
 
 def filter_cases():
@@ -380,6 +397,7 @@ def filter_cases():
             emit(kind='filters', what='embedded', pattern=pattern, result=gc._embedded(pattern))
             for include in ('', '^US', '(?i)us', '^US-`^HK-'):
                 emit(kind='filters', what='exclusion', include=include, exclude=pattern, result=gc.exclusion_filter(include, pattern))
+    emit(kind='filters', what='names', names=NODE_NAMES)
     names = [{'name': name, 'extra': i} for i, name in enumerate(NODE_NAMES)]
     for _ in range(500):
         include, exclude = R.choice(FILTER_PATTERNS), R.choice(FILTER_PATTERNS)

@@ -3,6 +3,7 @@ package rules
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"configflow/internal/jsonx"
 )
@@ -48,17 +49,48 @@ func TestExclusionValidationAndRenderingTrimInlineFlagsConsistently(t *testing.T
 	}
 }
 
-func TestLookaroundPatternsAreReportedNotSilentlyChanged(t *testing.T) {
-	// Python accepts these; RE2 cannot run them, so filtering says so.
-	_, err := FilterCandidates([]any{obj("name", "x")}, "^(?!US)", "")
-	if err == nil || !strings.Contains(err.Error(), "暂不支持") {
-		t.Fatalf("err = %v", err)
+func TestLookaroundFiltersRunOnTheBacktrackingEngine(t *testing.T) {
+	nodes := []any{obj("name", "香港 01"), obj("name", "香港 02 过期"), obj("name", "US 剩余流量 10G"), obj("name", "US-1")}
+	kept, err := FilterCandidates(nodes, "^(?!.*(过期|剩余|流量)).*$", "")
+	if err != nil || len(kept) != 2 || kept[0] != nodes[0] || kept[1] != nodes[3] {
+		t.Fatalf("kept %v, %v", kept, err)
 	}
-	// Validation uses the Python grammar only, so the same pattern passes.
+	re, _ := CompilePyRegex("^(?!.*(过期|剩余|流量)).*$", false)
+	if re.Engine() != "backtrack" {
+		t.Fatalf("engine = %s", re.Engine())
+	}
 	if err := ValidateFilters(obj("exclude_regex", "^(?!US)"), nil); err != nil {
 		t.Fatal(err)
 	}
 }
+
+func TestBacktrackingTimeoutIsNoMatchWithOneWarning(t *testing.T) {
+	old := BacktrackTimeout
+	BacktrackTimeout = 50 * time.Millisecond
+	defer func() { BacktrackTimeout = old }()
+	logger := &countingLogger{}
+	SetRegexLogger(logger)
+	defer SetRegexLogger(nil)
+	re, err := CompilePyRegex(`^(?:a|aa)+(?!x)$`, false)
+	if err != nil || re.Engine() != "backtrack" {
+		t.Fatalf("compile: %v", err)
+	}
+	subject := strings.Repeat("a", 60) + "b"
+	for i := 0; i < 3; i++ {
+		if re.Search(subject) {
+			t.Fatal("matched")
+		}
+	}
+	if logger.warnings != 1 {
+		t.Fatalf("warnings = %d", logger.warnings)
+	}
+}
+
+type countingLogger struct{ warnings int }
+
+func (*countingLogger) Debugf(string, ...any)     {}
+func (l *countingLogger) Warningf(string, ...any) { l.warnings++ }
+func (*countingLogger) Errorf(string, ...any)     {}
 
 func TestExclusionFilterShapes(t *testing.T) {
 	for _, c := range []struct{ include, exclude, want string }{

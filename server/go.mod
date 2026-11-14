@@ -3,6 +3,7 @@ module configflow
 go 1.26.0
 
 require (
+	github.com/dlclark/regexp2 v1.12.0
 	github.com/klauspost/compress v1.20.4
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.50.0
