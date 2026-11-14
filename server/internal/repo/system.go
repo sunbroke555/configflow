@@ -40,8 +40,9 @@ func randomHex(length int) string {
 	return hex.EncodeToString(raw)[:length]
 }
 
-// tokenURLSafe is secrets.token_urlsafe(32).
-func tokenURLSafe() string {
+// tokenURLSafe is secrets.token_urlsafe(32). It is a variable so tests can
+// fix the generated token (Python: monkeypatched secrets.token_urlsafe).
+var tokenURLSafe = func() string {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		panic(err)
