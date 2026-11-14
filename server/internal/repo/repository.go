@@ -77,6 +77,13 @@ type Repository struct {
 	// commitCount is the number of write transactions this process
 	// committed; request-scoped profile validation is invalidated by it.
 	commitCount atomic.Int64
+
+	// Test seams: the number of full loads and of validations of loaded
+	// documents, a callback after a full load (inside the read
+	// transaction), and the cache size limit.
+	loads, validations atomic.Int64
+	afterLoad          func()
+	cacheMaxBytes      int64
 }
 
 // Open is ProfileRepository(data_dir, default_config_factory,
@@ -101,6 +108,7 @@ func Open(dataDir string, options Options) (*Repository, error) {
 		migrationsDir: filepath.Join(root, "migrations"),
 		lockFile:      filepath.Join(root, ".config.lock"),
 		options:       options,
+		cacheMaxBytes: DocumentCacheMaxBytes,
 	}
 	r.store = store.New(r.dbPath, LockTimeout)
 	if err := os.MkdirAll(r.dataDir, 0o777); err != nil {
@@ -359,7 +367,7 @@ func (r *Repository) cached() *store.Entry {
 // setCache keeps the latest loaded or committed entry: every read compares
 // its head with the database, so an older one only costs a reload.
 func (r *Repository) setCache(entry store.Entry) {
-	if entry.Size > DocumentCacheMaxBytes {
+	if entry.Size > r.cacheMaxBytes {
 		return
 	}
 	r.cacheMu.Lock()
@@ -387,12 +395,17 @@ func (r *Repository) loadEntry() (store.Entry, error) {
 			entry, hit = *cached, true
 			return nil
 		}
+		r.loads.Add(1)
 		entry, err = connection.Load()
+		if err == nil && r.afterLoad != nil {
+			r.afterLoad()
+		}
 		return err
 	})
 	if err != nil || hit {
 		return entry, err
 	}
+	r.validations.Add(1)
 	if err := ValidateDocument(entry.Document); err != nil {
 		return store.Entry{}, err
 	}
