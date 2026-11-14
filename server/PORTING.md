@@ -107,6 +107,31 @@ is shared and must never be mutated: `DeepCopy()` first. Errors are `*store.Erro
 `ErrStore`, `ErrCorrupt`, `ErrUnsupported`, `ErrConflict`, `ErrStorage`, `ErrSQLite`, `ErrDocument`; `Error()`
 is Python's `str(exc)`.
 
+**Infra (package #1)** — each has a package doc; read it before use.
+- `internal/yamlx`: PyYAML-compatible YAML on the jsonx model. `Load`/`SafeLoad(text)` is
+  `yaml.safe_load` (YAML 1.1 typing: `yes/no/on/off`, octal, sexagesimal, timestamps → `yamlx.Timestamp`);
+  `LoadWith(text, LoadOptions{Schema: SchemaNative, Key, Name})` is `oxidns_native.NativeLoader`.
+  `Dump(v, DumpOptions{AllowUnicode, SortKeys, FlowStyle, Indent, Width, IndentSequences, ExplicitStart,
+  ExplicitEnd, NoAliases, OnMarked})` is a port of PyYAML's pure-Python emitter, byte-identical for the
+  option sets used in the backend (11 sets × 1374 corpus values). Presets: `SafeDump` (`yaml.safe_dump(v)`,
+  sorted), `SafeDumpUnicode` (`allow_unicode=True, sort_keys=False`), `IndentDump` (`IndentDumper`).
+  `FlowList`, `FlowMap`, `*SharedString` (anchor/alias), `Marked` + `OnMarked` (for `push_diff`).
+  Known limits: a non-string mapping key gives `*NonStringKeyError`; syntax error texts are yaml.v3's;
+  CSafeDumper output (used once in `push_diff.py` to measure size) is not reproduced.
+- `internal/logx`: `Setup(Config)`, `Get(name)` with `Debug/Info/Warning/Error/Critical` and `…f`
+  variants, `Exception(msg, err)`, `LogText(value, limit)` (Python `log_text`, default limit 120),
+  `ClientIP(req)`. **Use the Python module path as the logger name** (`backend.routes.agents`): the log
+  line format `2026-11-14 12:34:56,789 - name - LEVEL - msg` is what the log page shows.
+- `internal/jsonstore`: one JSON file per id under a directory, atomic writes (`utils/json_store.py`).
+- `internal/urlx`: `SafeURLForLog`, `SafeExceptionDetails(err)`, `Unquote`, `UnquotePlus`, `QuotePlus`.
+- `internal/taskstatus`: `DATA_DIR/task-status.json` store; `Record`, `Get`, `Load`, `Forget`, `NowISO`,
+  `ParseTime`, `FromISOFormat` (CPython `datetime.fromisoformat` semantics); `OnRecord` hook.
+- `internal/localhttp`: in-process dispatch of requests addressed to this server (`utils/local_http.py`):
+  `Register(handler)`, `Do(ctx, Request)` → `(nil, nil)` means "use the network".
+- `internal/resource` (bundled files: `FromEnv().Backend(name)`), `internal/utilx` (`GetLocalIP`,
+  `GenerateRandomToken`, `StrToBool`), `internal/version` (`Version`, `Info()`), `internal/jsonresp`
+  (`External(payload)` = `jsonify_external` body; `PlainTree`; `Sanitized` marker — HTTP glue is #3's).
+
 ## Helpers from a package that is not ported yet
 
 If you need a small helper that belongs to another work package still marked `todo`/`wip` in
@@ -122,3 +147,6 @@ Several agents work in this same worktree at once. Touch only your package direc
 (after each coherent, compiling step) so nothing is lost if you are interrupted. Run only your own
 packages' tests: `rt -- bash -lc 'cd server && go vet ./internal/<yours>/... && go test -count=1 ./internal/<yours>/...'`.
 Another agent's half-written package may sit in the tree; never "fix" it, and do not run `go test ./...`.
+`rt --back <path>` copies that path from the server over your local files. Use it only for a single
+generated file or a directory inside your own package (`--back server/internal/<yours>/testdata`), never
+for `server/internal` or `server`: it would overwrite other agents' newer local edits.
