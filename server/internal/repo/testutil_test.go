@@ -6,6 +6,7 @@ package repo
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"configflow/internal/jsonx"
@@ -87,4 +88,9 @@ func parse(t testing.TB, text string) *jsonx.Object {
 		t.Fatalf("parse: %v", err)
 	}
 	return value.(*jsonx.Object)
+}
+
+func readFileString(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	return string(data), err
 }
