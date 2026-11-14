@@ -43,12 +43,17 @@ rows stay documented as is.
 - commented_blocks: 14 / 1112 — `!!binary`/`!!map`/`!!seq`/`!!set` tags 12, yamlx parse 2.
 
 ## In progress
-Nothing half-written.
+Nothing. Follow-up handed back (2026-11-15); all 12 corpora reproduce from gen.py (checked on the server).
 
-## Next
-1. CRLF documents (decided: report with estimate, not implemented) with comments (118): reproduce ruamel's mixed `\r\r\n` / `\n` output.
-2. Alias to commented block expanded in flow (33): report with estimate.
-3. Hand-back with per-category leftovers (count, minimal example, reason).
+## Next (only if the coordinator asks)
+1. CRLF documents with comments/blank lines (118 random rows): needs a port of RoundTripScanner comment-token
+   formation (comment text keeps its `\r`, blank lines become `\n`, post tokens lose the final `\n` and get
+   `\r\n`, plain scalars followed by blank lines form `\n`-only tokens, CRLF blank lines skip the
+   empty-line branch) — estimate 1–2 days; refused for now.
+2. Commented block collection expanded inside a flow collection (33 anchor rows): ruamel writes the block's
+   comments inside the flow text with line breaks (`[\n  # base\n {k: 1 # k\n, ...}]`) — estimate half a day.
+3. Smaller leftovers: `!!binary`/`!!map`/`!!seq`/`!!set` tags, lone `-` scalar, comment on a null item of a
+   nested compact sequence, sources yamlx cannot parse (`1,000` inside flow, package yamlx).
 
 ## Decisions and findings
 - Refusals return Python's failure message; route answers 400; original text kept.
