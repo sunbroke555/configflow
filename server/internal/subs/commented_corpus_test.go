@@ -61,6 +61,11 @@ func TestCommentedCorpus(t *testing.T) {
 	}
 	t.Logf("%d rows %v", len(rows), stats)
 	t.Logf("declined: %v", reasons)
+	// Declines are a documented gap (the caller keeps the original text with
+	// Python's failure message); do not let them grow unnoticed.
+	if stats["go_declined"] > 340 {
+		t.Errorf("declined rows grew to %d (was 340)", stats["go_declined"])
+	}
 }
 
 func firstDiff(got, want string) string {

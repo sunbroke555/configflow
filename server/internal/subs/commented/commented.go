@@ -441,6 +441,19 @@ func same(a, b any) bool {
 	case jsonx.Number:
 		y, ok := b.(jsonx.Number)
 		return ok && x.IsInt() == y.IsInt() && jsonx.Equal(x, y)
+	case yamlx.Timestamp:
+		// date or datetime (type(left) is type(right)), then ==
+		y, ok := b.(yamlx.Timestamp)
+		if !ok || x.HasTime != y.HasTime {
+			return false
+		}
+		if !x.HasTime {
+			return x == y
+		}
+		if x.HasZone != y.HasZone {
+			return false // naive == aware is False
+		}
+		return x.Time().Equal(y.Time())
 	default:
 		if _, isNum := b.(jsonx.Number); isNum {
 			return false
@@ -448,3 +461,4 @@ func same(a, b any) bool {
 		return jsonx.Equal(a, b)
 	}
 }
+

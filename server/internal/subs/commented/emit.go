@@ -160,6 +160,17 @@ func (e *emitter) emitValue(head string, v *node, r *rec, seqCol, childCol int, 
 			if strings.HasSuffix(target.raw, "\n") && len(body) > 0 {
 				body = body[:len(body)-1]
 			}
+			if len(r.gap) > 0 {
+				// A comment right after a literal scalar must dedent below the
+				// content indentation (ruamel issue 376): column = indent - 1.
+				first := r.gap[0]
+				trimmed := strings.TrimLeft(first, " ")
+				if strings.HasPrefix(trimmed, "#") && len(first)-len(trimmed) >= childCol && childCol > 0 {
+					moved := *r
+					moved.gap = append([]string{spaces(childCol-1) + trimmed}, r.gap[1:]...)
+					r = &moved
+				}
+			}
 			e.line(join(head, strings.Join(parts, " ")), r, body)
 			return
 		}
