@@ -284,4 +284,3 @@ func (r splitResult) username() (string, bool) {
 	username, _, _ := strings.Cut(r.netloc[:at], ":")
 	return username, true
 }
-

@@ -47,7 +47,9 @@ func Register(r *httpx.Router) {
 	r.Handle([]string{"GET", "POST"}, "/api/settings/subscription-aggregation", "settings.handle_subscription_aggregation", auth.Require(handleSubscriptionAggregation))
 }
 
-func failure(status int, message string) *httpx.Response { return httpx.Message(status, false, message) }
+func failure(status int, message string) *httpx.Response {
+	return httpx.Message(status, false, message)
+}
 
 func handleWebPort(c *httpx.Ctx) (*httpx.Response, error) {
 	manager := webListener.Load()

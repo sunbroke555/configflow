@@ -44,13 +44,13 @@ type hook struct {
 }
 
 var (
-	mu       sync.Mutex
-	loops    []loop
-	hooks    []hook
-	started  bool
-	cancel   context.CancelFunc
-	running  sync.WaitGroup
-	baseCtx  context.Context
+	mu      sync.Mutex
+	loops   []loop
+	hooks   []hook
+	started bool
+	cancel  context.CancelFunc
+	running sync.WaitGroup
+	baseCtx context.Context
 )
 
 // Loop registers a background loop. Loops registered after Start start

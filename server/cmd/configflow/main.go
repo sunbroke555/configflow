@@ -141,7 +141,7 @@ type webServer struct {
 	edge   *httpx.Edge
 }
 
-func (w webServer) Serve(l net.Listener) error   { return w.server.Serve(l) }
+func (w webServer) Serve(l net.Listener) error    { return w.server.Serve(l) }
 func (w webServer) SetListenerToken(token string) { w.edge.SetListenerToken(token) }
 func (w webServer) ListenerToken() string         { return w.edge.ListenerToken() }
 

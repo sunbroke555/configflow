@@ -12,8 +12,8 @@ import (
 	"configflow/internal/jsonx"
 	"configflow/internal/notifications"
 	"configflow/internal/repo"
-	"configflow/internal/taskstatus"
 	"configflow/internal/tasks"
+	"configflow/internal/taskstatus"
 )
 
 // The task rows come from packages not ported yet; these tests use a

@@ -288,8 +288,8 @@ func ValidateTokenOrJWT(c *httpx.Ctx, config *jsonx.Object) (ValidateResult, err
 var publicExactPaths = map[string]bool{
 	"/api/auth/status": true, "/api/auth/login": true, "/api/config/mihomo": true, "/api/config/surge": true,
 	"/api/config/loon": true, "/api/config/mosdns": true, "/api/config/oxidns": true,
-	"/api/mosdns/rule-proxy":  true,
-	"/api/agents/register":    true, "/api/agents/install-script": true, "/api/agents/core-install-script": true,
+	"/api/mosdns/rule-proxy": true,
+	"/api/agents/register":   true, "/api/agents/install-script": true, "/api/agents/core-install-script": true,
 	"/api/agents/docker-compose": true, "/api/agents/docker-run": true,
 	"/api/agents/gateway-network-probe.sh": true,
 	"/api/agents/docker-mihomo-compose":    true, "/api/agents/docker-mihomo-run": true,

@@ -224,13 +224,13 @@ func TestBackupConfigMasksPasswordAndValidates(t *testing.T) {
 		t.Fatal("the mask keeps the saved password")
 	}
 	for body, message := range map[string]string{
-		`{}`:                        "请求体必须是非空 JSON 对象，请使用 Content-Type: application/json",
-		`{"x": 1}`:                  "请提供 WebDAV 备份配置字段",
-		`{"webdav_url": 1}`:         "WebDAV 地址、用户名、密码和路径必须是字符串",
-		`{"auto_backup": 1}`:        "auto_backup 必须是布尔值",
-		`{"keep_latest": 1001}`:     "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
-		`{"keep_daily": true}`:      "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
-		`{"keep_daily": 5.0}`:       "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
+		`{}`:                    "请求体必须是非空 JSON 对象，请使用 Content-Type: application/json",
+		`{"x": 1}`:              "请提供 WebDAV 备份配置字段",
+		`{"webdav_url": 1}`:     "WebDAV 地址、用户名、密码和路径必须是字符串",
+		`{"auto_backup": 1}`:    "auto_backup 必须是布尔值",
+		`{"keep_latest": 1001}`: "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
+		`{"keep_daily": true}`:  "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
+		`{"keep_daily": 5.0}`:   "保留份数须为 0–1000 的整数，每日保留天数须为 0–3650 的整数",
 	} {
 		srv.Post("/api/backup/config", httpxtest.Body([]byte(body), "application/json")).WantStatus(400).
 			WantJSON(jsonx.Obj("success", false, "message", message))
