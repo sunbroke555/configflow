@@ -1,5 +1,8 @@
 # Go rewrite — handoff for the coordinating session
 
+**Since 2026-11-15 the work follows `server/WORKFLOW.md` (domains, module split, adversarial review,
+domain differential, `PROGRESS-<domain>.md`). Where this file's "How a package is run" differs, WORKFLOW.md wins.**
+
 Read this first when you pick up the Go rewrite in a new session. It is written for the coordinator
 (the session that briefs, verifies and records work packages), not for the porting agents; they read
 `PORTING.md`.
