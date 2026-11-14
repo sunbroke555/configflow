@@ -11,7 +11,7 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 | 2 | repo | `common/config_repository`, `config`, `profile_context`, `oxidns_settings` | 4.0k | 0 | wip |
 | 3 | httpx, auth, settings | `common/auth`, `routes/auth`, `routes/__init__`, `settings`, `logs`, `stats`, `tasks`, `notifications`, `app.py` | 2.0k | 2 | todo |
 | 4 | rule engine | `rule_syntax`, `rule_matcher`, `rule_utils`, `domain_matcher_cache`, `group_candidates`, `reorder`, `strategy_references`, `connection_rules` | 1.8k | 1 | done |
-| 5 | subscription parsing | `subscription_parser`, `hosts`, `filter`, `dialers`, `proxy_chains`, `commented_mihomo`, `mihomo_listeners`, `proxy_server_dns` | 2.4k | 1 | wip |
+| 5 | subscription parsing (only `parse_uri_list` for manual node strings; subscriptions themselves go through Sub-Store, #13) | `subscription_parser`, `hosts`, `filter`, `dialers`, `proxy_chains`, `commented_mihomo`, `mihomo_listeners`, `proxy_server_dns` | 2.4k | 1 | wip |
 | 6 | mihomo converter | `converters/common`, `converters/mihomo`, `dialer_references`, `mihomo_base_settings`, `mihomo_easytier` | 2.5k | 4, 5 | todo |
 | 7 | surge, loon | `converters/surge`, `converters/loon` | 1.9k | 6 | todo |
 | 8 | mosdns | `converters/mosdns`, `mosdns_archive`, `routes/mosdns` | 2.1k | 2, 12 | todo |
@@ -19,7 +19,7 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 | 10 | oxidns common | `oxidns_common`, `oxidns_common_routing`, `oxidns_common_updates` | 2.8k | 9 | todo |
 | 11 | oxidns editor, rule DNS | `oxidns_device_policy`, `oxidns_editor`, `oxidns_native_apply`, `rule_dns`, `oxidns_archive`, `routes/oxidns` | 2.4k | 10 | todo |
 | 12 | remote rules, providers | `rule_fetch`, `ruleset_content`, `remote_rule_sources`, `provider_delivery`, `provider_response`, `website_identity` | 1.7k | 2, 4 | todo |
-| 13 | subscription fetch | `sub_store_client`, `sub_store_runtime`, `subscription_cache`, `refresh`, `health`, `scheduled_refresh`, `dependencies` | 1.8k | 5 | todo |
+| 13 | subscription fetch (HTTP client of the bundled Sub-Store; Sub-Store itself is kept, not ported) | `sub_store_client`, `sub_store_runtime`, `subscription_cache`, `refresh`, `health`, `scheduled_refresh`, `dependencies` | 1.8k | 5 | todo |
 | 14 | health, latency | `health_check`, `node_latency`, `node_dns`, `region_check`, `domain_probe`, `web_listener` | 1.4k | 13 | todo |
 | 15 | resource routes A | `routes/subscriptions`, `aggregations`, `nodes`, `node_deletion`, `device_notes` | 1.7k | 2, 13 | todo |
 | 16 | resource routes B | `routes/rules`, `rule_library`, `proxy_groups` | 2.1k | 4, 12 | todo |
