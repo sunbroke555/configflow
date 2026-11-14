@@ -61,3 +61,10 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 - `agents/node_test_dns_cleanup.py`: one-time cleanup added in #569.
 
 Anything else that looks unused still has to be reported in the hand-back, not dropped silently.
+
+## Follow-ups after parity (behaviour changes, deliberately not part of the port)
+
+- Surge/Loon manual node strings: the port keeps the built-in `parse_uri_list` (ss, ssr, vmess, vless,
+  trojan, hysteria/hysteria2, inline YAML) exactly as Python, including silently dropping other schemes
+  (tuic, anytls, wireguard, …). After the Go server passes parity, switch Surge/Loon to Sub-Store
+  conversion like Mihomo and delete the built-in parser (maintainer agreed, 2026-11-14).
