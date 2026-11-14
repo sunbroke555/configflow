@@ -714,12 +714,15 @@ func containsValue(list []any, v any) bool {
 	return false
 }
 
-// ReportedCoreVersion is reported_core_version without the traffic store
-// lookup: the Mihomo version an Agent last reported, "" when ConfigFlow does
-// not know it. status is the Agent's stored status document (nil when
-// missing). Only a Mihomo Agent with domain discovery enabled counts; a
-// report left from before it was turned off may be stale.
-func ReportedCoreVersion(agent, status *jsonx.Object) string {
+// StatusLoader loads an Agent's stored status document (the traffic store's
+// load_status); nil when there is none or it cannot be read.
+type StatusLoader func(agentID string) *jsonx.Object
+
+// ReportedCoreVersion is reported_core_version: the Mihomo version an Agent
+// last reported, "" when ConfigFlow does not know it. Only a Mihomo Agent
+// with domain discovery enabled counts (a report left from before it was
+// turned off may be stale); statusOf is called only for those.
+func ReportedCoreVersion(agent *jsonx.Object, statusOf StatusLoader) string {
 	if agent == nil {
 		return ""
 	}
@@ -727,15 +730,18 @@ func ReportedCoreVersion(agent, status *jsonx.Object) string {
 		!isString(agent.Value("id")) {
 		return ""
 	}
-	v, _ := status.Value("mihomo_version").(string)
+	if statusOf == nil {
+		return ""
+	}
+	v, _ := statusOf(agent.GetString("id")).Value("mihomo_version").(string)
 	return pyStrip(v)
 }
 
 // OutdatedAgents is outdated_agents over an agent list: Mihomo Agents of
 // profileID (an Agent without profile_id belongs to defaultID) whose
 // reported core ignores the policy. statusOf loads an Agent's stored status.
-func OutdatedAgents(agents []*jsonx.Object, profileID, defaultID string, statusOf func(agentID string) *jsonx.Object) []*jsonx.Object {
-	var found []*jsonx.Object
+func OutdatedAgents(agents []*jsonx.Object, profileID, defaultID string, statusOf StatusLoader) []any {
+	found := []any{}
 	for _, agent := range agents {
 		pid := defaultID
 		if jsonx.Truthy(agent.Value("profile_id")) {
@@ -744,7 +750,7 @@ func OutdatedAgents(agents []*jsonx.Object, profileID, defaultID string, statusO
 		if pid != profileID {
 			continue
 		}
-		version := ReportedCoreVersion(agent, statusOf(agent.GetString("id")))
+		version := ReportedCoreVersion(agent, statusOf)
 		if version != "" && CoreTooOld(version) {
 			name := agent.Value("name")
 			if !jsonx.Truthy(name) {

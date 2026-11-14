@@ -584,3 +584,38 @@ func TestChainAsExitComposesAllHops(t *testing.T) {
 		t.Fatalf("outer %s", js(t, outer))
 	}
 }
+
+// test_reported_core_version_comes_from_domain_discovery_only, with the
+// traffic store replaced by a map.
+func TestReportedCoreVersionComesFromDomainDiscoveryOnly(t *testing.T) {
+	statuses := map[string]*jsonx.Object{}
+	calls := 0
+	load := func(id string) *jsonx.Object { calls++; return statuses[id] }
+	agent := jsonx.Obj("id", "a1", "service_type", "mihomo", "domain_discovery_enabled", true)
+	if v := ReportedCoreVersion(agent, load); v != "" {
+		t.Fatalf("no report: %q", v)
+	}
+	statuses["a1"] = jsonx.Obj("status", "running", "mihomo_version", "v1.19.10", "items", []any{})
+	if v := ReportedCoreVersion(agent, load); v != "v1.19.10" {
+		t.Fatalf("got %q", v)
+	}
+	calls = 0
+	off := agent.Clone()
+	off.Set("domain_discovery_enabled", false)
+	mosdns := agent.Clone()
+	mosdns.Set("service_type", "mosdns")
+	if ReportedCoreVersion(off, load) != "" || ReportedCoreVersion(mosdns, load) != "" || calls != 0 {
+		t.Fatalf("stale or non-Mihomo report used (%d loads)", calls)
+	}
+	old := jsonx.Obj("id", "old", "name", "旧内核", "domain_discovery_enabled", true)
+	statuses["old"] = jsonx.Obj("mihomo_version", "v1.19.0")
+	other := jsonx.Obj("id", "other", "profile_id", "p2", "domain_discovery_enabled", true)
+	statuses["other"] = jsonx.Obj("mihomo_version", "v1.19.0")
+	got := OutdatedAgents([]*jsonx.Object{agent, old, other}, "default", "default", load)
+	if js(t, got) != `[{"name":"a1","version":"v1.19.10"},{"name":"旧内核","version":"v1.19.0"}]` {
+		t.Fatalf("outdated %s", js(t, got))
+	}
+	if js(t, OutdatedAgents(nil, "default", "default", load)) != "[]" {
+		t.Fatal("empty result must be a list")
+	}
+}
