@@ -260,7 +260,7 @@ func categoryClass(cat catKind, ascii bool) string {
 		return `\p{L}\p{N}_`
 	case catNotWord:
 		if ascii {
-			return `\x{0}-/:-@\[-\^`+"`"+`{-\x{10ffff}`
+			return `\x{0}-/:-@\[-\^` + "`" + `{-\x{10ffff}`
 		}
 		return notWordRanges()
 	case catSpace:

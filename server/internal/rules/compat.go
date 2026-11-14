@@ -325,3 +325,10 @@ type nopLogger struct{}
 func (nopLogger) Debugf(string, ...any)   {}
 func (nopLogger) Warningf(string, ...any) {}
 func (nopLogger) Errorf(string, ...any)   {}
+
+// ProfileValidationError is common.config_repository.ProfileValidationError:
+// a request the user must fix. Error() is the Chinese message.
+// TODO(port): replace with package #2 (repo).
+type ProfileValidationError struct{ Message string }
+
+func (e *ProfileValidationError) Error() string { return e.Message }

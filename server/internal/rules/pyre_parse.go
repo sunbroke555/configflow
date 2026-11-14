@@ -15,9 +15,9 @@ import (
 // variable-width look-behind) never surface in the places that matter.
 
 const (
-	reMaxRepeat   = 4294967295
-	reMaxGroups   = 1073741823
-	reMaxNesting  = 490 // CPython 3.11 raises RecursionError near 494 nested groups
+	reMaxRepeat    = 4294967295
+	reMaxGroups    = 1073741823
+	reMaxNesting   = 490 // CPython 3.11 raises RecursionError near 494 nested groups
 	flagIgnoreCase = 2
 	flagLocale     = 4
 	flagMultiline  = 8
@@ -155,11 +155,11 @@ type reNode struct {
 }
 
 type reState struct {
-	flags          int
-	groupdict      map[string]int
-	closed         []bool // index = group number; 0 is the whole pattern
-	lookbehind     int    // -1 for None
-	grouprefpos    map[int]int
+	flags       int
+	groupdict   map[string]int
+	closed      []bool // index = group number; 0 is the whole pattern
+	lookbehind  int    // -1 for None
+	grouprefpos map[int]int
 }
 
 func (s *reState) groups() int { return len(s.closed) }
@@ -271,7 +271,7 @@ func (t *tokenizer) checkGroupName(name string, offset int) {
 func isHex(r rune) bool {
 	return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
 }
-func isOct(r rune) bool   { return r >= '0' && r <= '7' }
+func isOct(r rune) bool    { return r >= '0' && r <= '7' }
 func isDigitR(r rune) bool { return r >= '0' && r <= '9' }
 func isASCIILetter(r rune) bool {
 	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
@@ -391,9 +391,9 @@ func (t *tokenizer) namedEscape() rune {
 }
 
 type classEscape struct {
-	lit    rune
-	cat    catKind
-	isCat  bool
+	lit   rune
+	cat   catKind
+	isCat bool
 }
 
 // classEscape is _class_escape.

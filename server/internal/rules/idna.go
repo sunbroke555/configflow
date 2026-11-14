@@ -97,11 +97,11 @@ func idnaToASCII(label string) (string, bool) {
 }
 
 var (
-	idnaOnce                  sync.Once
-	b1Set                     map[rune]struct{}
-	b2Map                     map[rune]string
-	nfkdMap                   map[rune]string
-	compositionMap            map[[2]rune]rune
+	idnaOnce       sync.Once
+	b1Set          map[rune]struct{}
+	b2Map          map[rune]string
+	nfkdMap        map[rune]string
+	compositionMap map[[2]rune]rune
 )
 
 func idnaInit() {
