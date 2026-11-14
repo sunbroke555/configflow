@@ -1289,3 +1289,37 @@ def commented_anchor_rows():
 
 
 dump('commented_anchors.jsonl', commented_anchor_rows())
+
+
+# ------------------------------------------------- public suffix (registrable)
+def psl_rows():
+    """_registrable over names built from every rule of tldextract's bundled
+    snapshot (as punycode: the callers only pass normalised ASCII names)."""
+    import tldextract
+    tl = tldextract.TLDExtract(suffix_list_urls=(), cache_dir=None,
+                               include_psl_private_domains=True)._get_tld_extractor()
+    names = set()
+    for rule in sorted(tl.tlds_incl_private):
+        try:
+            ascii_rule = '.'.join(label if label in ('*', '!') else label.encode('idna').decode('ascii')
+                                  for label in rule.split('.'))
+        except UnicodeError:
+            continue
+        if ascii_rule.startswith('!'):
+            body = ascii_rule[1:]
+            names.update({body, 'a.' + body, 'b.a.' + body})
+        elif ascii_rule.startswith('*.'):
+            body = ascii_rule[2:]
+            names.update({body, 'w.' + body, 'a.w.' + body, 'b.a.w.' + body})
+        else:
+            names.update({ascii_rule, 'a.' + ascii_rule, 'b.a.' + ascii_rule})
+    names.update({'localhost', 'a.localhost', 'a.unlisted-tld', 'b.a.unlisted-tld', 'a.b', 'x.example.com',
+                  'A.B.Example.CO.UK', 'x.example.com.', 'http://user@a.b.example.com:80/path', '//a.example.org/x',
+                  '[2001:db8::1]', '192.0.2.1', '1.2.3.4.5', '999.1.1.1', '香港.example.香港', 'a.例子.test',
+                  ' a.example.com ', 'a.b.github.io', 'github.io', 'a.githubusercontent.com', 'xn--55qx5d.cn',
+                  'a.xn--fiqs8s', 'a.XN--FIQS8S', 'a.中国', 'www.ck', 'a.www.ck', 'a.b.ck', 'a.xn--zz', 'a.xn--',
+                  'a。example。com', '', '.', 'a..example.com', 'node_1.example.net', 'a.b.c.d.e.amazonaws.com'})
+    return [{'fn': '_registrable', 'in': name, 'out': psd._registrable(name)} for name in sorted(names)]
+
+
+dump('psl.jsonl', psl_rows())

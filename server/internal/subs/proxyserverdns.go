@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"configflow/internal/jsonx"
-
-	"golang.org/x/net/publicsuffix"
 )
 
 // Constants of proxy_server_dns.
@@ -31,38 +29,16 @@ var (
 	versionRE     = regexp.MustCompile(`(?i)^` + pySpace + `*(?:mihomo` + pySpace + `+)?(?:meta` + pySpace + `+)?v?(\p{Nd}+)\.(\p{Nd}+)\.(\p{Nd}+)`)
 )
 
-// registrable is _registrable: the registrable domain per the bundled public
-// suffix list (private suffixes count as public), or "" for an unlisted
-// suffix or a name that is itself a suffix.
-//
-// The Python code uses tldextract 5.1.2's bundled snapshot; this uses the
-// list compiled into golang.org/x/net/publicsuffix. Both include the private
-// section; snapshots of different dates can differ for recently added suffixes.
+// registrable is _registrable: "<domain>.<suffix>" per tldextract 5.1.2's
+// bundled public suffix list with private suffixes counted as public (one
+// airport's names under github.io must not become +.github.io), or "" for an
+// unlisted suffix or a name that is itself a suffix.
 func registrable(domain string) string {
-	name := domain
-	// tldextract converts IDN labels to punycode before matching; only the
-	// suffix labels matter and the list holds them as ASCII, so a non-ASCII
-	// subdomain label needs no conversion. A non-ASCII suffix (IDN TLD) stays
-	// unmatched here (see the hand-back).
-	name = strings.ToLower(name)
-	suffix, icann := publicsuffix.PublicSuffix(name)
-	if !icann && !strings.Contains(suffix, ".") {
-		return ""
+	_, label, suffix := ExtractDomain(domain, true)
+	if label != "" && suffix != "" {
+		return label + "." + suffix
 	}
-	if len(name) <= len(suffix) {
-		return ""
-	}
-	one, err := publicsuffix.EffectiveTLDPlusOne(name)
-	if err != nil {
-		return ""
-	}
-	// tldextract matches case-insensitively but returns the labels as given.
-	count := strings.Count(one, ".") + 1
-	labels := strings.Split(domain, ".")
-	if count > len(labels) {
-		return one
-	}
-	return strings.Join(labels[len(labels)-count:], ".")
+	return ""
 }
 
 func reversedLabels(s string) []string {
