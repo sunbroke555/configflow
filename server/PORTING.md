@@ -30,9 +30,10 @@ server/
    two files side by side. Keep the Chinese user-facing messages byte-identical.
 2. **Dynamic documents.** Configuration documents are `jsonx` values, not typed structs: Python
    `dict` → `*jsonx.Object` (insertion-ordered), `list` → `[]any`, `str` → `string`,
-   `int`/`float` → `jsonx.Number` (keeps the original text), `bool`, `None` → `nil`. Unknown fields must
-   survive a read-modify-write untouched. Use typed structs only for values that never reach storage
-   or the wire as free-form JSON.
+   `int`/`float` → `jsonx.Number` (holds the text Python would re-emit: ints keep every digit, floats
+   are `repr()` text, so `1.50` read from a file is `1.5` afterwards, exactly as in Python), `bool`,
+   `None` → `nil`. Unknown fields must survive a read-modify-write untouched. Use typed structs only
+   for values that never reach storage or the wire as free-form JSON.
 3. **Stored bytes must match Python.** Anything written to `configflow.sqlite3` or to files under
    `DATA_DIR` must be byte-identical to what Python writes for the same value (key order, separators,
    escaping, number text, trailing newline). Use the `jsonx` encoders; never `encoding/json` for
@@ -75,10 +76,49 @@ server/
 - Result of the test run on the test server (command and tail of the output).
 - Open questions and assumptions about other packages' APIs.
 
-## Reference: stored JSON encoding
+## Reference: packages already available
 
-Python writes store values with `json.dumps(v, ensure_ascii=False, separators=(',', ':'))`, artifact
-files with `indent=2, ensure_ascii=False` plus a trailing `\n`, and content digests with
-`sort_keys=True` and compact separators. `jsonx` provides `Compact`, `Indent2` and `Sorted` encoders
-that reproduce these byte for byte (no HTML escaping, control characters as `\u00xx`, `\n \r \t \b \f`
-short escapes, non-ASCII verbatim, floats and big integers kept as their original text).
+Read the source for exact signatures; every exported name has a doc comment.
+
+**`configflow/internal/jsonx`** (`doc.go`, `object.go`, `value.go`, `number.go`, `decode.go`, `encode.go`)
+- `Object`: `NewObject()`, `Obj("k", v, ...)` literal, `Get/Value/GetOr/Set/SetDefault/Delete/Pop`,
+  `Keys/Values/All()` (range in insertion order), `Clone` (shallow), `Update`, `DeepCopy`, typed getters
+  `GetString/GetBool/GetObject/GetList/GetNumber/GetInt/GetFloat` (zero value when missing or of another
+  type; reads are safe on a nil `*Object`, writes are not).
+- Helpers: `AsObject/AsList/AsString/AsBool/AsNumber/AsInt/AsFloat`, `ListOf`, `Strings`, `Path(v, keys...)`,
+  `Truthy` (Python `bool(v)`), `Equal` (Python `==`: `1 == 1.0`, dict order ignored), `DeepCopy`,
+  `Repr`/`Str` (Python `repr()`/`str()` for messages).
+- Numbers: `Int(i)`, `BigInt`, `Float(f)`, `ParseNumber`; `IsInt/IsFloat/Int64/Float64`.
+- `Parse([]byte)` is `json.loads`; errors carry Python's message.
+- Encoders, byte-identical to CPython 3.11 (verified against a 634-value corpus):
+  `Compact` (stored SQLite values), `Indent2` (files; append `"\n"` yourself), `Sorted` (content
+  digests), `Default` (`json.dumps(v)`), `Response` (`flask.jsonify` body: sorted keys, ASCII, compact,
+  trailing newline), and `Encode(v, Options{EnsureASCII, SortKeys, Compact, Indent})` for the rest.
+  `backend/common/json_response.py::jsonify_external` is `Encode(v, Options{EnsureASCII: true, SortKeys: true})`
+  without a trailing newline. With `LOG_LEVEL=DEBUG` Flask's `jsonify` indents by 2.
+- Not provided: `default=str`, `allow_nan=False`; convert or check before encoding. Request bodies with
+  a BOM must be stripped before `Parse`.
+
+**`configflow/internal/store`** (`store.go`, `conn.go`, `rows.go`, `errors.go`) — port of
+`common/config_store.py`, interchangeable with it on the same `configflow.sqlite3` (cross-checked both
+ways). `New(path, timeout)`, `Load`, `Meta`, `Reading(func(*Conn) error)`, `Commit(base, document, meta)`
+→ `(entry, committed, err)`, `Create`, `Check`, `BackupTo`, `PreserveCorrupt`, `Fingerprint`. `Entry.Document`
+is shared and must never be mutated: `DeepCopy()` first. Errors are `*store.Error`; use `errors.Is` with
+`ErrStore`, `ErrCorrupt`, `ErrUnsupported`, `ErrConflict`, `ErrStorage`, `ErrSQLite`, `ErrDocument`; `Error()`
+is Python's `str(exc)`.
+
+## Helpers from a package that is not ported yet
+
+If you need a small helper that belongs to another work package still marked `todo`/`wip` in
+`parity/packages.md`, put a minimal private copy in your package in a file named `compat.go`, mark it
+`// TODO(port): replace with <package>` and list it in the hand-back. Do not create or edit another
+package's directory.
+
+## Working next to other agents
+
+Several agents work in this same worktree at once. Touch only your package directories and your rows of
+`parity/routes.tsv`. Stage with explicit paths (`git add server/internal/<yours>`), never `git add -A` or
+`git commit -a`. If `git` reports an index lock, wait a few seconds and retry. Commit early and often
+(after each coherent, compiling step) so nothing is lost if you are interrupted. Run only your own
+packages' tests: `rt -- bash -lc 'cd server && go vet ./internal/<yours>/... && go test -count=1 ./internal/<yours>/...'`.
+Another agent's half-written package may sit in the tree; never "fix" it, and do not run `go test ./...`.
