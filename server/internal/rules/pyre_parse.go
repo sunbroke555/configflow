@@ -384,10 +384,10 @@ func (t *tokenizer) namedEscape() rune {
 		t.fail("missing {", 0)
 	}
 	name := t.getuntil("}", "character name")
-	// Python resolves the name through unicodedata.lookup; the rule engine has
-	// no name table, so every \N{...} is reported as an undefined name.
-	t.fail(fmt.Sprintf("undefined character name %s", pyReprString(name)), len([]rune(name))+len(`\N{}`))
-	return 0
+	// Python resolves the name through unicodedata.lookup. The rule engine has
+	// no Unicode name table, so whether the name is valid cannot be decided
+	// here: report "unsupported" rather than guess.
+	panic(&UnsupportedRegexError{Reason: "named escape \\N{" + name + "}"})
 }
 
 type classEscape struct {
@@ -547,7 +547,8 @@ func (t *tokenizer) parseSub(st *reState, verbose bool, nested int) []*reNode {
 
 // parse is _parse: a sequence.
 func (t *tokenizer) parse(st *reState, verbose bool, nested int, first bool) []*reNode {
-	if nested > reMaxNesting {
+	// Every group level adds 2 to nested (parse and parseSub).
+	if nested > 2*reMaxNesting {
 		panic(errRecursion{})
 	}
 	var sub []*reNode
@@ -1063,6 +1064,8 @@ func parsePyRegex(pattern string, flags int) (result *parsedRegex, err error) {
 		case errRecursion:
 			result, err = nil, recovered
 		case errOverflow:
+			result, err = nil, recovered
+		case *UnsupportedRegexError:
 			result, err = nil, recovered
 		default:
 			panic(recovered)

@@ -367,7 +367,7 @@ func ValidateFilters(group, original *jsonx.Object) error {
 			}
 		}
 		if (field == "exclude_regex" || field == "aggregation_exclude_regex") && filterValue(group, field) != "" {
-			if _, err := parsePyRegex(filterValue(group, field), 0); err != nil {
+			if _, err := parsePyRegex(filterValue(group, field), 0); err != nil && IsPyRegexError(err) {
 				return candidateError("%s 正则表达式无效", field)
 			}
 		}

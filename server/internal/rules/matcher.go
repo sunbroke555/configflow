@@ -773,6 +773,19 @@ func (m *RuleConfigMatcher) InvalidateRulesets(predicate func(item, library *jso
 	return dropped
 }
 
+// UnsupportedRegexCount is the number of regular-expression entries in the
+// built indexes that Python's re accepts but the Go engine cannot run (see
+// UnsupportedRegexError); such entries never match.
+func (m *RuleConfigMatcher) UnsupportedRegexCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	total := 0
+	for _, index := range m.indexes {
+		total += index.unsupported
+	}
+	return total
+}
+
 // IndexCount is the number of built rule-set indexes (diagnostics and tests).
 func (m *RuleConfigMatcher) IndexCount() int {
 	m.mu.RLock()

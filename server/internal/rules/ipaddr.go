@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"math/big"
 	"math/bits"
 	"net/netip"
 	"strconv"
@@ -60,6 +61,7 @@ type ipNet struct {
 	ver    int
 	base   u128
 	prefix int
+	zone   string // IPv6 scope id, kept only while no host bit was cleared
 }
 
 func maskFor(ver, prefix int) u128 {
@@ -154,7 +156,11 @@ func parseIPNetwork(text string) (ipNet, bool) {
 			return ipNet{}, false
 		}
 	}
-	return ipNet{ver: addr.ver, base: addr.v.and(maskFor(addr.ver, prefix)), prefix: prefix}, true
+	network := ipNet{ver: addr.ver, base: addr.v.and(maskFor(addr.ver, prefix)), prefix: prefix}
+	if network.base == addr.v {
+		network.zone = addr.zone
+	}
+	return network, true
 }
 
 // isValidIP is is_valid_ip.
@@ -169,10 +175,14 @@ func (n ipNet) subnetOf(outer ipNet) bool {
 }
 
 // String renders the network like str(ip_network) of CPython 3.11: IPv6 is
-// compressed (longest zero run of two or more groups) and never uses the
-// dotted IPv4 tail, so ::ffff:192.0.2.1 prints as ::ffff:c000:201.
+// compressed (longest zero run of two or more groups), IPv4-mapped addresses
+// keep a dotted tail and a scope id stays attached.
 func (n ipNet) String() string {
-	return formatIP(n.ver, n.base) + "/" + strconv.Itoa(n.prefix)
+	text := formatIP(n.ver, n.base)
+	if n.zone != "" {
+		text += "%" + n.zone
+	}
+	return text + "/" + strconv.Itoa(n.prefix)
 }
 
 func formatIP(ver int, v u128) string {
@@ -180,6 +190,10 @@ func formatIP(ver int, v u128) string {
 		x := uint32(v.lo)
 		return strconv.Itoa(int(x>>24)) + "." + strconv.Itoa(int(x>>16&255)) + "." +
 			strconv.Itoa(int(x>>8&255)) + "." + strconv.Itoa(int(x&255))
+	}
+	if v.hi == 0 && v.lo>>32 == 0xffff {
+		// CPython 3.11.17 prints IPv4-mapped addresses with a dotted tail.
+		return "::ffff:" + formatIP(4, u128{lo: v.lo & 0xffffffff})
 	}
 	var groups [8]uint64
 	for i := 0; i < 4; i++ {
@@ -217,4 +231,15 @@ func formatIP(ver int, v u128) string {
 		b.WriteString(strconv.FormatUint(groups[i], 16))
 	}
 	return b.String()
+}
+
+// bigString is str(int(address)) for a 128-bit value.
+func bigString(v u128) string {
+	if v.hi == 0 {
+		return strconv.FormatUint(v.lo, 10)
+	}
+	number := new(big.Int).SetUint64(v.hi)
+	number.Lsh(number, 64)
+	number.Or(number, new(big.Int).SetUint64(v.lo))
+	return number.String()
 }

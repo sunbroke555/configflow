@@ -3,7 +3,7 @@
 
     ~/cf-test/.venv/bin/python server/internal/rules/testdata/gen_idna.py > server/internal/rules/idna_tables.go
 
-Contents (all derived from CPython 3.11's own stringprep/unicodedata, Unicode 14):
+Contents (all derived from CPython 3.11's own stringprep and unicodedata.ucd_3_2_0):
 nameprep tables B.1/B.2, the union of the prohibited tables C.1.2-C.9, D.1/D.2
 (bidi), plus what NFKC needs (NFKD decompositions, combining classes,
 canonical composition pairs).
@@ -11,6 +11,8 @@ canonical composition pairs).
 import stringprep
 import sys
 import unicodedata
+
+ucd = unicodedata.ucd_3_2_0  # encodings.idna normalises with the Unicode 3.2.0 database
 
 assert sys.version_info[:2] == (3, 11), sys.version
 CPS = [c for c in range(0x110000) if not 0xD800 <= c <= 0xDFFF]
@@ -62,14 +64,14 @@ print('var nfkdMappings = []runeMapping{')
 for c in CPS:
     if 0xAC00 <= c <= 0xD7A3:  # Hangul syllables decompose algorithmically
         continue
-    mapped = unicodedata.normalize('NFKD', chr(c))
+    mapped = ucd.normalize('NFKD', chr(c))
     if mapped != chr(c):
         print('\t{0x%x, %s},' % (c, lit(mapped)))
 print('}\n')
 print('var combiningClasses = []combiningClass{')
 start = prev = klass = None
 for c in CPS + [None]:
-    value = unicodedata.combining(chr(c)) if c is not None else 0
+    value = ucd.combining(chr(c)) if c is not None else 0
     if start is not None and (value != klass or c is None or c != prev + 1):
         print('\t{0x%x, 0x%x, %d},' % (start, prev, klass))
         start = None
@@ -79,12 +81,12 @@ for c in CPS + [None]:
 print('}\n')
 print('var compositionPairs = []compositionPair{')
 for c in CPS:
-    decomposition = unicodedata.decomposition(chr(c))
+    decomposition = ucd.decomposition(chr(c))
     if not decomposition or decomposition.startswith('<'):
         continue
     parts = [int(part, 16) for part in decomposition.split()]
     if 0xAC00 <= c <= 0xD7A3:
         continue
-    if len(parts) == 2 and unicodedata.normalize('NFC', chr(parts[0]) + chr(parts[1])) == chr(c):
+    if len(parts) == 2 and ucd.normalize('NFC', chr(parts[0]) + chr(parts[1])) == chr(c):
         print('\t{0x%x, 0x%x, 0x%x},' % (parts[0], parts[1], c))
 print('}')
