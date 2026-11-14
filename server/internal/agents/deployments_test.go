@@ -301,7 +301,9 @@ func successfulDeployment(e *env, id string) string {
 func TestManualRollbackReservesBeforePostAndInvalidatesAppliedBaseline(t *testing.T) {
 	e := newEnv(t)
 	id := successfulDeployment(e, "manual-test")
-	e.editSystem(func(system *jsonx.Object) { e.firstAgent(system).Set("applied_content", jsonx.Obj("fingerprint", "current")) })
+	e.editSystem(func(system *jsonx.Object) {
+		e.firstAgent(system).Set("applied_content", jsonx.Obj("fingerprint", "current"))
+	})
 	e.fake.set(func(req Request) (*Response, error) {
 		if !strings.HasSuffix(req.URL, "/deployments/"+id+"/rollback") {
 			t.Fatalf("url %s", req.URL)

@@ -151,6 +151,10 @@ func doRegister(c *httpx.Ctx, out **jsonx.Object) (*httpx.Response, error) {
 	}
 	data, ok := value.(*jsonx.Object)
 	if !ok {
+		if _, isList := value.([]any); isList {
+			// list.pop('installation_id', None)
+			return nil, errors.New("pop expected at most 1 argument, got 2")
+		}
 		return nil, errors.New("'" + httpx.PyTypeName(value) + "' object has no attribute 'pop'")
 	}
 	*out = data

@@ -117,17 +117,30 @@ func agentRows(ctx context.Context, statuses *jsonx.Object) ([]*jsonx.Object, er
 // Wire is the registry's entry in internal/server wirePackages: the
 // InitAgentManager repository hook (load_config) and the notification list's
 // Agent source.
+//
+// notifications.Complete() only checks that ListTasks and Agents are set, so
+// installing Agents while task slots are still missing would register GET
+// /api/notifications although its task list fails (tasks.ErrIncomplete). The
+// source is therefore installed only once every task slot is provided: list
+// agents.Wire after the packages that provide task rows (or make the
+// notification gate also require tasks.Complete()).
 func Wire() {
 	repo.RegisterHooks(repo.Hooks{InitAgentManager: func() {
 		if _, err := Init(context.Background()); err != nil {
 			logger.Errorf("初始化 Agent 管理器失败：%s", err)
 		}
 	}})
-	notifications.SetSources(notifications.Sources{Agents: func(ctx context.Context) ([]*jsonx.Object, error) {
-		manager, err := Get(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return manager.GetAllAgents(ctx, true)
-	}})
+	if tasks.Complete() {
+		notifications.SetSources(notifications.Sources{Agents: NotificationAgents})
+	}
+}
+
+// NotificationAgents is the notification list's Agent source:
+// get_agent_manager().get_all_agents().
+func NotificationAgents(ctx context.Context) ([]*jsonx.Object, error) {
+	manager, err := Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return manager.GetAllAgents(ctx, true)
 }

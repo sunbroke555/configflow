@@ -145,4 +145,3 @@ var upgradeSystemErrors = []messagePair{
 	{"context deadline exceeded", "操作超时，请检查服务状态或稍后重试。"},
 	{"certificate signed by unknown authority", "无法验证服务器证书，请检查证书配置。"},
 }
-

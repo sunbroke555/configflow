@@ -342,7 +342,10 @@ func TestHeartbeatReportedHostUsesAddressFollowHooks(t *testing.T) {
 		WantJSON(jsonx.Obj("success", true, "domain_discovery_enabled", false, "traffic_history_enabled", false, "reads_host", true))
 	var followed string
 	agents.RegisterHooks(agents.Hooks{
-		AddressFollow:    func(_ context.Context, _ *agents.Manager, _ *jsonx.Object, host string) error { followed = host; return nil },
+		AddressFollow: func(_ context.Context, _ *agents.Manager, _ *jsonx.Object, host string) error {
+			followed = host
+			return nil
+		},
 		AddressConfirmed: func(_ *jsonx.Object, host string) string { return host },
 	})
 	h.s.Post(h.path(), httpxtest.Bearer(h.token), httpxtest.JSON(jsonx.Obj("host", "192.0.2.50"))).WantStatus(200).
@@ -375,8 +378,8 @@ func TestAgentItemUpdateAndDelete(t *testing.T) {
 	h.s.Put("/api/agents/"+h.id, httpxtest.JSON(nil)).WantStatus(500).WantJSON(jsonx.Obj("success", false, "message", "argument of type 'NoneType' is not iterable"))
 	var cleared []string
 	agents.OnAgentDeleted("test", func(_ context.Context, id string) error { cleared = append(cleared, id); return nil })
-	h.s.Delete("/api/agents/"+h.id).WantStatus(200).WantJSON(jsonx.Obj("success", true))
-	h.s.Delete("/api/agents/"+h.id).WantStatus(404)
+	h.s.Delete("/api/agents/" + h.id).WantStatus(200).WantJSON(jsonx.Obj("success", true))
+	h.s.Delete("/api/agents/" + h.id).WantStatus(404)
 	if len(storedAgents(t, h.s)) != 0 || len(cleared) != 1 {
 		t.Fatal("delete")
 	}
