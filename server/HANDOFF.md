@@ -29,6 +29,7 @@ Read this first when you pick up the Go rewrite in a new session. It is written 
 | `server/PORTING.md` | Rules every porting agent follows + API reference of every finished package. Update it after each verified package. |
 | `server/parity/packages.md` | 41 work packages, dependency order, status (`todo`/`wip`/`done`/`lab`), not-ported list, follow-ups. |
 | `server/parity/routes.tsv` | Every Flask route; agents fill `go package` + `status` for their rows. |
+| `server/parity/progress/<N>-*.md` | Per-package progress file kept by the porting agent at every commit; the restart point after an interruption. |
 | `server/internal/...` | Go packages. `cmd/configflow` is the binary. |
 
 ## Status at handoff (2026-11-15 01:15)
@@ -60,8 +61,11 @@ was — the briefs are reproduced in spirit by the template below).
    send it back with `SendMessage`, which resumes the same agent).
 4. When verified: paste its API reference into `PORTING.md` (above "Helpers from a package that is not
    ported yet"), set `done` in `packages.md`, commit (`go: …`, explicit paths) and `git push origin go`.
-5. If an agent is cut off by the usage limit, resume it with `SendMessage` after the reset time; never start
-   a fresh agent for the same package unless the old one is gone.
+5. If an agent is cut off by the usage limit: after the reset, **start a fresh Opus agent** for that package
+   whose brief is "continue package #N from `server/parity/progress/<N>-*.md` and the committed code"
+   (plus the original package brief). Do not resume the old agent with `SendMessage`: resuming reloads its
+   whole transcript (often 300k+ tokens), the progress file is a few kilobytes. `SendMessage` is still the
+   right tool for a short follow-up to an agent that finished normally and is not huge yet.
 
 Brief template (adapt the package part; the agents already know the rest from PORTING.md):
 

@@ -68,6 +68,24 @@ server/
     branch with a message `go(<package>): <what>`; do not push, do not touch `backend/`, `frontend/`,
     `docker/`.
 
+## Progress file (required)
+
+Keep `server/parity/progress/<N>-<short-name>.md` up to date for your package (N = package number) and
+commit it **together with every commit you make**. If you are interrupted (usage limit, crash), a fresh
+agent continues from this file instead of from your transcript, so it must be enough on its own:
+
+- **Brief**: one paragraph restating your task and scope (including scope decisions the coordinator sent
+  you later).
+- **Done**: what is ported, committed and passing (with commit ids), per Python module/test file.
+- **In progress**: what you were doing when you last committed; files that are half-written.
+- **Next**: the remaining steps, in order.
+- **Decisions and findings**: Python quirks you reproduced, differences you accepted and why, helper
+  copies in `compat.go`, open questions for the coordinator.
+- **Commands**: the exact `rt` commands to run your tests and regenerate your corpora.
+
+Keep it short and factual (it is read by an agent, not a person); replace stale content instead of
+appending a diary.
+
 ## Hand-back format
 
 - Files added, with line counts.
