@@ -147,6 +147,8 @@ Several agents work in this same worktree at once. Touch only your package direc
 (after each coherent, compiling step) so nothing is lost if you are interrupted. Run only your own
 packages' tests: `rt -- bash -lc 'cd server && go vet ./internal/<yours>/... && go test -count=1 ./internal/<yours>/...'`.
 Another agent's half-written package may sit in the tree; never "fix" it, and do not run `go test ./...`.
+Do the work yourself: do not spawn sub-agents or forks (parallel helpers exhaust the shared usage
+window within an hour and leave half-written files behind).
 `rt --back <path>` copies that path from the server over your local files. Use it only for a single
 generated file or a directory inside your own package (`--back server/internal/<yours>/testdata`), never
 for `server/internal` or `server`: it would overwrite other agents' newer local edits.
