@@ -157,6 +157,68 @@ candidates, reorder, strategy references, connection rules. Items are `*jsonx.Ob
   in `routes/rules.py`), converter-driven strategy reference tests (#6/#7). `rules/compat.go` holds copies
   of helpers owned by #6, #11, #12; replace them when those packages land.
 
+**`configflow/internal/repo` (package #2)** — `ProfileRepository` and `common/config.py`. Interchangeable
+with Python on the same data directory (cross-checked: fresh init, 80 scripted operations, both-way
+interchange). Read `repository.go`, `scope.go`, `hooks.go` doc comments before use.
+- Open: `OpenDefault(dataDir)` (production), `Open(dataDir, Options{...})`; module level `SetRepository(r)`,
+  `GetRepository(ctx)`, `WithRepository(ctx, r)` (tests), `DataDir()`.
+- **Every method takes `ctx` first.** Transactions carry their state in the ctx: an updater receives a
+  derived ctx; reads with it see the working copy; a write with it fails with `ErrInUse`
+  (`不能在配置事务中再次开启写事务`); a write with any *other* ctx inside an updater deadlocks until the lock
+  timeout. Always pass the ctx you were given.
+  ```go
+  saved, revision, err := r.UpdateProfileTransaction(ctx, id,
+      func(ctx context.Context, current *jsonx.Object) (*jsonx.Object, error) {
+          groups := current.GetList("proxy_groups")
+          current.Set("proxy_groups", append(groups, g)) // slices are values: Set the list back
+          return nil, nil                                  // nil = keep edited current; error = abort
+      })
+  ```
+- **Request scope** replaces Python's ContextVars (per-request config snapshot and three-way baseline):
+  httpx installs `ctx = repo.WithScope(req.Context())`, `repo.SetRequest(ctx, repo.RequestInfo{…})`,
+  `defer repo.ResetConfigContext(ctx)`. Handlers then use `repo.GetConfig(ctx, "")` /
+  `repo.SaveConfig(ctx, nil, "")` exactly like Python's `get_config()` / `save_config()`. Background loops
+  use `repo.WithScope(loopCtx)` per task or no scope (then nothing is cached and saves have no baseline).
+- Profiles: `ListProfiles`, `GetProfile`, `ProfileMetadata`, `DefaultProfileID`, `SetDefaultProfile`,
+  `CreateProfile`, `CloneProfile`, `ImportClientProfile`, `UpdateProfile`, `DeleteProfile`,
+  `UpdateProfileTransaction`, `UpdateProfileFields`/`SaveProfile`, `ImportProfile`, `ExportProfile`,
+  `ConfigRevision`, `GetPublishSnapshot(ctx, id, agents)`, `GetCompatConfig`, `GetCompatConfigWithSource`,
+  `CompatConfigFrom`, `GetProfileAgentBindings`, `AgentBindingSummary`, `SaveRouterSettings`,
+  `SaveRouterPublication(ctx, profileID, expectedRouter, RouterPublication{…})`.
+- Shared: `GetShared`, `GetSharedWithSource`, `UpdateSharedTransaction`, `SaveShared`,
+  `UpdateSharedAndProfilesTransaction`, `CreateRuleLibraryItem`, `GetResourceUsage`, `PreviewNodeDeletion`,
+  `DeleteNodesWithReferences`.
+- System: `GetSystem`, `GetSystemSettings`, `GetSystemWithSource`, `UpdateSystemTransaction`, `SaveSystem`,
+  `GetAgents(ctx, history)` (with `history=false` the history fields are `AgentHistoryNotRead`; read them only
+  through `AgentHistory(agent, field)`), `RuleProxyTokensForSanitization`, `AgentTokensForSanitization`,
+  `SanitizationTokensOf(system)`.
+- Export/import: `ExportAll(ctx, desensitize)`, `ImportAll`, `ResetAll`.
+- Files (paths refuse escapes): `SharedPath`, `CacheDir`, `SharedCacheDir`, `SharedRulesDir`,
+  `ReadSharedJSON`, `WriteSharedJSON`, `WriteSharedText`, `ProfileDir`, `ProfilePath`, `ProvidersDir`,
+  `RulesDir`, `GeneratedDir`, `WriteGenerated`, `WriteProfileJSON`, `ReadProfileJSON`, `WriteProfileText`.
+- `config.py` module functions: `GetConfig`, `GetResourceConfig`, `LoadConfig`, `SaveConfig`,
+  `SaveConfigWithPublishGuard`, `UpdateConfigTransaction`, `SafeImportConfig`, `GetSharedConfig`,
+  `SaveSharedConfig`, `UpdateSharedConfigTransaction`, `UpdateSharedAndConfigTransaction`,
+  `GetSystemConfig`, `SaveSystemConfig`, `ResolveProfile(ctx, explicit, fallback *string)` (exact; use it for
+  client-supplied ids), `ResolveProfileID(ctx, id)` (`""` = not given), `IsGlobalRequest`,
+  `ProfileAPIPath`, `ConfigAPIPath`.
+- Merge/defaults: `DeepMerge`, `ThreeWayMerge`, `GetDefaultConfig`, `GetInitialConfig`,
+  `GetDefaultOxidnsSettings`, `ValidateDocument`, `ValidateProfileID`, field lists (`ProfileFields`,
+  `SharedFields`, …).
+- Errors: `*repo.Error{Kind, Message, Usages}`; `errors.Is` with `ErrRepository`, `ErrValidation`,
+  `ErrNotFound`, `ErrExists`, `ErrInUse`, `ErrNodeDeletionChanged`, `ErrRuleLibraryCreationUncertain`;
+  `NewInUse`, `NewValidationError`, `UsagesOf`, `IsValueError`. Store failures stay `*store.Error`.
+- **Hooks** (`repo.RegisterHooks(repo.Hooks{…})` at wiring time; no-op or fail-closed defaults):
+  `JobLock` (router job lock inside the commit, #37), `ConfigurationCommitted` (WebDAV auto-backup, #17),
+  `PlanNodeDeletion` (#15), `SanitizeExternalPayload` / `RedactOxidnsSettings` / `RedactRouters` /
+  `RedactEasytierSettings` (desensitized export, #17), `DefaultServerDomain` and `InitAgentManager`
+  (`LoadConfig`, #3/#20), `SetStructuredProxyStringParser` (#6). The package that owns a hook registers it
+  from its own `Register…` function; do not edit `repo`.
+- `repo/compat_*.go` hold private copies of validators owned by other packages (dialer references, proxy
+  chains, health, OxiDNS, rule cache names). When you port the owning package, export the function from your
+  package and tell me in the hand-back; I will switch `repo` over (it must not create an import cycle:
+  packages that `repo` imports cannot import `repo`).
+
 ## Helpers from a package that is not ported yet
 
 If you need a small helper that belongs to another work package still marked `todo`/`wip` in

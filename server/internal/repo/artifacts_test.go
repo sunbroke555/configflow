@@ -24,7 +24,7 @@ func TestArtifactWritesAreAtomicAndKeepABackup(t *testing.T) {
 		t.Fatal("backup of nothing")
 	}
 	must(r.WriteGenerated(bg, "default", "config.yaml", []byte("second\n")))(t)
-	if must(readFileString(path))(t) != "second\n" || must(readFileString(path + ".bak"))(t) != "first\n" {
+	if must(readFileString(path))(t) != "second\n" || must(readFileString(path+".bak"))(t) != "first\n" {
 		t.Fatal("content or backup")
 	}
 	if mode := must(os.Stat(path))(t).Mode().Perm(); mode != 0o600 {
