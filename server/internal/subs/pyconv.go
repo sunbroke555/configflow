@@ -1,7 +1,6 @@
 package subs
 
 import (
-	"errors"
 	"math"
 	"math/big"
 	"net/netip"
@@ -422,7 +421,5 @@ func formatV6(b [16]byte) string {
 	}
 	return join(h)
 }
-
-var errNotMapping = errors.New("not a mapping")
 
 func sortStrings(s []string) { sort.Strings(s) }
