@@ -132,6 +132,31 @@ is Python's `str(exc)`.
   `GenerateRandomToken`, `StrToBool`), `internal/version` (`Version`, `Info()`), `internal/jsonresp`
   (`External(payload)` = `jsonify_external` body; `PlainTree`; `Sanitized` marker — HTTP glue is #3's).
 
+**`configflow/internal/rules` (package #4)** — rule syntax, matching, rule cache names, group
+candidates, reorder, strategy references, connection rules. Items are `*jsonx.Object`, lists `[]any`.
+- **Python regexes: always `rules.CompilePyRegex(pattern, ignoreCase)`** (never `regexp.Compile` on user
+  input). It validates with a port of CPython's `re` parser (same error texts; `IsPyRegexError(err)`),
+  runs on RE2 when that is exact and on a backtracking engine (regexp2) otherwise, so look-around,
+  back references etc. behave as in Python. `PyRegex.Search`; a match on the backtracking engine is cut
+  off after 1 s and counts as no match. Only `\N{name}` and repeat counts beyond int32 return
+  `*UnsupportedRegexError`. If you need another method (fullmatch, findall, sub), ask in the hand-back.
+- Parsing/matching: `ParseRuleLine`, `MatchDomain`, `MatchIP`, `MatchQuery`, `IsValidDomain`, `IsValidIP`,
+  `NormalizeMatchQuery`, `NewRuleConfigMatcher(ruleConfigs, ruleLibrary, load, indexKey, logger)` with
+  `Match(query)`, `NewMatcherCache(MatcherCacheOptions)` with `LocalMatcher(config, profileID)`.
+- Syntax: `RuleValueError(kind, value)` ("" = valid), `DomainValueError`, `CIDRError`, `SplitRulePayload`,
+  `RuleTypes`, `IsRuleType`, `LooksLikeIP`.
+- Rule cache files: `SanitizeRuleName`, `RuleCacheFilename(rule)`, `RuleCacheReadPath(rule, library, stored,
+  rulesDir)`, `TouchUnchangedCache`.
+- Groups/policies: `FilterCandidates`, `ValidateFilters`, `ValidateCandidates`, `MergeGroupUpdate`,
+  `ManagedMembers`, `ManagedProviders`, `RenderMembers`, `ExclusionFilter`, `LowerGroupProviderFilters`,
+  `ReorderByIDs`, `ResolveNewOrder`, `ValidateRulePolicies`; errors `*CandidateValidationError`,
+  `*StrategyReferenceError`.
+- Connection rules: `IPRuleTargets`, `ParseDestination`, `ApplyIPRule` with `ConnectionDeps` callbacks
+  (`RulesetInfo` from #19, `ReadRulePayload`/`AppendRulePayload` from #12).
+- Left for other packages: remote rule cache validation and fetching (#12), `find-duplicates` (#16, lives
+  in `routes/rules.py`), converter-driven strategy reference tests (#6/#7). `rules/compat.go` holds copies
+  of helpers owned by #6, #11, #12; replace them when those packages land.
+
 ## Helpers from a package that is not ported yet
 
 If you need a small helper that belongs to another work package still marked `todo`/`wip` in

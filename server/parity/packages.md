@@ -10,7 +10,7 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 | 1 | infra | `utils/logger`, `json_store`, `fast_yaml`, `local_http`, `url_utils`, `task_status`, `common/resource`, `common/utils`, `json_response`, `version` | 1.2k | 0 | done |
 | 2 | repo | `common/config_repository`, `config`, `profile_context`, `oxidns_settings` | 4.0k | 0 | wip |
 | 3 | httpx, auth, settings | `common/auth`, `routes/auth`, `routes/__init__`, `settings`, `logs`, `stats`, `tasks`, `notifications`, `app.py` | 2.0k | 2 | todo |
-| 4 | rule engine | `rule_syntax`, `rule_matcher`, `rule_utils`, `domain_matcher_cache`, `group_candidates`, `reorder`, `strategy_references`, `connection_rules` | 1.8k | 1 | wip |
+| 4 | rule engine | `rule_syntax`, `rule_matcher`, `rule_utils`, `domain_matcher_cache`, `group_candidates`, `reorder`, `strategy_references`, `connection_rules` | 1.8k | 1 | done |
 | 5 | subscription parsing | `subscription_parser`, `hosts`, `filter`, `dialers`, `proxy_chains`, `commented_mihomo`, `mihomo_listeners`, `proxy_server_dns` | 2.4k | 1 | wip |
 | 6 | mihomo converter | `converters/common`, `converters/mihomo`, `dialer_references`, `mihomo_base_settings`, `mihomo_easytier` | 2.5k | 4, 5 | todo |
 | 7 | surge, loon | `converters/surge`, `converters/loon` | 1.9k | 6 | todo |
