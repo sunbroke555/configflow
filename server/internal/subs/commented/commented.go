@@ -464,6 +464,10 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 	e := &emitter{width: width, seen: map[*node]bool{}, refs: map[*node]int{}, genNames: map[*node]string{}, preLines: preLines, yaml12: doc.explicitStart}
 	countRefs(doc.root, e.refs, map[*node]bool{})
 	if doc.explicitStart {
+		for _, c := range doc.preDoc {
+			e.out = append(e.out, c)
+			e.noteComment(c)
+		}
 		e.out = append(e.out, "---")
 	}
 	head := doc.head

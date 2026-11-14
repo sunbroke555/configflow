@@ -94,8 +94,12 @@ func parseDocument(lines []string) (*document, error) {
 	if !p.done() {
 		t := strings.TrimRight(string(p.lines[p.pos]), " ")
 		if t == "---" || strings.HasPrefix(t, "--- ") && strings.HasPrefix(strings.TrimSpace(t[3:]), "#") {
-			if len(p.doc.head) > 0 {
-				return nil, unsupported("comment before document start")
+			// comment lines before `---`: ruamel writes them stripped, without
+			// the blank lines, before the marker
+			for _, l := range p.doc.head {
+				if t := strings.TrimSpace(l); t != "" {
+					p.doc.preDoc = append(p.doc.preDoc, t)
+				}
 			}
 			if t != "---" {
 				return nil, unsupported("comment after document start marker")

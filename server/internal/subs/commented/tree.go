@@ -93,6 +93,7 @@ type document struct {
 	explicitStart bool
 	explicitEnd   bool
 	head          []string // comment/blank lines before the first content line
+	preDoc        []string // comment lines before an explicit `---` (stripped)
 	root          *node
 	rootRec       rec // gap after a scalar root (unused for collections)
 	comments      []string
