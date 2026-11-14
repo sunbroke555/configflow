@@ -452,12 +452,13 @@ def hosts_rows():
 
 def merge_rows(good):
     rows = []
-    for case in range(700):
+    rich = [r for r in good if r['entries']]
+    for case in range(1600):
         nsub = R.choice([1, 1, 2, 3])
         subs, caches = [], {}
         for i in range(nsub):
             sid = f's{i}'
-            rec = R.choice(good) if good and R.random() < .9 else None
+            rec = R.choice(rich) if rich and R.random() < .9 else None
             servers = []
             if rec:
                 servers = list(rec['entries'])
@@ -535,3 +536,205 @@ def run_merge(sc):
 
 
 dump('hosts.jsonl', hosts_rows())
+
+
+# -------------------------------------------------------------------- dialers
+from backend.utils import subscription_dialers as sd  # noqa: E402
+
+PROXY_NAMES = ['HK 01', 'HK 02', 'JP 01', 'SG 01', 'US 01', 'Relay Node', 'x']
+GROUP_NAMES = ['Relay', 'Hidden', 'Chain', '中转', 'a`b', 'Auto', 'proxy']
+
+
+def airport_yaml():
+    proxies = [{'name': n, 'type': 'ss', 'server': 'example.com', 'port': 1} for n in R.sample(PROXY_NAMES, R.randrange(1, 6))]
+    names = [p['name'] for p in proxies]
+    groups = []
+    for g in R.sample(GROUP_NAMES, R.randrange(1, 5)):
+        members = [pick(names + [x['name'] for x in groups] + GROUP_NAMES[:3] + [5, None]) for _ in range(R.randrange(0, 4))]
+        group = {'name': g, 'type': pick(['select', 'url-test', 'fallback', 'load-balance', 'relay', 5]), 'proxies': members}
+        for key, val in [('url', 'http://example.com/204'), ('interval', 300), ('tolerance', 50), ('lazy', True), ('timeout', 5000),
+                         ('expected-status', 204), ('strategy', 'round-robin'), ('max-failed-times', 3), ('url', ['x']), ('interval', None),
+                         ('lazy', 1.5)]:
+            if R.random() < .25:
+                group[key] = val
+        if R.random() < .15:
+            group.pop('proxies')
+            group[pick(['use', 'filter', 'include-all'])] = pick([['p'], 'HK', True])
+        if R.random() < .05:
+            group['proxies'] = pick(['abc', {'HK 01': 1}, 5, None])
+        groups.append(group)
+    for p in proxies:
+        if R.random() < .6:
+            p['dialer-proxy'] = pick(GROUP_NAMES + names + [5, None, 'DIRECT'])
+    doc = {'proxies': proxies, 'proxy-groups': groups}
+    if R.random() < .05:
+        doc['proxies'] = pick(['x', {'a': 1}, 5, [1, 'a']])
+    import yaml
+    text = yaml.safe_dump(doc, allow_unicode=True, sort_keys=False)
+    if R.random() < .05:
+        text += pick(['  bad: [unclosed\n', '\t\n'])
+    return text
+
+
+def conv(node):
+    if node.get('type') == 'bad':
+        return None
+    out = {'name': node['name'], 'type': node.get('type', 'ss'), 'server': node.get('server'), 'port': node.get('port')}
+    out.update(copy.deepcopy(node.get('params') or {}))
+    return out
+
+
+def run_add_dialer(sc):
+    import backend.utils.subscription_cache as sc_mod
+    import backend.converters.mihomo as cm
+    saved = (sc_mod.load_subscription_cache, cm.convert_node_to_mihomo)
+    sc_mod.load_subscription_cache = lambda sid: copy.deepcopy(sc['caches'].get(sid))
+    cm.convert_node_to_mihomo = lambda n: conv(copy.deepcopy(n))
+    main = copy.deepcopy(sc['main'])
+    try:
+        report = call(sd.add_dialer_groups, main, copy.deepcopy(sc['config']))
+    finally:
+        sc_mod.load_subscription_cache, cm.convert_node_to_mihomo = saved
+    return {'report': report, 'main': main}
+
+
+def dialers_rows():
+    rows = []
+    texts = [airport_yaml() for _ in range(700)]
+    records = []
+    for t in texts + ['proxies: []', 'dialer-proxy', '- a\n- dialer-proxy', 'dialer-proxy: x']:
+        out = call(sd.extract_subscription_dialers, t)
+        records.append(out)
+        rows.append({'fn': 'extract_subscription_dialers', 'in': t, 'out': out})
+    # many targets
+    proxies = [{'name': f'P{i}', 'type': 'ss', 'dialer-proxy': f'G{i:03d}'} for i in range(60)]
+    groups = [{'name': f'G{i:03d}', 'type': 'select', 'proxies': ['P0', 'P1']} for i in range(60)]
+    import yaml
+    t = yaml.safe_dump({'proxies': proxies, 'proxy-groups': groups})
+    rows.append({'fn': 'extract_subscription_dialers', 'in': t, 'out': call(sd.extract_subscription_dialers, t)})
+    deep = {'proxies': [{'name': 'A', 'dialer-proxy': 'G1'}], 'proxy-groups': [{'name': 'G1', 'proxies': ['G2']}, {'name': 'G2', 'proxies': ['G1', 'A']}]}
+    t = yaml.safe_dump(deep)
+    rows.append({'fn': 'extract_subscription_dialers', 'in': t, 'out': call(sd.extract_subscription_dialers, t)})
+    good = [r for r in records if isinstance(r, dict) and 'targets' in r]
+    for _ in range(500):
+        record = R.choice(good + [None])
+        sub = pick(['Air', '机场', 'a/b'])
+        proxies = []
+        for _ in range(R.randrange(0, 5)):
+            p = {'name': pick(PROXY_NAMES), 'type': 'ss'}
+            r = R.random()
+            if r < .6:
+                p['dialer-proxy'] = pick(GROUP_NAMES + [5, None, f'{sub}/Relay'])
+            proxies.append(p)
+        proxies += [pick(['x', 5, None])] if R.random() < .1 else []
+        names = [{'name': pick(PROXY_NAMES + GROUP_NAMES + [f'{sub}/Relay', f'{sub}/Hidden'])} for _ in range(R.randrange(0, 4))] + ([{}] if R.random() < .1 else [])
+        main = pick([None, {}, {'proxies': names[:2], 'proxy-groups': names[2:]}])
+        chains = R.random() < .8
+        sc = {'subscription': sub, 'proxies': proxies, 'main': main, 'record': record, 'chains': chains}
+        rows.append({'fn': 'adapt_subscription_proxies', 'in': sc,
+                     'out': call(sd.adapt_subscription_proxies, sub, copy.deepcopy(proxies), copy.deepcopy(main), copy.deepcopy(record), chains=chains)})
+    # add_dialer_groups scenarios
+    for _ in range(900):
+        nsub = R.choice([1, 1, 2])
+        subs, caches = [], {}
+        for i in range(nsub):
+            sid = f's{i}'
+            body = airport_yaml()
+            record = call(sd.extract_subscription_dialers, body)
+            record = None if isinstance(record, dict) and 'error' in record and 'targets' not in record else record
+            names = [pick(PROXY_NAMES) for _ in range(R.randrange(1, 6))]
+            nodes = []
+            for n in dict.fromkeys(names):
+                params = {'cipher': 'aes-128-gcm'}
+                if R.random() < .6:
+                    params['dialer-proxy'] = pick(GROUP_NAMES + ['DIRECT', 5, 'Relay'])
+                node = {'name': n, 'type': pick(['ss', 'ss', 'bad']), 'server': 'example.com', 'port': 1, 'params': params}
+                if R.random() < .1:
+                    node['proxy_string'] = pick(['dialer-proxy: Relay\ntype: ss', 'ss://x', '{"type":"ss","dialer-proxy":"Hidden"}'])
+                if R.random() < .05:
+                    node['params'] = None
+                nodes.append(node)
+            nodes += [pick([{'name': ''}, 'junk', {'name': 5}])] if R.random() < .1 else []
+            meta = {'url': 'https://sub.test/' + sid}
+            if R.random() < .85:
+                meta['dialers'] = record if R.random() < .9 else None
+            sub = {'id': sid, 'name': pick(['Air', '机场', 'Air2']), 'url': 'https://sub.test/' + sid, 'enabled': R.random() < .95}
+            if R.random() < .3:
+                sub['regex_filter'] = pick(['^HK', '^(?!.*SG).*$', 'JP', '('])
+            subs.append(sub)
+            caches[sid] = {'nodes': nodes, 'metadata': meta}
+        direct = [s for s in subs if R.random() < .7]
+        providers = {}
+        for s in direct:
+            providers[s['name']] = {'type': 'http', 'url': f"https://panel.test/api/subscriptions/{s['id']}/proxies"}
+        aggs = []
+        if R.random() < .4:
+            aggs.append({'id': 'agg', 'name': 'Agg', 'enabled': True, 'subscriptions': [s['id'] for s in subs]})
+            providers['Agg'] = {'type': 'http', 'url': 'https://panel.test/api/aggregations/agg/proxies'}
+        main = {'proxy-providers': providers}
+        if R.random() < .5:
+            main['proxies'] = [{'name': pick(['Air/Relay', 'user', 'Air/HK 01', '机场/Hidden'])}]
+        if R.random() < .5:
+            main['proxy-groups'] = [{'name': pick(['Air/Relay', 'Relay', 'Hidden', 'Air/Hidden', '机场/Hidden', 'Air2/Relay'])}]
+        # a node name may equal a group name used as dialer
+        sc = {'main': main, 'config': {'subscriptions': subs, 'subscription_aggregations': aggs}, 'caches': caches}
+        rows.append({'fn': 'add_dialer_groups', 'in': sc, 'out': run_add_dialer(sc)})
+    rows += aligned_dialer_rows()
+    return rows
+
+
+def aligned_dialer_rows():
+    import yaml
+    rows = []
+    for _ in range(900):
+        nsub = R.choice([1, 1, 2])
+        subs, caches = [], {}
+        for i in range(nsub):
+            sid = f's{i}'
+            names = R.sample(['HK 01', 'HK 02', 'JP 01', 'SG 01', 'US 01', 'Relay A', 'Relay B', 'Entry'], R.randrange(3, 7))
+            groups = []
+            gnames = R.sample(['Relay', 'Hidden', '中转', 'Chain'], R.randrange(1, 4))
+            for gi, g in enumerate(gnames):
+                members = R.sample(names, R.randrange(1, 4)) + ([gnames[gi - 1]] if gi and R.random() < .5 else [])
+                group = {'name': g, 'type': pick(['select', 'url-test', 'fallback', 'relay']), 'proxies': members}
+                if R.random() < .5:
+                    group.update(pick([{'url': 'http://example.com/204', 'interval': 300}, {'tolerance': 20, 'lazy': True}, {'strategy': 'consistent-hashing'}]))
+                groups.append(group)
+            proxies = []
+            for n in names:
+                p = {'name': n, 'type': 'ss', 'server': 'example.com', 'port': 1}
+                if R.random() < .7:
+                    p['dialer-proxy'] = pick(gnames + ['Elsewhere', 'DIRECT'])
+                proxies.append(p)
+            body = yaml.safe_dump({'proxies': proxies, 'proxy-groups': groups}, allow_unicode=True, sort_keys=False)
+            record = sd.extract_subscription_dialers(body)
+            nodes = [{'name': p['name'], 'type': 'ss', 'server': 'example.com', 'port': 1,
+                      'params': {k: v for k, v in p.items() if k not in ('name', 'type', 'server', 'port')}} for p in proxies]
+            if R.random() < .1:
+                nodes[0]['type'] = 'bad'
+            meta = {'url': 'https://sub.test/' + sid}
+            if R.random() < .9:
+                meta['dialers'] = record
+            sub = {'id': sid, 'name': pick(['Air', '机场', 'Air2']), 'url': 'https://sub.test/' + sid, 'enabled': True}
+            if R.random() < .4:
+                sub['regex_filter'] = pick(['^HK', '^(?!.*Relay).*$', 'HK|Entry|JP', 'SG'])
+            subs.append(sub)
+            caches[sid] = {'nodes': nodes, 'metadata': meta}
+        direct = [s for s in subs if R.random() < .6]
+        providers = {s['name']: {'type': 'http', 'url': f"https://panel.test/api/subscriptions/{s['id']}/proxies"} for s in direct}
+        aggs = []
+        if R.random() < .4:
+            aggs.append({'id': 'agg', 'name': 'Agg', 'enabled': True, 'subscriptions': [s['id'] for s in subs]})
+            providers['Agg'] = {'type': 'http', 'url': 'https://panel.test/api/aggregations/agg/proxies'}
+        main = {'proxy-providers': providers}
+        taken = [f"{s['name']}/{n}" for s in subs for n in ('Relay', 'Hidden', 'HK 01', '中转')]
+        if R.random() < .15:
+            main['proxy-groups'] = [{'name': pick(taken)}]
+        if R.random() < .1:
+            main['proxies'] = [{'name': pick(taken)}]
+        sc = {'main': main, 'config': {'subscriptions': subs, 'subscription_aggregations': aggs}, 'caches': caches}
+        rows.append({'fn': 'add_dialer_groups', 'in': sc, 'out': run_add_dialer(sc)})
+    return rows
+
+
+dump('dialers.jsonl', dialers_rows())

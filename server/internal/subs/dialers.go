@@ -65,19 +65,22 @@ func isScalarSetting(v any) bool {
 // ExtractSubscriptionDialers is extract_subscription_dialers: the airport
 // groups the body's own dialer-proxy values name, or nil without any.
 // Result: {"targets": {group: {"type","members",...}}, "unresolved": [group]}.
-func ExtractSubscriptionDialers(text string) *jsonx.Object {
+func ExtractSubscriptionDialers(text string) (*jsonx.Object, error) {
 	if !strings.Contains(text, "dialer-proxy") {
-		return nil
+		return nil, nil
 	}
 	data, err := yamlx.SafeLoad(text)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	document, ok := data.(*jsonx.Object)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	proxyItems, _ := iterate(document.Value("proxies"))
+	proxyItems, ok := iterate(document.Value("proxies"))
+	if !ok {
+		return nil, notIterable(document.Value("proxies"))
+	}
 	var listed []*jsonx.Object
 	for _, item := range proxyItems {
 		if o, ok := item.(*jsonx.Object); ok {
@@ -91,7 +94,10 @@ func ExtractSubscriptionDialers(text string) *jsonx.Object {
 		}
 	}
 	groups := map[string]*jsonx.Object{}
-	groupItems, _ := iterate(document.Value("proxy-groups"))
+	groupItems, ok := iterate(document.Value("proxy-groups"))
+	if !ok {
+		return nil, notIterable(document.Value("proxy-groups"))
+	}
 	for _, item := range groupItems {
 		o, ok := item.(*jsonx.Object)
 		if !ok {
@@ -108,7 +114,7 @@ func ExtractSubscriptionDialers(text string) *jsonx.Object {
 		}
 	}
 	if len(wantedSet) == 0 {
-		return nil
+		return nil, nil
 	}
 	wanted := make([]string, 0, len(wantedSet))
 	for t := range wantedSet {
@@ -116,27 +122,34 @@ func ExtractSubscriptionDialers(text string) *jsonx.Object {
 	}
 	sort.Strings(wanted)
 
-	var leaves func(name string, seen map[string]bool) []string
-	leaves = func(name string, seen map[string]bool) []string {
+	var leaves func(name string, seen map[string]bool) ([]string, error)
+	leaves = func(name string, seen map[string]bool) ([]string, error) {
 		if proxies[name] {
-			return []string{name}
+			return []string{name}, nil
 		}
 		group := groups[name]
 		if group == nil || seen[name] {
-			return nil
+			return nil, nil
 		}
 		next := map[string]bool{name: true}
 		for k := range seen {
 			next[k] = true
 		}
 		var found []string
-		members, _ := iterate(group.Value("proxies"))
+		members, ok := iterate(group.Value("proxies"))
+		if !ok {
+			return nil, notIterable(group.Value("proxies"))
+		}
 		for _, m := range members {
 			if s, ok := m.(string); ok {
-				found = append(found, leaves(s, next)...)
+				sub, err := leaves(s, next)
+				if err != nil {
+					return nil, err
+				}
+				found = append(found, sub...)
 			}
 		}
-		return found
+		return found, nil
 	}
 
 	targets := jsonx.NewObject()
@@ -150,7 +163,11 @@ func ExtractSubscriptionDialers(text string) *jsonx.Object {
 	for _, target := range wanted {
 		var members []any
 		seen := map[string]bool{}
-		for _, m := range leaves(target, map[string]bool{}) {
+		leafNames, err := leaves(target, map[string]bool{})
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range leafNames {
 			if !seen[m] {
 				seen[m] = true
 				members = append(members, m)
@@ -180,28 +197,32 @@ func ExtractSubscriptionDialers(text string) *jsonx.Object {
 		}
 		targets.Set(target, entry)
 	}
-	return jsonx.Obj("targets", targets, "unresolved", unresolved)
+	return jsonx.Obj("targets", targets, "unresolved", unresolved), nil
+}
+
+func notIterable(v any) error {
+	return pyErr("TypeError: '" + pyTypeName(v) + "' object is not iterable")
 }
 
 // DialerRecord is dialer_record: the recorded airport groups of sub. cache is
 // the loaded subscription cache document (may be nil); downloadedText returns
 // the last downloaded body of a URL for caches made before the record existed.
-func DialerRecord(sub, cache *jsonx.Object, downloadedText func(url string) (string, bool)) *jsonx.Object {
+func DialerRecord(sub, cache *jsonx.Object, downloadedText func(url string) (string, bool)) (*jsonx.Object, error) {
 	metadata := cache.GetObject("metadata")
 	if metadata != nil && metadata.Has("dialers") {
 		rec, _ := metadata.Value("dialers").(*jsonx.Object)
-		return rec
+		return rec, nil
 	}
 	if !jsonx.Truthy(sub.Value("url")) {
-		return nil
+		return nil, nil
 	}
 	url, _ := sub.Value("url").(string)
 	if downloadedText == nil {
-		return nil
+		return nil, nil
 	}
 	text, ok := downloadedText(url)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	return ExtractSubscriptionDialers(text)
 }
@@ -357,7 +378,12 @@ func AddDialerGroups(main, config *jsonx.Object, deps DialerDeps) (*jsonx.Object
 		if len(chained) == 0 {
 			continue
 		}
-		record := DialerRecord(sub, cache, deps.DownloadedText)
+		record, err := DialerRecord(sub, cache, deps.DownloadedText)
+		if err != nil {
+			main.Set("proxies", proxies)
+			main.Set("proxy-groups", groups)
+			return nil, err
+		}
 		known := record.GetObject("targets")
 		airport := airportGroups(record)
 		byName := map[string]*jsonx.Object{}
