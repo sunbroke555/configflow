@@ -9,7 +9,7 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 | 0 | jsonx, store | `common/config_store.py` | 0.6k | – | done |
 | 1 | infra | `utils/logger`, `json_store`, `fast_yaml`, `local_http`, `url_utils`, `task_status`, `common/resource`, `common/utils`, `json_response`, `version` | 1.2k | 0 | done |
 | 2 | repo | `common/config_repository`, `config`, `profile_context`, `oxidns_settings` | 4.0k | 0 | done |
-| 3 | httpx, auth, settings | `common/auth`, `routes/auth`, `routes/__init__`, `settings`, `logs`, `stats`, `tasks`, `notifications`, `app.py` | 2.0k | 2 | wip |
+| 3 | httpx, auth, settings | `common/auth`, `routes/auth`, `routes/__init__`, `settings`, `logs`, `stats`, `tasks`, `notifications`, `app.py` | 2.0k | 2 | done |
 | 4 | rule engine | `rule_syntax`, `rule_matcher`, `rule_utils`, `domain_matcher_cache`, `group_candidates`, `reorder`, `strategy_references`, `connection_rules` | 1.8k | 1 | done |
 | 5 | subscription parsing (only `parse_uri_list` for manual node strings; subscriptions themselves go through Sub-Store, #13) | `subscription_parser`, `hosts`, `filter`, `dialers`, `proxy_chains`, `commented_mihomo`, `mihomo_listeners`, `proxy_server_dns` | 2.4k | 1 | wip |
 | 6 | mihomo converter | `converters/common`, `converters/mihomo`, `dialer_references`, `mihomo_base_settings`, `mihomo_easytier` | 2.5k | 4, 5 | todo |
@@ -20,13 +20,13 @@ user's network; these are verified in the VM lab after the Go tests pass. Status
 | 11 | oxidns editor, rule DNS | `oxidns_device_policy`, `oxidns_editor`, `oxidns_native_apply`, `rule_dns`, `oxidns_archive`, `routes/oxidns` | 2.4k | 10 | todo |
 | 12 | remote rules, providers | `rule_fetch`, `ruleset_content`, `remote_rule_sources`, `provider_delivery`, `provider_response`, `website_identity` | 1.7k | 2, 4 | todo |
 | 13 | subscription fetch (HTTP client of the bundled Sub-Store; Sub-Store itself is kept, not ported) | `sub_store_client`, `sub_store_runtime`, `subscription_cache`, `refresh`, `health`, `scheduled_refresh`, `dependencies` | 1.8k | 5 | todo |
-| 14 | health, latency | `health_check`, `node_latency`, `node_dns`, `region_check`, `domain_probe`, `web_listener` | 1.4k | 13 | todo |
+| 14 | health, latency | `health_check`, `node_latency`, `node_dns`, `region_check`, `domain_probe` (`web_listener` was done in #3) | 1.4k | 13 | todo |
 | 15 | resource routes A | `routes/subscriptions`, `aggregations`, `nodes`, `node_deletion`, `device_notes` | 1.7k | 2, 13 | todo |
 | 16 | resource routes B | `routes/rules`, `rule_library`, `proxy_groups` | 2.1k | 4, 12 | todo |
 | 17 | generate, profiles, import/export | `routes/generate`, `config`, `profiles`, `config_export`, `config_importer`, `webdav_backup` | 2.8k | 6–11 | todo |
 | 18 | setup flow | `setup_flow`, `presets`, `completion`, `abandon`, `routes/setup` | 1.4k | 17 | todo |
 | 19 | domain discovery | `domain_discovery`, `domain_discovery_service`, `routes/domain_discovery` | 1.7k | 12, 14 | todo |
-| 20 | agent registry | `agents/manager`, `common/agent_manager`, `runtime_state`, `diagnostics`, `operation_events`, `idle_rounds`, `presence_log`, `agents/version`, `*_messages` | 3.1k | 2 | todo |
+| 20 | agent registry | `agents/manager`, `common/agent_manager`, `runtime_state`, `diagnostics`, `operation_events`, `idle_rounds`, `presence_log`, `agents/version`, `*_messages` | 3.1k | 2 | wip |
 | 21 | metrics, traffic | `metrics_history`, `metrics_flush`, `traffic_history`, `traffic_store`, `oxidns_metrics`, `dashboard_state`, `ranking_history`, `publication_stats` | 3.0k | 20 | todo |
 | 22 | installer rendering (HR) | `install_output`, `install_script`, `go_install_script`, `core_install_script`, `gateway_install_script`, `install_command_store`, `agents/scripts/*.sh` | 1.3k + 3.1k sh | 20 | todo |
 | 23 | docker HA rendering | `docker_ha_*` | 1.6k | 22 | todo |

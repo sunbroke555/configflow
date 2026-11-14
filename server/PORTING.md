@@ -219,6 +219,61 @@ interchange). Read `repository.go`, `scope.go`, `hooks.go` doc comments before u
   package and tell me in the hand-back; I will switch `repo` over (it must not create an import cycle:
   packages that `repo` imports cannot import `repo`).
 
+**HTTP shell (package #3): `internal/httpx`, `httpxtest`, `auth`, `notifications`, `tasks`, `lifecycle`,
+`server`, `cmd/configflow`.** Full docs: `internal/httpx/doc.go`. Verified against the real Flask app
+(82 requests, 0 differences).
+- **Declare routes** in `internal/api/<blueprint>/` with one `Register(r *httpx.Router)`, then add it to
+  `routePackages` in `internal/server/server.go` (that one line is the only edit you make outside your package):
+  ```go
+  func Register(r *httpx.Router) {
+      r.GET("/api/agents", "agents.handle_agents", auth.Require(list))
+      r.Handle([]string{"GET", "PUT"}, "/api/agents/<agent_id>/client-notes", "agents.client_notes", auth.Require(notes))
+      r.POST("/api/agents/<agent_id>/heartbeat", "agents.agent_heartbeat", heartbeat) // public: no auth.Require
+  }
+  ```
+  The endpoint name is `<Blueprint name>.<function>` (the name passed to `Blueprint(...)`, not the module:
+  `routes.client_tools.*` is `agents.*`); auth exemptions and redaction whitelists are keyed by it.
+  Converters `<name>`, `<path:name>`; Werkzeug routing rules (404/405/308) are built in.
+- **Handlers** get `c *httpx.Ctx`: `c.Context()` (pass to every repo call; carries the request Scope),
+  `c.ProfileID`, `Param`, `Arg`/`ArgDefault`/`ArgInt`/`ArgList`, `Header`, `JSON()` (Flask `get_json()`;
+  returns the 400/415 error to return as-is), `JSONSilent`, `JSONObject`, `JSONForce`, `Data`, `Form`,
+  `RemoteAddr`, `HostURL`, `URLRoot`, `IsInternalCall`, `Set`/`Get` (`flask.g`).
+- **Responses**: `httpx.JSON(v)` (= `jsonify`), `JSONStatus(code, v)`, `Message(code, success, msg)`,
+  `External(c, v)` (= `jsonify_external`), `Text`, `HTML`, `Bytes`, `RawJSON`, `Empty`, `Stream`,
+  `File(FileOptions{Path|Data, MimeType, AsAttachment, DownloadName})` (pass `MimeType` explicitly);
+  modifiers `.WithStatus`, `.WithHeader`, `.NoStore()`. Token redaction runs globally; do not redact yourself.
+- **Errors**: return them. `*repo.Error` → the standard 400/404/409 bodies; `httpx.BadRequest(msg)`,
+  `NotFound()`, `&httpx.HTTPError{Code, Description}` → Werkzeug pages; anything else or a panic → logged
+  `Exception on <path> [<method>]` + 500 page. Where Python returns `jsonify({'success': False, 'message': str(e)}), 500`
+  explicitly, return that response explicitly.
+- **Auth**: `auth.Require(h)` (= `@require_auth`), `auth.ValidateTokenOrJWT(c, systemDoc)` (config pulls),
+  `auth.IsAuthEnabled()`. Public endpoints are listed in `internal/auth` (`gate`); adding one means
+  editing that list — tell me in the hand-back instead of editing it.
+- **Background loops / shutdown**: `lifecycle.Loop(name, func(ctx context.Context))`,
+  `lifecycle.OnShutdown(name, fn)`, registered from your package's wire function listed in `wirePackages` in
+  `internal/server` (the other line you may add there). Request hooks: `app.BeforeRequest`/`AfterRequest`.
+- **Repo hooks**: `repo.RegisterHooks` from your wire function.
+- **Notifications**: `notifications.RecordAgent`, `RecordRouter`, `RecordRegistrationRejection`,
+  `RecordAgentAddress`, `ResolveAgentAddress`, `RecordNotice`; providers via `notifications.SetSources`.
+  Any package that records task status must create its store with `notifications.TaskStatus(ctx, dataDir)`.
+- **Task list (`/api/tasks`)**: each owner provides its rows with `tasks.SetRows(slot, fn)`, runners with
+  `tasks.SetRunner(category, fn)`; `/api/tasks` and `GET /api/notifications` register only when every slot is
+  provided (slots: subscription/rule_source #13, router_rule_sync #37, agent #20/#27/#28,
+  domain_discovery #19, metrics_history #21).
+- **HTTP tests** (external test package `x_test`):
+  ```go
+  srv := httpxtest.New(t, httpxtest.Options{Auth: true, Register: httpxtest.Routes(mypkg.Register)})
+  admin := srv.Login()
+  srv.Post("/api/x", httpxtest.JSON(jsonx.Obj("a", 1)), admin).WantStatus(200).WantJSON(want)
+  ```
+  `srv.Repo`, `srv.Context()`, `srv.URL()` (real loopback server). Auth config is process-wide: tests that
+  enable login must not run in parallel with tests that expect it off. For a Flask↔Go comparison of your
+  routes, extend the pattern in `internal/httpx/difftest` (loopback only).
+- **Web front end**: the Go server serves the SPA and replaces nginx (`httpx.Edge`, enabled by
+  `CONFIGFLOW_FRONTEND_DIR`); the web listener port logic lives in `internal/weblistener` (#3, not #14).
+- `internal/redact`: response/export secret redaction (`SanitizeWithSecrets`, `ExternalPayloadSecrets`,
+  `RedactSecretsInText`, …) — #17 builds `config_export` on it.
+
 ## Helpers from a package that is not ported yet
 
 If you need a small helper that belongs to another work package still marked `todo`/`wip` in
