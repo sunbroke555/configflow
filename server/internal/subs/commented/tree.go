@@ -61,6 +61,10 @@ type node struct {
 	// foldPos: FoldedScalarString.fold_pos, the positions of raw where a
 	// line break was folded into a space
 	foldPos []int
+	// tag: an explicit standard scalar tag (str, int, float, bool, null);
+	// verbatimTag for the !<tag:yaml.org,2002:...> form
+	tag         string
+	verbatimTag bool
 	// collections
 	flow    bool
 	entries []*entry

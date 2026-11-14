@@ -1,6 +1,7 @@
 package commented
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -204,6 +205,19 @@ func (e *emitter) emitValueOnly(head string, v *node, r *rec, seqCol, childCol i
 				parts = append(parts, ">"+hints)
 				var err error
 				body, err = foldedBody(target, childCol, e.width)
+				if err == errOpenLine {
+					// the following blank line (a comment token "\n") only ends
+					// the open line
+					err = nil
+					switch {
+					case len(r.gap) > 0 && r.gap[0] == "":
+						moved := *r
+						moved.gap = r.gap[1:]
+						r = &moved
+					case len(r.gap) > 0 || r.eol != nil:
+						err = unsupported("comment after a folded scalar ending in spaces")
+					}
+				}
 				if err != nil {
 					e.fail(err)
 					return
@@ -237,7 +251,7 @@ func (e *emitter) emitValueOnly(head string, v *node, r *rec, seqCol, childCol i
 			e.line(join(head, strings.Join(parts, " ")), r, body)
 			return
 		}
-		if target.style == sDouble && prefix == "" {
+		if target.style == sDouble && prefix == "" && target.tag == "" {
 			col := utf8.RuneCountInString(head) + 2
 			nonl := e.noNewline && !isMapEntry
 			pieces := foldDouble(target.raw, col, childCol, e.width, true, &nonl)
@@ -431,6 +445,10 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 	}
 	switch target.kind {
 	case kScalar:
+		if target.tag != "" {
+			w.fail(unsupported("tagged scalar in a flow collection"))
+			return
+		}
 		switch target.style {
 		case sLiteral, sFolded:
 			w.fail(unsupported("block scalar inside a flow collection"))
@@ -815,5 +833,13 @@ func foldedBody(n *node, indent, width int) ([]string, error) {
 			spacesMode = ch == ' '
 		}
 	}
+	if len(cur) > 0 {
+		// ended on trailing spaces without a line break: whatever is written
+		// next ends this line
+		lines = append(lines, string(cur))
+		return lines, errOpenLine
+	}
 	return lines, nil
 }
+
+var errOpenLine = errors.New("folded scalar ends without a line break")

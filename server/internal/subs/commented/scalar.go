@@ -195,6 +195,12 @@ func doubleQuoted(s string) string {
 // scalarText returns the text written for a non-literal scalar node and
 // whether it is a null (written empty in block context).
 func scalarText(n *node, inFlow bool, yaml12 bool) (string, bool, error) {
+	if n.tag != "" {
+		if inFlow {
+			return "", false, unsupported("tagged scalar in a flow collection")
+		}
+		return taggedText(n, yaml12)
+	}
 	switch n.style {
 	case sPlain:
 		t, null, err := plainOutMode(n.raw, yaml12)
@@ -232,4 +238,61 @@ func literalHints(value string) string {
 		}
 	}
 	return hints
+}
+
+// taggedText writes a scalar with an explicit standard tag: `!!str x` stays
+// a TaggedScalar (tag and style kept); the other tags (and the verbatim
+// forms, which have no handle) are constructed and represented as values.
+func taggedText(n *node, yaml12 bool) (string, bool, error) {
+	if n.style != sPlain && n.style != sSingle && n.style != sDouble {
+		return "", false, unsupported("tagged block scalar")
+	}
+	plainText := func() (string, bool, error) {
+		c := *n
+		c.tag = ""
+		return scalarText(&c, false, yaml12)
+	}
+	switch n.tag {
+	case "str":
+		if !n.verbatimTag {
+			if n.style == sPlain {
+				if n.raw == "" {
+					return "!!str", false, nil
+				}
+				return "!!str " + n.raw, false, nil
+			}
+			t, _, err := plainText()
+			return "!!str " + t, false, err
+		}
+		if n.style != sPlain {
+			return plainText()
+		}
+		if resolveTag(n.raw, true) != "str" {
+			return "'" + strings.ReplaceAll(n.raw, "'", "''") + "'", false, nil
+		}
+		return n.raw, false, nil
+	case "null":
+		return "", true, nil
+	case "bool":
+		switch strings.ToLower(n.raw) {
+		case "yes", "true", "on", "y":
+			return "true", false, nil
+		case "no", "false", "off", "n":
+			return "false", false, nil
+		}
+		return "", false, unsupported("bool tag on a non-bool value")
+	case "int":
+		if !rInt12.MatchString(n.raw) && !rInt11.MatchString(n.raw) {
+			return "", false, unsupported("int tag on a non-int value")
+		}
+		t, err := numberText(n.raw, "int", yaml12)
+		return t, false, err
+	case "float":
+		if !rFloat12.MatchString(n.raw) && !rFloat11.MatchString(n.raw) && !rInt12.MatchString(n.raw) {
+			return "", false, unsupported("float tag on a non-float value")
+		}
+		t, err := numberText(n.raw, "float", yaml12)
+		return t, false, err
+	}
+	return "", false, unsupported("tag")
 }

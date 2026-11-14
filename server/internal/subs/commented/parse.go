@@ -536,6 +536,45 @@ func (p *parser) parseValue(l []rune, from, ownerCol, parentCol, line int) (*nod
 		}
 		r.gap = p.takeGap()
 		return setAnchor(n), r, nil
+	case l[i] == '!' && anchor == "":
+		j := i
+		for j < len(l) && l[j] != ' ' {
+			j++
+		}
+		tag, verbatim, ok := standardTag(string(l[i:j]))
+		if !ok {
+			return nil, r, unsupported("tag at line " + itoa(line+1))
+		}
+		k := j
+		for k < len(l) && l[k] == ' ' {
+			k++
+		}
+		var n *node
+		if k >= len(l) || l[k] == '#' {
+			if err := finishLine(j); err != nil {
+				return nil, r, err
+			}
+			p.pos++
+			if err := p.rejectContinuation(ownerCol); err != nil {
+				return nil, r, err
+			}
+			r.gap = p.takeGap()
+			n = &node{kind: kScalar, style: sPlain, raw: ""}
+		} else {
+			if l[k] == '&' || l[k] == '!' || l[k] == '[' || l[k] == '{' || l[k] == '|' || l[k] == '>' || l[k] == '*' {
+				return nil, r, unsupported("tagged node at line " + itoa(line+1))
+			}
+			var err error
+			n, r, err = p.parseValue(l, k, ownerCol, parentCol, line)
+			if err != nil {
+				return nil, r, err
+			}
+		}
+		if n.kind != kScalar {
+			return nil, r, unsupported("tagged collection at line " + itoa(line+1))
+		}
+		n.tag, n.verbatimTag = tag, verbatim
+		return n, r, nil
 	case l[i] == '!' || l[i] == '%' || l[i] == '@' || l[i] == '`':
 		return nil, r, unsupported("tag or reserved indicator at line " + itoa(line+1))
 	case l[i] == '[' || l[i] == '{':
@@ -1044,4 +1083,23 @@ func (f *flowParser) parseNode() (*node, int, error) {
 		n.anchor = anchor
 	}
 	return n, f.pos, nil
+}
+
+// standardTag recognises the scalar tags the editor reproduces: `!!str`,
+// `!!int`, `!!float`, `!!bool`, `!!null` and their verbatim
+// `!<tag:yaml.org,2002:...>` forms.
+func standardTag(t string) (tag string, verbatim bool, ok bool) {
+	switch {
+	case strings.HasPrefix(t, "!<tag:yaml.org,2002:") && strings.HasSuffix(t, ">"):
+		tag, verbatim = strings.TrimSuffix(strings.TrimPrefix(t, "!<tag:yaml.org,2002:"), ">"), true
+	case strings.HasPrefix(t, "!!"):
+		tag = t[2:]
+	default:
+		return "", false, false
+	}
+	switch tag {
+	case "str", "int", "float", "bool", "null":
+		return tag, verbatim, true
+	}
+	return "", false, false
 }

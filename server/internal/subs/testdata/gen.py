@@ -1502,3 +1502,50 @@ def commented_scalar_rows():
 
 
 dump('commented_scalars.jsonl', commented_scalar_rows())
+
+
+# ------------------------------------------- commented: block scalars and tags
+BLOCK_BODIES = [
+    ['text', 'more'], ['text', '', 'para'], ['text', '  indented', 'back'], ['  lead', 'x'], ['a b c', 'd e'],
+    ['with # hash', 'proxy: Pinned'], ['one long line of folded text that goes on and on well past the eighty column limit of the doc ' * 2],
+    ['short', 'a very long second line ' * 6 + 'end'], ['x', '', '', 'y'], ['tab\there', 'next'], ['trailing  ', 'x'],
+    ['中文 内容', '第二行'],
+]
+TAGGED = ['!!str 123', '!!int "7"', '!!float 1', '!!bool yes', '!custom value', '!!null ""', '!!binary aGVsbG8=',
+          "!<tag:yaml.org,2002:str> x", '!!str', '@reserved', '`tick', '%pct']
+
+
+def commented_block_rows():
+    rows = []
+    texts = []
+    for style in ('>', '>-', '>+', '|', '|-', '>2', '> # note'):
+        for body in BLOCK_BODIES:
+            for indent in (2, 4):
+                pad = ' ' * indent
+                block = '\n'.join(pad + l if l else '' for l in body)
+                texts.append(f'k: {style}\n{block}\nlisteners:\n- name: x\n  proxy: Pinned\n')
+                texts.append(f'k:\n- {style}\n{block}\n- y\nlisteners:\n- name: x\n  proxy: Pinned\n')
+                texts.append(f'listeners:\n- name: x\n  note: {style}\n{"  " + block.replace(chr(10), chr(10) + "  ")}\n  proxy: Pinned\n')
+    for tagged in TAGGED:
+        texts.append(f'k: {tagged}\nlisteners:\n- name: x\n  proxy: Pinned\n')
+        texts.append(f'k: [{tagged}, y]\nlisteners:\n- {{name: x, proxy: Pinned}}\n')
+        texts.append(f'listeners:\n- name: x\n  extra: {tagged}\n  proxy: Pinned\n')
+    texts.append('k: !!map {a: 1}\nlisteners:\n- name: x\n  proxy: Pinned\n')
+    texts.append('k: !!seq\n- 1\nlisteners:\n- name: x\n  proxy: Pinned\n')
+    texts.append('k: !!set {a, b}\nlisteners:\n- name: x\n  proxy: Pinned\n')
+    texts.append('listeners: !!seq\n- name: x\n  proxy: Pinned\n')
+    texts.append('listeners:\n- !!map\n  name: x\n  proxy: Pinned\n')
+    texts.append('listeners:\n- name: x\n  proxy: !!str Pinned\n')
+    for text in texts:
+        for new_name in ('Renamed', None):
+            profile = {'mihomo': {'custom_config': text}}
+            try:
+                out = {'changed': ml.relink_group_listeners(profile, 'Pinned', new_name),
+                       'config': profile['mihomo']['custom_config']}
+            except BaseException as exc:  # noqa: BLE001
+                out = {'error': str(exc), 'type': type(exc).__name__}
+            rows.append({'fn': 'relink_group_listeners', 'in': {'config': text, 'old': 'Pinned', 'new': new_name}, 'out': out})
+    return rows
+
+
+dump('commented_blocks.jsonl', commented_block_rows())
