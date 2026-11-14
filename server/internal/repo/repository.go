@@ -20,7 +20,6 @@ package repo
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,8 +30,11 @@ import (
 	"time"
 
 	"configflow/internal/jsonx"
+	"configflow/internal/logx"
 	"configflow/internal/store"
 )
+
+var logger = logx.Get("backend.common.config_repository")
 
 // File names inside the data directory.
 const (
@@ -217,15 +219,6 @@ func (r *Repository) legacyData() string {
 			return relative
 		}
 	}
-	// Pre-migration caches that Python copies into shared/ while migrating.
-	for _, kind := range []string{"subscribes", "rules"} {
-		entries, _ := os.ReadDir(filepath.Join(r.dataDir, kind))
-		for _, entry := range entries {
-			if entry.Type().IsRegular() {
-				return kind + "/" + entry.Name()
-			}
-		}
-	}
 	return ""
 }
 
@@ -274,7 +267,7 @@ func (r *Repository) openLocked(ctx context.Context) error {
 			}
 		}
 		if earlier := r.earlierDatabases(); len(earlier) > 0 {
-			slog.Error(DatabaseFilename + " 不存在，但数据目录里有它以前的副本（" + strings.Join(earlier, "、") +
+			logger.Error(DatabaseFilename + " 不存在，但数据目录里有它以前的副本（" + strings.Join(earlier, "、") +
 				"）；将创建全新的默认配置，请核对并按需从这些副本恢复")
 		}
 		if err := r.createFreshLocked(); err != nil {
