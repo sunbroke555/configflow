@@ -1,108 +1,108 @@
 # method	path	python handler	go package	status
-GET	/api/agents	routes.agents.handle_agents		todo
-POST	/api/agents	routes.agents.handle_agents		todo
-DELETE	/api/agents/<agent_id>	routes.agents.handle_agent_item		todo
-GET	/api/agents/<agent_id>	routes.agents.handle_agent_item		todo
-PUT	/api/agents/<agent_id>	routes.agents.handle_agent_item		todo
-GET	/api/agents/<agent_id>/address	routes.agents.agent_address		todo
-PUT	/api/agents/<agent_id>/address	routes.agents.agent_address		todo
-GET	/api/agents/<agent_id>/client-notes	routes.client_tools.client_notes		todo
-PUT	/api/agents/<agent_id>/client-notes	routes.client_tools.client_notes		todo
-GET	/api/agents/<agent_id>/config	routes.agents.get_agent_config		todo
-GET	/api/agents/<agent_id>/config/logging	routes.agents.get_logging_config		todo
-POST	/api/agents/<agent_id>/config/logging	routes.agents.set_logging_config		todo
-GET	/api/agents/<agent_id>/deployments/<deployment_id>	routes.agents.get_agent_deployment		todo
-POST	/api/agents/<agent_id>/deployments/<deployment_id>/activate	routes.agents.activate_agent_deployment		todo
-POST	/api/agents/<agent_id>/deployments/<deployment_id>/recover	routes.agents.recover_agent_deployment		todo
-POST	/api/agents/<agent_id>/deployments/<deployment_id>/rollback	routes.agents.rollback_agent_deployment		todo
-DELETE	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow		todo
-GET	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow		todo
-PUT	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow		todo
-POST	/api/agents/<agent_id>/dns-follow/retry	routes.agents.retry_agent_dns_follow		todo
-PUT	/api/agents/<agent_id>/domain-discovery	routes.agents.set_agent_domain_discovery		todo
-POST	/api/agents/<agent_id>/domain-discovery/clear	routes.agents.clear_agent_domain_discovery		todo
-POST	/api/agents/<agent_id>/generate-config	routes.agents.generate_final_agent_config		todo
-GET	/api/agents/<agent_id>/generated-config/<preview_id>/download	routes.agents.download_final_agent_config		todo
-GET	/api/agents/<agent_id>/generated-config/<preview_id>/file	routes.agents.read_final_agent_file		todo
-POST	/api/agents/<agent_id>/heartbeat	routes.agents.agent_heartbeat		todo
-GET	/api/agents/<agent_id>/ipv6-readiness	routes.ipv6_readiness.ipv6_readiness_operation		todo
-POST	/api/agents/<agent_id>/ipv6-readiness/<operation>	routes.ipv6_readiness.ipv6_readiness_operation		todo
-GET	/api/agents/<agent_id>/ipv6-readiness/verification-settings	routes.ipv6_readiness.ipv6_readiness_operation		todo
-PUT	/api/agents/<agent_id>/ipv6-readiness/verification-settings	routes.ipv6_readiness.ipv6_readiness_operation		todo
-GET	/api/agents/<agent_id>/ipv6-readiness/verify	routes.ipv6_readiness.ipv6_readiness_operation		todo
-GET	/api/agents/<agent_id>/linux-gateway/<operation>	routes.linux_gateway_agents.linux_gateway_operation		todo
-POST	/api/agents/<agent_id>/linux-gateway/<operation>	routes.linux_gateway_agents.linux_gateway_operation		todo
-GET	/api/agents/<agent_id>/logs	routes.agents.get_agent_logs		todo
-POST	/api/agents/<agent_id>/logs/clear	routes.agents.clear_agent_log		todo
-GET	/api/agents/<agent_id>/logs/sources	routes.agents.get_agent_log_sources		todo
-POST	/api/agents/<agent_id>/logs/validate	routes.agents.validate_log_path		todo
-GET	/api/agents/<agent_id>/metrics	routes.agents.get_agent_metrics		todo
-GET	/api/agents/<agent_id>/metrics/history	routes.agents.get_agent_metrics_history		todo
-GET	/api/agents/<agent_id>/metrics/summary	routes.agents.get_agent_metrics_summary		todo
-DELETE	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel		todo
-GET	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel		todo
-PATCH	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel		todo
-POST	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel		todo
-PUT	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel		todo
-GET	/api/agents/<agent_id>/mihomo/rule-targets	routes.client_tools.rule_targets		todo
-POST	/api/agents/<agent_id>/mihomo/rule-targets/apply	routes.client_tools.connection_rule		todo
-DELETE	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha		todo
-GET	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha		todo
-PUT	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha		todo
-GET	/api/agents/<agent_id>/oxidns-ha-environment	routes.agents.agent_oxidns_ha_environment		todo
-GET	/api/agents/<agent_id>/oxidns/cache	routes.agents.oxidns_cache		todo
-POST	/api/agents/<agent_id>/oxidns/cache/flush	routes.agents.oxidns_cache		todo
-GET	/api/agents/<agent_id>/oxidns/clients	routes.agents.get_oxidns_clients		todo
-POST	/api/agents/<agent_id>/oxidns/dashboard/reset	routes.agents.reset_oxidns_dashboard		todo
-GET	/api/agents/<agent_id>/oxidns/device-policies	routes.agents.oxidns_device_policies		todo
-PUT	/api/agents/<agent_id>/oxidns/device-policies	routes.agents.oxidns_device_policies		todo
-GET	/api/agents/<agent_id>/oxidns/overview	routes.agents.get_oxidns_overview		todo
-GET	/api/agents/<agent_id>/oxidns/queries	routes.agents.get_oxidns_queries		todo
-GET	/api/agents/<agent_id>/oxidns/queries/<record_id>	routes.agents.get_oxidns_query		todo
-GET	/api/agents/<agent_id>/oxidns/rules/update	routes.agents.update_oxidns_rules		todo
-POST	/api/agents/<agent_id>/oxidns/rules/update	routes.agents.update_oxidns_rules		todo
-POST	/api/agents/<agent_id>/push-config	routes.agents.push_config_to_agent		todo
-GET	/api/agents/<agent_id>/push-diff	routes.agents.agent_push_diff		todo
-GET	/api/agents/<agent_id>/push-diff/entries	routes.agents.agent_push_diff_entries		todo
-POST	/api/agents/<agent_id>/restart	routes.agents.restart_agent		todo
-GET	/api/agents/<agent_id>/rule-sync	routes.agents.agent_rule_sync		todo
-PUT	/api/agents/<agent_id>/rule-sync	routes.agents.agent_rule_sync		todo
-GET	/api/agents/<agent_id>/status	routes.agents.get_agent_status		todo
-DELETE	/api/agents/<agent_id>/traffic-history	routes.agents.clear_agent_traffic_history		todo
-GET	/api/agents/<agent_id>/traffic-history	routes.agents.get_agent_traffic_history		todo
-POST	/api/agents/<agent_id>/traffic-history	routes.agents.agent_traffic_history_report		todo
-PUT	/api/agents/<agent_id>/traffic-history	routes.agents.set_agent_traffic_history		todo
-POST	/api/agents/<agent_id>/traffic-report	routes.agents.agent_traffic_report		todo
-GET	/api/agents/<agent_id>/traffic/stats	routes.agents.get_agent_traffic_stats		todo
-GET	/api/agents/<agent_id>/traffic/trend	routes.agents.get_agent_traffic_trend		todo
-POST	/api/agents/<agent_id>/uninstall	routes.agents.uninstall_agent		todo
-POST	/api/agents/<agent_id>/update	routes.agents.update_agent_version		todo
-GET	/api/agents/<agent_id>/upgrade	routes.agents.get_agent_upgrade		todo
-POST	/api/agents/<agent_id>/upgrade/report	routes.agents.report_agent_upgrade		todo
-GET	/api/agents/<agent_id>/upstream-routers	routes.upstream_router_pending.upstream_router_pending		todo
-POST	/api/agents/core-install-command	routes.agents.create_core_install_command		todo
-GET	/api/agents/core-install-script	routes.agents.get_core_install_script		todo
-GET	/api/agents/docker-agent-compose	routes.agents.get_docker_agent_compose		todo
-GET	/api/agents/docker-agent-run	routes.agents.get_docker_agent_run		todo
-POST	/api/agents/docker-oxidns-ha-enroll/<session_id>	routes.docker_ha_installation.docker_oxidns_ha_enroll		todo
-POST	/api/agents/docker-oxidns-ha-guide	routes.docker_ha_installation.docker_oxidns_ha_guide		todo
-GET	/api/agents/download/<filename>	routes.agents.download_agent_binary		todo
-GET	/api/agents/gateway-forwarding	routes.linux_gateway_agents.agent_gateway_forwarding		todo
-POST	/api/agents/gateway-forwarding	routes.linux_gateway_agents.agent_gateway_forwarding		todo
-GET	/api/agents/gateway-installations	routes.gateway_installations.gateway_installations		todo
-POST	/api/agents/gateway-installations	routes.gateway_installations.gateway_installations		todo
-GET	/api/agents/gateway-installations/<session_id>	routes.gateway_installations.gateway_installation_status		todo
-POST	/api/agents/gateway-installations/<session_id>/enroll	routes.gateway_installations.gateway_installation_enroll		todo
-POST	/api/agents/gateway-installations/<session_id>/network	routes.gateway_installations.gateway_installation_network		todo
-POST	/api/agents/gateway-installations/<session_id>/publish	routes.gateway_installations.gateway_installation_publish		todo
-GET	/api/agents/gateway-installations/<session_id>/script	routes.gateway_installations.gateway_installation_script		todo
-GET	/api/agents/gateway-network-probe.sh	routes.agents.get_gateway_network_probe		todo
-GET	/api/agents/i/<token>	routes.agents.download_install_command		todo
-POST	/api/agents/install-command	routes.agents.create_install_command		todo
-GET	/api/agents/install-script	routes.agents.get_install_script		todo
-GET	/api/agents/latest-version	routes.agents.get_latest_agent_version		todo
-POST	/api/agents/register	routes.agents.register_agent		todo
-PUT	/api/agents/traffic-history/retention	routes.agents.set_traffic_history_retention		todo
+GET	/api/agents	routes.agents.handle_agents	24,26	todo
+POST	/api/agents	routes.agents.handle_agents	api/agents	done
+DELETE	/api/agents/<agent_id>	routes.agents.handle_agent_item	api/agents	done
+GET	/api/agents/<agent_id>	routes.agents.handle_agent_item	24,26	todo
+PUT	/api/agents/<agent_id>	routes.agents.handle_agent_item	api/agents	done
+GET	/api/agents/<agent_id>/address	routes.agents.agent_address	28	todo
+PUT	/api/agents/<agent_id>/address	routes.agents.agent_address	28	todo
+GET	/api/agents/<agent_id>/client-notes	routes.client_tools.client_notes	38	todo
+PUT	/api/agents/<agent_id>/client-notes	routes.client_tools.client_notes	38	todo
+GET	/api/agents/<agent_id>/config	routes.agents.get_agent_config	26	todo
+GET	/api/agents/<agent_id>/config/logging	routes.agents.get_logging_config	26	todo
+POST	/api/agents/<agent_id>/config/logging	routes.agents.set_logging_config	26	todo
+GET	/api/agents/<agent_id>/deployments/<deployment_id>	routes.agents.get_agent_deployment	26	todo
+POST	/api/agents/<agent_id>/deployments/<deployment_id>/activate	routes.agents.activate_agent_deployment	26	todo
+POST	/api/agents/<agent_id>/deployments/<deployment_id>/recover	routes.agents.recover_agent_deployment	26	todo
+POST	/api/agents/<agent_id>/deployments/<deployment_id>/rollback	routes.agents.rollback_agent_deployment	26	todo
+DELETE	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow	28	todo
+GET	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow	28	todo
+PUT	/api/agents/<agent_id>/dns-follow	routes.agents.agent_dns_follow	28	todo
+POST	/api/agents/<agent_id>/dns-follow/retry	routes.agents.retry_agent_dns_follow	28	todo
+PUT	/api/agents/<agent_id>/domain-discovery	routes.agents.set_agent_domain_discovery	19	todo
+POST	/api/agents/<agent_id>/domain-discovery/clear	routes.agents.clear_agent_domain_discovery	19	todo
+POST	/api/agents/<agent_id>/generate-config	routes.agents.generate_final_agent_config	24,26	todo
+GET	/api/agents/<agent_id>/generated-config/<preview_id>/download	routes.agents.download_final_agent_config	24,26	todo
+GET	/api/agents/<agent_id>/generated-config/<preview_id>/file	routes.agents.read_final_agent_file	24,26	todo
+POST	/api/agents/<agent_id>/heartbeat	routes.agents.agent_heartbeat	api/agents	done
+GET	/api/agents/<agent_id>/ipv6-readiness	routes.ipv6_readiness.ipv6_readiness_operation	31	todo
+POST	/api/agents/<agent_id>/ipv6-readiness/<operation>	routes.ipv6_readiness.ipv6_readiness_operation	31	todo
+GET	/api/agents/<agent_id>/ipv6-readiness/verification-settings	routes.ipv6_readiness.ipv6_readiness_operation	31	todo
+PUT	/api/agents/<agent_id>/ipv6-readiness/verification-settings	routes.ipv6_readiness.ipv6_readiness_operation	31	todo
+GET	/api/agents/<agent_id>/ipv6-readiness/verify	routes.ipv6_readiness.ipv6_readiness_operation	31	todo
+GET	/api/agents/<agent_id>/linux-gateway/<operation>	routes.linux_gateway_agents.linux_gateway_operation	30	todo
+POST	/api/agents/<agent_id>/linux-gateway/<operation>	routes.linux_gateway_agents.linux_gateway_operation	30	todo
+GET	/api/agents/<agent_id>/logs	routes.agents.get_agent_logs	26	todo
+POST	/api/agents/<agent_id>/logs/clear	routes.agents.clear_agent_log	26	todo
+GET	/api/agents/<agent_id>/logs/sources	routes.agents.get_agent_log_sources	26	todo
+POST	/api/agents/<agent_id>/logs/validate	routes.agents.validate_log_path	26	todo
+GET	/api/agents/<agent_id>/metrics	routes.agents.get_agent_metrics	21	todo
+GET	/api/agents/<agent_id>/metrics/history	routes.agents.get_agent_metrics_history	21	todo
+GET	/api/agents/<agent_id>/metrics/summary	routes.agents.get_agent_metrics_summary	21	todo
+DELETE	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel	29	todo
+GET	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel	29	todo
+PATCH	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel	29	todo
+POST	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel	29	todo
+PUT	/api/agents/<agent_id>/mihomo/<path:resource>	routes.agents.mihomo_panel	29	todo
+GET	/api/agents/<agent_id>/mihomo/rule-targets	routes.client_tools.rule_targets	38	todo
+POST	/api/agents/<agent_id>/mihomo/rule-targets/apply	routes.client_tools.connection_rule	38	todo
+DELETE	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha	29	todo
+GET	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha	29	todo
+PUT	/api/agents/<agent_id>/oxidns-ha	routes.agents.agent_oxidns_ha	29	todo
+GET	/api/agents/<agent_id>/oxidns-ha-environment	routes.agents.agent_oxidns_ha_environment	29	todo
+GET	/api/agents/<agent_id>/oxidns/cache	routes.agents.oxidns_cache	28	todo
+POST	/api/agents/<agent_id>/oxidns/cache/flush	routes.agents.oxidns_cache	28	todo
+GET	/api/agents/<agent_id>/oxidns/clients	routes.agents.get_oxidns_clients	21	todo
+POST	/api/agents/<agent_id>/oxidns/dashboard/reset	routes.agents.reset_oxidns_dashboard	21	todo
+GET	/api/agents/<agent_id>/oxidns/device-policies	routes.agents.oxidns_device_policies	11	todo
+PUT	/api/agents/<agent_id>/oxidns/device-policies	routes.agents.oxidns_device_policies	11	todo
+GET	/api/agents/<agent_id>/oxidns/overview	routes.agents.get_oxidns_overview	21	todo
+GET	/api/agents/<agent_id>/oxidns/queries	routes.agents.get_oxidns_queries	21	todo
+GET	/api/agents/<agent_id>/oxidns/queries/<record_id>	routes.agents.get_oxidns_query	21	todo
+GET	/api/agents/<agent_id>/oxidns/rules/update	routes.agents.update_oxidns_rules	28	todo
+POST	/api/agents/<agent_id>/oxidns/rules/update	routes.agents.update_oxidns_rules	28	todo
+POST	/api/agents/<agent_id>/push-config	routes.agents.push_config_to_agent	26	todo
+GET	/api/agents/<agent_id>/push-diff	routes.agents.agent_push_diff	25	todo
+GET	/api/agents/<agent_id>/push-diff/entries	routes.agents.agent_push_diff_entries	25	todo
+POST	/api/agents/<agent_id>/restart	routes.agents.restart_agent	26	todo
+GET	/api/agents/<agent_id>/rule-sync	routes.agents.agent_rule_sync	27	todo
+PUT	/api/agents/<agent_id>/rule-sync	routes.agents.agent_rule_sync	27	todo
+GET	/api/agents/<agent_id>/status	routes.agents.get_agent_status	26	todo
+DELETE	/api/agents/<agent_id>/traffic-history	routes.agents.clear_agent_traffic_history	21	todo
+GET	/api/agents/<agent_id>/traffic-history	routes.agents.get_agent_traffic_history	21	todo
+POST	/api/agents/<agent_id>/traffic-history	routes.agents.agent_traffic_history_report	21	todo
+PUT	/api/agents/<agent_id>/traffic-history	routes.agents.set_agent_traffic_history	21	todo
+POST	/api/agents/<agent_id>/traffic-report	routes.agents.agent_traffic_report	21	todo
+GET	/api/agents/<agent_id>/traffic/stats	routes.agents.get_agent_traffic_stats	21	todo
+GET	/api/agents/<agent_id>/traffic/trend	routes.agents.get_agent_traffic_trend	21	todo
+POST	/api/agents/<agent_id>/uninstall	routes.agents.uninstall_agent	26	todo
+POST	/api/agents/<agent_id>/update	routes.agents.update_agent_version	26	todo
+GET	/api/agents/<agent_id>/upgrade	routes.agents.get_agent_upgrade	26	todo
+POST	/api/agents/<agent_id>/upgrade/report	routes.agents.report_agent_upgrade	26	todo
+GET	/api/agents/<agent_id>/upstream-routers	routes.upstream_router_pending.upstream_router_pending	37	todo
+POST	/api/agents/core-install-command	routes.agents.create_core_install_command	22	todo
+GET	/api/agents/core-install-script	routes.agents.get_core_install_script	22	todo
+GET	/api/agents/docker-agent-compose	routes.agents.get_docker_agent_compose	22	todo
+GET	/api/agents/docker-agent-run	routes.agents.get_docker_agent_run	22	todo
+POST	/api/agents/docker-oxidns-ha-enroll/<session_id>	routes.docker_ha_installation.docker_oxidns_ha_enroll	23	todo
+POST	/api/agents/docker-oxidns-ha-guide	routes.docker_ha_installation.docker_oxidns_ha_guide	23	todo
+GET	/api/agents/download/<filename>	routes.agents.download_agent_binary	22	todo
+GET	/api/agents/gateway-forwarding	routes.linux_gateway_agents.agent_gateway_forwarding	30	todo
+POST	/api/agents/gateway-forwarding	routes.linux_gateway_agents.agent_gateway_forwarding	30	todo
+GET	/api/agents/gateway-installations	routes.gateway_installations.gateway_installations	30	todo
+POST	/api/agents/gateway-installations	routes.gateway_installations.gateway_installations	30	todo
+GET	/api/agents/gateway-installations/<session_id>	routes.gateway_installations.gateway_installation_status	30	todo
+POST	/api/agents/gateway-installations/<session_id>/enroll	routes.gateway_installations.gateway_installation_enroll	30	todo
+POST	/api/agents/gateway-installations/<session_id>/network	routes.gateway_installations.gateway_installation_network	30	todo
+POST	/api/agents/gateway-installations/<session_id>/publish	routes.gateway_installations.gateway_installation_publish	30	todo
+GET	/api/agents/gateway-installations/<session_id>/script	routes.gateway_installations.gateway_installation_script	30	todo
+GET	/api/agents/gateway-network-probe.sh	routes.agents.get_gateway_network_probe	22	todo
+GET	/api/agents/i/<token>	routes.agents.download_install_command	22	todo
+POST	/api/agents/install-command	routes.agents.create_install_command	22	todo
+GET	/api/agents/install-script	routes.agents.get_install_script	22	todo
+GET	/api/agents/latest-version	routes.agents.get_latest_agent_version	26	todo
+POST	/api/agents/register	routes.agents.register_agent	api/agents	done
+PUT	/api/agents/traffic-history/retention	routes.agents.set_traffic_history_retention	21	todo
 GET	/api/aggregations	routes.aggregations.handle_subscription_aggregations		todo
 POST	/api/aggregations	routes.aggregations.handle_subscription_aggregations		todo
 DELETE	/api/aggregations/<agg_id>	routes.aggregations.handle_subscription_aggregation_item		todo
@@ -235,7 +235,7 @@ DELETE	/api/profiles/<profile_id>	routes.profiles.handle_profile		todo
 GET	/api/profiles/<profile_id>	routes.profiles.handle_profile		todo
 PUT	/api/profiles/<profile_id>	routes.profiles.handle_profile		todo
 GET	/api/profiles/<profile_id>/agents	routes.profiles.profile_agent_bindings		todo
-POST	/api/profiles/<profile_id>/agents/rebind	routes.profiles.rebind_profile_agents		todo
+POST	/api/profiles/<profile_id>/agents/rebind	routes.profiles.rebind_profile_agents	17	todo
 GET	/api/profiles/<profile_id>/aggregations/<agg_id>/provider	routes.profiles.profile_aggregation_provider		todo
 POST	/api/profiles/<profile_id>/clone	routes.profiles.clone_profile		todo
 GET	/api/profiles/<profile_id>/custom-config/linux-gateway	routes.linux_gateway.linux_gateway_settings		todo

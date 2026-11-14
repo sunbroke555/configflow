@@ -139,11 +139,14 @@ func RegisterHooks(h Hooks) {
 	}
 }
 
-// ResetHooks clears every hook (tests).
+// ResetHooks clears every hook, delete function and init function (tests).
 func ResetHooks() {
 	hooksMu.Lock()
 	hooks = Hooks{}
 	hooksMu.Unlock()
+	listMu.Lock()
+	deleteHooks, initHooks = nil, nil
+	listMu.Unlock()
 }
 
 func currentHooks() Hooks {

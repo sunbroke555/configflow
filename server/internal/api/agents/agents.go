@@ -509,9 +509,9 @@ func handleAgentItem(c *httpx.Ctx) (*httpx.Response, error) {
 	}
 	var ok bool
 	if c.Method() == "PUT" {
-		value, err := c.JSON()
-		if err != nil {
-			return failure(500, err.Error()), nil
+		value, jsonErr := c.JSON()
+		if jsonErr != nil {
+			return failure(500, jsonErr.Error()), nil
 		}
 		data, isObject := value.(*jsonx.Object)
 		if !isObject || data == nil {

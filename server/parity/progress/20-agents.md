@@ -11,22 +11,20 @@ works now; update `parity/routes.tsv`. Wire via `agents.Wire` in `wirePackages` 
 `routePackages` (one line each in `internal/server/server.go`). No sub-agents; tests only via `rt`.
 
 ## Done
-- First commit (see git log `go(agents):`): all modules written, `go vet ./internal/agents/` clean. No tests yet.
-  Files: version.go (+generated version_changelog.go), pytime.go, diagnostics.go, operation_events.go,
-  messages.go (+generated messages_data.go), idle_rounds.go, presence_log.go, runtime_state.go (incl. legacy
-  runtime.sqlite3 import), client.go, hooks.go, compat.go (#29 HA helpers), manager.go, remote.go,
-  deployments.go, singleton.go (Get/Init/Wire, task rows).
+- ee00305e core modules; 1dd4e700 routes + wiring + manager tests; next commit: route tests, routes.tsv.
+- `internal/agents` tests (91 pass, 1 partial skip: weak-ref GC check of idle rounds): runtime state incl.
+  legacy import + presence log, registration/profiles/bindings/light reads (manager), deployments
+  (begin/record/poll/activate/rollback/recover, busy retry), failure details, DNS reports, events, messages,
+  version, idle rounds.
+- `internal/api/agents`: POST register, POST heartbeat, POST /api/agents, PUT/DELETE /api/agents/<id>; tests
+  port registration/heartbeat security + item update/delete. routes.tsv: 5 rows done; other agent rows carry
+  the package they wait for.
+- server.go: `apiagents.Register` in routePackages, `agents.Wire` in wirePackages.
 
-## In progress / Next
-1. `internal/api/agents`: POST /api/agents/register, POST /api/agents/<id>/heartbeat, POST /api/agents
-   (manual add), PUT+DELETE /api/agents/<id>. GET /api/agents and GET /api/agents/<id> stay todo (#24
-   content_sync, #26 upgrade artifacts).
-2. Wire into server.go; routes.tsv rows.
-3. Go tests: registration security, heartbeat security, runtime state, light reads (manager part), agent
-   profiles, profile bindings (manager), failure details / dns reports (manager parts), deployments (manager
-   parts), operation events, deployment/upgrade messages, version sync, idle rounds, presence log.
-4. Difftest under `internal/api/agents/difftest` (pattern of internal/httpx/difftest).
-5. `-race` run, hand-back.
+## Next
+1. Difftest `internal/api/agents/difftest` (Flask vs Go, loopback; pattern internal/httpx/difftest).
+2. `-race` run of agents, api/agents, server; `go test ./internal/server/...`.
+3. Hand-back.
 
 ## Decisions and findings
 - Transport error texts (`Connection error: ...`, `error_details`) carry Go net/http texts, not requests'.
