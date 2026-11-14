@@ -50,6 +50,7 @@ loop:
 			if quad >= 2 {
 				pads++
 				if quad+pads >= 4 {
+					quad = 0
 					break loop
 				}
 			}
@@ -134,7 +135,14 @@ func digitValue(r rune) (int, bool) {
 
 // pyIntStr is int(s) for a str.
 func pyIntStr(s string) (jsonx.Number, error) {
-	t := pyStrip(s)
+	// int() normalises Unicode whitespace to ASCII space but only strips the
+	// ASCII whitespace characters (not \x1c-\x1f).
+	t := strings.TrimFunc(s, func(r rune) bool {
+		if r < 127 {
+			return r == ' ' || (r >= '\t' && r <= '\r')
+		}
+		return unicode.IsSpace(r)
+	})
 	neg := false
 	if strings.HasPrefix(t, "+") || strings.HasPrefix(t, "-") {
 		neg = t[0] == '-'
