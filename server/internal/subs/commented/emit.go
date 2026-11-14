@@ -69,7 +69,12 @@ func (e *emitter) lineNoWidth(text string, r *rec) {
 }
 
 func (e *emitter) line(text string, r *rec, body []string) {
-	e.openEnded = body != nil && strings.Contains(text, "|") && strings.Contains(text[strings.LastIndex(text, "|"):], "+")
+	e.openEnded = false
+	if body != nil {
+		if i := strings.LastIndexAny(text, "|>"); i >= 0 && strings.Contains(text[i:], "+") {
+			e.openEnded = true
+		}
+	}
 	if utf8.RuneCountInString(text) > e.width {
 		e.fail(unsupported("line longer than the wrap width"))
 	}
@@ -188,25 +193,35 @@ func (e *emitter) emitValueOnly(head string, v *node, r *rec, seqCol, childCol i
 	}
 	switch target.kind {
 	case kScalar:
-		if target.style == sLiteral {
+		if target.style == sLiteral || target.style == sFolded {
 			hints := literalHints(target.raw)
 			parts := []string{}
 			if prefix != "" {
 				parts = append(parts, prefix)
 			}
-			parts = append(parts, "|"+hints)
 			var body []string
-			lines := strings.SplitAfter(target.raw, "\n")
-			for _, l := range lines {
-				l = strings.TrimSuffix(l, "\n")
-				if l == "" {
-					body = append(body, "")
-				} else {
-					body = append(body, spaces(childCol)+l)
+			if target.style == sFolded {
+				parts = append(parts, ">"+hints)
+				var err error
+				body, err = foldedBody(target, childCol, e.width)
+				if err != nil {
+					e.fail(err)
+					return
 				}
-			}
-			if strings.HasSuffix(target.raw, "\n") && len(body) > 0 {
-				body = body[:len(body)-1]
+			} else {
+				parts = append(parts, "|"+hints)
+				lines := strings.SplitAfter(target.raw, "\n")
+				for _, l := range lines {
+					l = strings.TrimSuffix(l, "\n")
+					if l == "" {
+						body = append(body, "")
+					} else {
+						body = append(body, spaces(childCol)+l)
+					}
+				}
+				if strings.HasSuffix(target.raw, "\n") && len(body) > 0 {
+					body = body[:len(body)-1]
+				}
 			}
 			if len(r.gap) > 0 {
 				// A comment right after a literal scalar must dedent below the
@@ -417,7 +432,7 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 	switch target.kind {
 	case kScalar:
 		switch target.style {
-		case sLiteral:
+		case sLiteral, sFolded:
 			w.fail(unsupported("block scalar inside a flow collection"))
 		case sDouble:
 			w.space()
@@ -692,4 +707,113 @@ func nullItemWithComment(n *node) bool {
 		}
 	}
 	return false
+}
+
+func isPySpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f' || r == 0x1c || r == 0x1d || r == 0x1e || r == 0x1f || r == 0x85 || r == 0xa0 ||
+		r == 0x1680 || r >= 0x2000 && r <= 0x200a || r == 0x2028 || r == 0x2029 || r == 0x202f || r == 0x205f || r == 0x3000
+}
+
+// foldedBody is represent_folded_scalarstring (fold marks put back where a
+// single space between two non-spaces remains) followed by
+// Emitter.write_folded; it returns the lines after the header.
+func foldedBody(n *node, indent, width int) ([]string, error) {
+	data := []rune(n.raw)
+	for k := len(n.foldPos) - 1; k >= 0; k-- {
+		fp := n.foldPos[k]
+		if fp < len(data) && data[fp] == ' ' && fp > 0 && !isPySpace(data[fp-1]) {
+			if fp+1 >= len(data) {
+				return nil, unsupported("fold mark at the end of a folded scalar")
+			}
+			if !isPySpace(data[fp+1]) {
+				data = append(data[:fp], append([]rune{'\a'}, data[fp:]...)...)
+			}
+		}
+	}
+	text := data
+	var lines []string
+	var cur []rune
+	column := 0
+	whitespace, indention := true, true
+	lineBreak := func() {
+		lines = append(lines, string(cur))
+		cur = nil
+		column = 0
+		whitespace, indention = true, true
+	}
+	writeIndent := func() {
+		if !indention || column > indent || (column == indent && !whitespace) {
+			lineBreak()
+		}
+		if column < indent {
+			whitespace = true
+			cur = append(cur, []rune(spaces(indent-column))...)
+			column = indent
+		}
+	}
+	write := func(s []rune) {
+		cur = append(cur, s...)
+		column += len(s)
+	}
+	isBreak := func(r rune) bool { return r == '\n' || r == 0x85 || r == 0x2028 || r == 0x2029 }
+	lineBreak() // after the header
+	lines = nil
+	leadingSpace, spacesMode, breaks := true, false, true
+	start := 0
+	for end := 0; end <= len(text); end++ {
+		ch := rune(-1)
+		if end < len(text) {
+			ch = text[end]
+		}
+		switch {
+		case breaks:
+			if ch == -1 || !(isBreak(ch) || ch == '\a') {
+				if !leadingSpace && ch != -1 && ch != ' ' && text[start] == '\n' {
+					lineBreak()
+				}
+				leadingSpace = ch == ' '
+				for _, br := range text[start:end] {
+					if br != '\n' {
+						return nil, unsupported("special line break in a folded scalar")
+					}
+					lineBreak()
+				}
+				if ch != -1 {
+					writeIndent()
+				}
+				start = end
+			}
+		case spacesMode:
+			if ch != ' ' {
+				if start+1 == end && column > width {
+					writeIndent()
+				} else {
+					write(text[start:end])
+				}
+				start = end
+			}
+		default:
+			if ch == -1 || ch == ' ' || isBreak(ch) || ch == '\a' {
+				write(text[start:end])
+				if ch == '\a' {
+					if end < len(text)-1 && end+2 < len(text) && !isPySpace(text[end+2]) {
+						lineBreak()
+						writeIndent()
+						end += 2
+					} else {
+						return nil, unsupported("fold mark before a space")
+					}
+				}
+				if ch == -1 {
+					lineBreak()
+				}
+				start = end
+			}
+		}
+		if ch != -1 {
+			breaks = isBreak(ch)
+			spacesMode = ch == ' '
+		}
+	}
+	return lines, nil
 }

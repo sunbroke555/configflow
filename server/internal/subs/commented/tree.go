@@ -32,6 +32,7 @@ const (
 	sSingle
 	sDouble
 	sLiteral
+	sFolded
 )
 
 // comment is an end-of-line comment: its source column and text ("#...").
@@ -57,6 +58,9 @@ type node struct {
 	// scalars
 	style scalarStyle
 	raw   string // plain: source token; quoted/literal: decoded value
+	// foldPos: FoldedScalarString.fold_pos, the positions of raw where a
+	// line break was folded into a space
+	foldPos []int
 	// collections
 	flow    bool
 	entries []*entry
@@ -93,7 +97,6 @@ type document struct {
 	explicitStart bool
 	explicitEnd   bool
 	head          []string // comment/blank lines before the first content line
-	preDoc        []string // comment lines before an explicit `---` (stripped)
 	root          *node
 	rootRec       rec // gap after a scalar root (unused for collections)
 	comments      []string

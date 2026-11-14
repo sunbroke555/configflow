@@ -94,13 +94,8 @@ func parseDocument(lines []string) (*document, error) {
 	if !p.done() {
 		t := strings.TrimRight(string(p.lines[p.pos]), " ")
 		if t == "---" || strings.HasPrefix(t, "--- ") && strings.HasPrefix(strings.TrimSpace(t[3:]), "#") {
-			// comment lines before `---`: ruamel writes them stripped, without
-			// the blank lines, before the marker
-			for _, l := range p.doc.head {
-				if t := strings.TrimSpace(l); t != "" {
-					p.doc.preDoc = append(p.doc.preDoc, t)
-				}
-			}
+			// comment lines before `---`: the dump drops them (they come back
+			// as missing comments on top)
 			if t != "---" {
 				return nil, unsupported("comment after document start marker")
 			}
@@ -523,7 +518,8 @@ func (p *parser) parseValue(l []rune, from, ownerCol, parentCol, line int) (*nod
 		p.pos++
 		r.gap = p.takeGap()
 		return &node{kind: kAlias, name: name, target: target}, r, nil
-	case l[i] == '|':
+	case l[i] == '|' || l[i] == '>':
+		folded := l[i] == '>'
 		hdr := i + 1
 		j := hdr
 		for j < len(l) && l[j] != ' ' {
@@ -534,14 +530,14 @@ func (p *parser) parseValue(l []rune, from, ownerCol, parentCol, line int) (*nod
 			return nil, r, err
 		}
 		p.pos++
-		n, err := p.parseLiteral(indicator, parentCol)
+		n, err := p.parseLiteral(indicator, parentCol, folded)
 		if err != nil {
 			return nil, r, err
 		}
 		r.gap = p.takeGap()
 		return setAnchor(n), r, nil
-	case l[i] == '>' || l[i] == '!' || l[i] == '%' || l[i] == '@' || l[i] == '`':
-		return nil, r, unsupported("folded scalar, tag or reserved indicator at line " + itoa(line+1))
+	case l[i] == '!' || l[i] == '%' || l[i] == '@' || l[i] == '`':
+		return nil, r, unsupported("tag or reserved indicator at line " + itoa(line+1))
 	case l[i] == '[' || l[i] == '{':
 		n, endLine, endCol, inner, err := p.parseFlowAcrossLines(line, i)
 		if err != nil {
@@ -627,7 +623,7 @@ func (p *parser) rejectContinuation(ownerCol int) error {
 
 // parseLiteral reads the body of a `|` block scalar whose header was just
 // consumed; parentCol is the owner's indentation.
-func (p *parser) parseLiteral(indicator string, parentCol int) (*node, error) {
+func (p *parser) parseLiteral(indicator string, parentCol int, folded bool) (*node, error) {
 	chomp := byte(0)
 	explicit := 0
 	for _, c := range indicator {
@@ -703,8 +699,74 @@ func (p *parser) parseLiteral(indicator string, parentCol int) (*node, error) {
 		// clip/strip: trailing blank lines stay in the document as blank lines
 		p.pos = k
 	}
+	if folded {
+		return foldedNode(body, chomp, trailing)
+	}
 	n := &node{kind: kScalar, style: sLiteral, raw: value}
 	return n, nil
+}
+
+// foldedNode is scan_block_scalar for '>' in round-trip mode (a '\a'
+// marks every line break the scanner meets between content lines) followed
+// by the construction of a FoldedScalarString: the value without the marks
+// and the fold positions.
+func foldedNode(body [][]rune, chomp byte, trailing int) (*node, error) {
+	var chunks []rune
+	i := 0
+	breaks := 0
+	for i < len(body) && body[i] == nil {
+		breaks++
+		i++
+	}
+	lineBreak := ""
+	for i < len(body) {
+		for ; breaks > 0; breaks-- {
+			chunks = append(chunks, '\n')
+		}
+		line := body[i]
+		for _, r := range line {
+			if r == 0x85 || r == 0x2028 || r == 0x2029 || r == '\a' {
+				return nil, unsupported("special line break in a folded scalar")
+			}
+		}
+		leadingNonSpace := len(line) > 0 && line[0] != ' ' && line[0] != '\t'
+		chunks = append(chunks, line...)
+		lineBreak = "\n"
+		i++
+		for i < len(body) && body[i] == nil {
+			breaks++
+			i++
+		}
+		if i < len(body) {
+			chunks = append(chunks, '\a')
+			next := body[i]
+			if leadingNonSpace && len(next) > 0 && next[0] != ' ' && next[0] != '\t' {
+				if breaks == 0 {
+					chunks = append(chunks, ' ')
+				}
+			} else {
+				chunks = append(chunks, '\n')
+			}
+		}
+	}
+	if chomp != '-' {
+		chunks = append(chunks, []rune(lineBreak)...)
+	}
+	if chomp == '+' {
+		for k := 0; k < trailing; k++ {
+			chunks = append(chunks, '\n')
+		}
+	}
+	var clean []rune
+	var pos []int
+	for _, r := range chunks {
+		if r == '\a' {
+			pos = append(pos, len(clean))
+			continue
+		}
+		clean = append(clean, r)
+	}
+	return &node{kind: kScalar, style: sFolded, raw: string(clean), foldPos: pos}, nil
 }
 
 // parseFlowAcrossLines parses a flow collection starting at (line, col),
