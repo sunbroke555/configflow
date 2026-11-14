@@ -109,6 +109,7 @@ func (r *Repository) GetProfileAgentBindings(ctx context.Context, profileID stri
 // and updated_at of a profile, without copying the profile. It is the cheap
 // existence check (ErrNotFound, or ErrValidation for a malformed id).
 func (r *Repository) ProfileMetadata(ctx context.Context, profileID string) (result *jsonx.Object, err error) {
+	r.metadataReads.Add(1)
 	err = r.view(ctx, func(document *jsonx.Object) error {
 		profile, err := profileOf(document, profileID)
 		if err != nil {

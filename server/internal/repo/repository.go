@@ -81,9 +81,9 @@ type Repository struct {
 	// Test seams: the number of full loads and of validations of loaded
 	// documents, a callback after a full load (inside the read
 	// transaction), and the cache size limit.
-	loads, validations atomic.Int64
-	afterLoad          func()
-	cacheMaxBytes      int64
+	loads, validations, metadataReads atomic.Int64
+	afterLoad                         func()
+	cacheMaxBytes                     int64
 }
 
 // Open is ProfileRepository(data_dir, default_config_factory,
