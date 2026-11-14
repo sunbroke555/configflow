@@ -108,7 +108,7 @@ func run(frontendDir string) error {
 	var web *http.Server
 	var manager *weblistener.Manager
 	if frontendDir != "" {
-		edge := &httpx.Edge{App: app, Root: frontendDir, AccessLog: os.Stdout}
+		edge := &httpx.Edge{API: app, Root: frontendDir, AccessLog: os.Stdout}
 		web = newHTTPServer(edge)
 		manager = &weblistener.Manager{DataDir: dataDir, Server: webServer{web, edge}}
 		status, err := manager.Start()

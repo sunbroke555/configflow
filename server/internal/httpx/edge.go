@@ -38,7 +38,8 @@ import (
 // listed types, ETag/Last-Modified with nginx's exact If-Modified-Since,
 // and an access log of 4xx/5xx responses on stdout.
 type Edge struct {
-	App *App
+	// API is the application (*App), possibly wrapped.
+	API http.Handler
 	// Root is the frontend build directory (nginx root).
 	Root string
 	// AccessLog receives nginx-style lines for 4xx/5xx; nil disables.
@@ -165,7 +166,7 @@ func (e *Edge) proxy(w http.ResponseWriter, req *http.Request, limit int64) {
 	}
 	gz := newGzipWriter(w, req)
 	defer gz.Close()
-	e.App.ServeHTTP(gz, out)
+	e.API.ServeHTTP(gz, out)
 }
 
 // nginxHost is $host: the Host header without port, lower-cased.
