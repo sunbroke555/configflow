@@ -37,5 +37,5 @@ works now; update `parity/routes.tsv`. Wire via `agents.Wire` in `wirePackages` 
 
 ## Commands
 - `rt -- bash -lc 'cd server && go vet ./internal/agents/... ./internal/api/agents/... && go test -count=1 ./internal/agents/... ./internal/api/agents/...'`
-- Regenerate tables: `python -I /tmp/cfgen/gen_changelog.py $PWD`, `gen_messages.py` (one-off scripts, see
+- Regenerate tables: `~/program/configflow/.venv/bin/python -I server/internal/agents/testdata/gen_changelog.py $PWD > server/internal/agents/version_changelog.go` and gen_messages.py → messages_data.go (see
   headers of version_changelog.go / messages_data.go; dict → Go literal).

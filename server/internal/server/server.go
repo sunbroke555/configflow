@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 
+	"configflow/internal/agents"
+	apiagents "configflow/internal/api/agents"
 	apiauth "configflow/internal/api/auth"
 	apilogs "configflow/internal/api/logs"
 	apinotifications "configflow/internal/api/notifications"
@@ -33,6 +35,7 @@ import (
 // routePackages are the Register functions of the ported blueprints.
 var routePackages = []func(*httpx.Router){
 	apiauth.Register,
+	apiagents.Register,
 	apisettings.Register,
 	apilogs.Register,
 	apistats.Register,
@@ -48,6 +51,7 @@ var lateRoutePackages = []func(*httpx.Router){
 // providers).
 var wirePackages = []func(){
 	wireCore,
+	agents.Wire,
 }
 
 func wireCore() {

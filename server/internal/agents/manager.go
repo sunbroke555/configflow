@@ -321,6 +321,11 @@ func (m *Manager) saveReportedFields(ctx context.Context, changes map[string]*js
 // or replace through the pointer). profileID, when given, must still exist
 // at commit. ProfileInUse becomes *DeploymentConflict.
 func (m *Manager) UpdateAgents(ctx context.Context, profileID string, updater func(ctx context.Context, agents *[]any) (any, error)) (any, error) {
+	if testFailUpdate != nil {
+		if err := testFailUpdate(); err != nil {
+			return nil, err
+		}
+	}
 	var result any
 	_, err := m.repository.UpdateSystemTransaction(ctx, func(ctx context.Context, system *jsonx.Object) (*jsonx.Object, error) {
 		if profileID != "" {
@@ -805,6 +810,10 @@ func (m *Manager) recordHeartbeat(agent, payload *jsonx.Object, mark int64) bool
 	}
 	return m.runtime.RecordHeartbeat(agent, payload, mark)
 }
+
+// testFailUpdate makes UpdateAgents fail (tests; Python patched
+// repository.update_system_transaction).
+var testFailUpdate func() error
 
 var testRecordHeartbeat func(m *Manager, agent, payload *jsonx.Object, mark int64) bool
 
