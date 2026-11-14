@@ -27,24 +27,25 @@ rows stay documented as is.
   - Category folded `>`: scanner with `\a` fold marks, FoldedScalarString fold_pos, write_folded port
     (fd980e75); a folded scalar ending in spaces leaves the line open (the next blank line only ends it).
   - Category tags: block-context `!!str` (TaggedScalar kept), `!!int/!!float/!!bool/!!null` and verbatim
-    `!<tag:yaml.org,2002:..>` (constructed + represented); `commented_blocks` corpus 1092 rows.
+    `!<tag:yaml.org,2002:..>` (constructed + represented); `commented_blocks` corpus 1112 rows (9c916e0e).
+  - Category comment on a bare dash line holding a nested block: comment and following lines move above
+    the dash at their column, before removed-key comments.
 
 ## Current counts (refused / rows; mismatches 0 everywhere)
-- commented (random): 125 / 2411 — CRLF with comments 118, comment on dash line holding a nested block 7.
+- commented (random): 118 / 2411 — CRLF with comments 118.
 - commented_anchors: 336 / 1884 — alias to a commented block collection 336 (+24 Python crashes).
 - commented_realistic: 0 / 4911.
 - commented_scalars: 16 / 2080 — yamlx cannot parse source (`1,000` in flow) 8, lone indicator `-` 4,
   comment on null item of nested seq 4.
-- commented_blocks: 14 / 1092 — `!!binary`/`!!map`/`!!seq`/`!!set` tags 12, yamlx parse 2.
+- commented_blocks: 14 / 1112 — `!!binary`/`!!map`/`!!seq`/`!!set` tags 12, yamlx parse 2.
 
 ## In progress
 Nothing half-written.
 
 ## Next
-1. Comment on a dash line holding a nested block (7).
-2. CRLF documents with comments (118): reproduce ruamel's mixed `\r\r\n` / `\n` output.
-3. Alias to commented block (336): estimate; likely report instead of implementing.
-4. Hand-back with per-category leftovers (count, minimal example, reason).
+1. CRLF documents with comments (118): reproduce ruamel's mixed `\r\r\n` / `\n` output.
+2. Alias to commented block (336): estimate; likely report instead of implementing.
+3. Hand-back with per-category leftovers (count, minimal example, reason).
 
 ## Decisions and findings
 - Refusals return Python's failure message; route answers 400; original text kept.

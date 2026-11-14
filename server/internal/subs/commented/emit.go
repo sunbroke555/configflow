@@ -330,21 +330,28 @@ func (e *emitter) emitSeq(n *node, col int, lead string, underMap bool) {
 		if idx == 0 {
 			prefix = lead
 		}
+		head := prefix + "-"
+		v := it.value
+		target, alias, prefixA := e.peekResolve(v)
+		compact := alias == "" && target.kind != kScalar && !target.flow && !(target.kind == kMap && len(target.entries) == 0) && !(target.kind == kSeq && len(target.items) == 0)
+		if compact && (it.rec.eol != nil || len(it.rec.gap) > 0) {
+			// a comment on a bare dash line (and the lines up to the first
+			// entry) moves above the dash, at its column, before the comments
+			// set before this item
+			if it.rec.eol != nil {
+				e.out = append(e.out, spaces(it.rec.eol.col)+it.rec.eol.text)
+				e.noteComment(it.rec.eol.text)
+			}
+			e.gap(it.rec.gap)
+		}
 		for _, l := range e.preLines[it] {
 			e.out = append(e.out, l)
 			if strings.HasPrefix(l, "#") {
 				e.noteComment(l)
 			}
 		}
-		head := prefix + "-"
-		v := it.value
-		target, alias, prefixA := e.peekResolve(v)
-		if alias == "" && target.kind != kScalar && !target.flow && !(target.kind == kMap && len(target.entries) == 0) && !(target.kind == kSeq && len(target.items) == 0) {
+		if compact {
 			// compact: first element shares the dash line (ruamel always writes it so)
-			if it.rec.eol != nil || len(it.rec.gap) > 0 {
-				e.fail(unsupported("comment on a dash line that holds a nested block"))
-				return
-			}
 			if prefixA != "" {
 				e.fail(unsupported("anchor on a compact collection"))
 				return

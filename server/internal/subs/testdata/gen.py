@@ -1536,6 +1536,13 @@ def commented_block_rows():
     texts.append('listeners: !!seq\n- name: x\n  proxy: Pinned\n')
     texts.append('listeners:\n- !!map\n  name: x\n  proxy: Pinned\n')
     texts.append('listeners:\n- name: x\n  proxy: !!str Pinned\n')
+    # comments on a bare dash line that holds a nested block
+    for dash in ['a:\n- # c\n  x: 1\n  k: 2\n', 'a:\n-   # c\n  x: 1\n', 'a:\n- # c\n  - 1\n  - 2\n', 'a:\n-\n  x: 1\n',
+                 'a:\n- # c\n\n  x: 1\n', 'a:\n- # c\n  # d\n  x: 1\n', 'a:\n  - # c\n    x: 1\n',
+                 'a:\n- # c\n  x: 1\n- # d\n  z: 1\n  w: 2\n']:
+        texts.append(dash + 'listeners:\n- {name: x, proxy: Pinned}\n')
+    texts.append('listeners:\n- # c\n  name: x\n  proxy: Pinned\n')
+    texts.append('listeners:\n  # before\n  - # c\n    # d\n    name: x\n    proxy: Pinned # p\n')
     for text in texts:
         for new_name in ('Renamed', None):
             profile = {'mihomo': {'custom_config': text}}
