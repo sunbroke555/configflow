@@ -59,6 +59,7 @@ func readCorpus(t *testing.T) []corpusLine {
 var optionSets = map[string]DumpOptions{
 	"safe":          {SortKeys: true},
 	"safe_u":        {AllowUnicode: true},
+	"safe_u_sorted": {AllowUnicode: true, SortKeys: true},
 	"indent":        {AllowUnicode: true, Indent: 2, IndentSequences: true},
 	"indent_sorted": {SortKeys: true, IndentSequences: true},
 	"ruleset":       {AllowUnicode: true, Width: 1<<31 - 1},

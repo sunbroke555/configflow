@@ -132,6 +132,7 @@ def build_inputs():
 OPTION_SETS = {
     'safe': lambda v: yaml.safe_dump(v),
     'safe_u': lambda v: yaml.safe_dump(v, allow_unicode=True, sort_keys=False),
+    'safe_u_sorted': lambda v: yaml.safe_dump(v, allow_unicode=True),
     'indent': lambda v: yaml.dump(v, Dumper=IndentDumper, allow_unicode=True, default_flow_style=False, sort_keys=False, indent=2),
     'indent_sorted': lambda v: yaml.dump(v, Dumper=IndentDumper, default_flow_style=False),
     'ruleset': lambda v: yaml.safe_dump(v, allow_unicode=True, sort_keys=False, default_flow_style=False, width=2 ** 31 - 1),
