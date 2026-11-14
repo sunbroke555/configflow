@@ -738,3 +738,208 @@ def aligned_dialer_rows():
 
 
 dump('dialers.jsonl', dialers_rows())
+
+
+# --------------------------------------------------------------------- chains
+from backend.utils import proxy_chains as pc  # noqa: E402
+from backend.utils.dialer_references import validate_dialers  # noqa: E402
+
+NODE_IDS = ['a', 'b', 'c', 'd', 'e']
+
+
+def rand_ref(chains_so_far, groups_ids, allow_chain=True):
+    r = R.random()
+    if r < .55:
+        return {'type': 'node', 'id': pick(NODE_IDS + ([] if R.random() < .95 else ['missing']))}
+    pool = groups_ids + (chains_so_far if allow_chain else [])
+    return {'type': 'group', 'id': pick(pool) if pool else 'nogroup'}
+
+
+def chain_profile():
+    nodes = []
+    for nid in NODE_IDS[:R.randrange(2, 6)]:
+        node = {'id': nid, 'name': nid.upper(), 'type': 'http', 'server': f'{nid}.example.test', 'port': 80}
+        if R.random() < .15:
+            node['enabled'] = R.random() < .5
+        if R.random() < .1:
+            node['subscription_id'] = 'feed'
+        if R.random() < .15:
+            node['params'] = {'dialer-proxy': pick(['A', 'B', 'Chain', 'Entry', 'DIRECT', 'nope', 5, ''])}
+        if R.random() < .1:
+            node['proxy_string'] = pick(['type: http\nserver: x\ndialer-proxy: B', '{"type":"http","dialer-proxy":"A"}', 'ss://abc'])
+        if R.random() < .1:
+            node['params'] = {'headers': {'User-Agent': 'shared'}}
+        if R.random() < .12:
+            node['dialer_ref'] = rand_ref([], [])
+        nodes.append(node)
+    groups = []
+    gids = ['entry', 'pool', 'dyn', 'follow', 'chooser']
+    for gid in R.sample(gids, R.randrange(0, 5)):
+        g = {'id': gid, 'name': gid.title(), 'type': pick(['select', 'select', 'url-test'])}
+        r = R.random()
+        if r < .35:
+            g['manual_nodes'] = R.sample(NODE_IDS, R.randrange(1, 4))
+        elif r < .5:
+            g['proxies_order'] = [{'type': 'node', 'id': pick(NODE_IDS)}] + ([{'type': 'builtin', 'id': 'DIRECT'}] if R.random() < .3 else [])
+        elif r < .6:
+            g['manual_nodes'] = ['DIRECT'] if R.random() < .5 else [pick(NODE_IDS)]
+        elif r < .7:
+            g['subscriptions'] = ['feed']
+        elif r < .78:
+            g['aggregations'] = ['agg']
+        elif r < .85:
+            g['use'] = [pick(['Feed', 'Agg', 'Nope'])]
+            g['manual_nodes'] = ['a']
+        elif r < .9:
+            g['source'] = pick(['node', 'strategy'])
+            g['proxies'] = [pick(NODE_IDS)]
+        if gid == 'follow' and R.random() < .8:
+            g['follow_group'] = pick(gids + ['missing'])
+        if R.random() < .1:
+            g['enabled'] = False
+        if R.random() < .1:
+            g['proxy_order'] = 'strategies_first'
+        groups.append(g)
+    ids = [g['id'] for g in groups]
+    chain_ids = []
+    for cid in R.sample(['chain', 'outer', 'third'], R.randrange(0, 4)):
+        chain = {'id': cid, 'name': cid.title(), 'type': 'chain',
+                 'chain': {'entry': rand_ref(chain_ids, ids), 'exit': rand_ref(chain_ids, ids)}}
+        if R.random() < .1:
+            chain['enabled'] = False
+        r = R.random()
+        if r < .04:
+            chain['chain'] = pick([[], None, {'entry': chain['chain']['entry']}, {'entry': None, 'exit': None}])
+        elif r < .08:
+            chain['chain']['entry']['extra'] = 1
+        elif r < .1:
+            chain['manual_nodes'] = ['a']
+        chain_ids.append(cid)
+        groups.append(chain)
+    if chain_ids:
+        for g in list(groups):
+            if g.get('type') != 'chain' and R.random() < .5:
+                if R.random() < .5:
+                    g.setdefault('include_groups', []).append(pick(chain_ids))
+                elif R.random() < .5:
+                    g.setdefault('proxies_order', []).append({'type': 'strategy', 'id': pick(chain_ids)})
+                else:
+                    g['source'] = 'strategy'
+                    g['proxies'] = [pick(chain_ids)]
+        if R.random() < .3:
+            groups.append({'id': 'g_chooser', 'name': 'Choose', 'type': 'select', 'manual_nodes': ['b'], 'include_groups': [pick(chain_ids)]})
+    if R.random() < .1 and groups:
+        groups.append(copy.deepcopy(pick(groups)))
+    if R.random() < .05 and groups:
+        groups[0]['name'] = pick(['B', 'DIRECT', 'Entry', ''])
+    profile = {'profile_id': 'default', 'nodes': nodes, 'proxy_groups': groups, 'rule_configs': []}
+    if R.random() < .8:
+        profile['subscriptions'] = [{'id': 'feed', 'name': 'Feed', 'url': 'https://feed.example.test', 'enabled': R.random() < .9}]
+        profile['subscription_aggregations'] = [{'id': 'agg', 'name': 'Agg', 'subscriptions': ['feed'], 'nodes': ['b']}]
+    if R.random() < .03:
+        profile['nodes'] = pick([None, 'x', [1], [{'id': ''}]])
+    return profile
+
+
+def clean_profile():
+    nodes = [{'id': nid, 'name': nid.upper(), 'type': 'http', 'server': f'{nid}.example.test', 'port': 80} for nid in 'abcd']
+    if R.random() < .3:
+        nodes[1]['params'] = {'headers': {'User-Agent': 'shared'}}
+    if R.random() < .2:
+        nodes[2]['enabled'] = True
+    if R.random() < .3:
+        nodes[3]['dialer_ref'] = {'type': 'node', 'id': pick('abc')}
+    if R.random() < .15:
+        nodes[2]['dialer_ref'] = {'type': 'node', 'id': pick('ab')}
+    groups = [{'id': 'entry', 'name': 'Entry', 'type': 'select', 'manual_nodes': R.sample('abcd', R.randrange(1, 4))},
+              {'id': 'pool', 'name': 'Pool', 'type': pick(['select', 'url-test']), 'manual_nodes': R.sample('abcd', R.randrange(1, 4))}]
+    if R.random() < .6:
+        dyn = {'id': 'dyn', 'name': 'Dyn', 'type': 'select', 'manual_nodes': ['a']}
+        dyn.update(pick([{'subscriptions': ['feed']}, {'aggregations': ['agg']}, {'use': ['Feed']}, {'use': ['Agg']}]))
+        groups.append(dyn)
+    if R.random() < .4:
+        groups.append({'id': 'follow', 'name': 'Follow', 'type': 'select', 'follow_group': pick(['entry', 'pool']), 'enabled': R.random() < .8})
+    if R.random() < .3:
+        groups.append({'id': 'ordered', 'name': 'Ordered', 'type': 'select',
+                       'proxies_order': [{'type': 'node', 'id': pick('abcd')}, {'type': 'strategy', 'id': 'pool'}]})
+    gids = [g['id'] for g in groups]
+    chains = []
+    for cid in ['chain', 'outer', 'third'][:R.randrange(1, 4)]:
+        entry = pick([{'type': 'node', 'id': pick('ab')}, {'type': 'group', 'id': pick(gids)}] + ([{'type': 'group', 'id': chains[-1]}] if chains else []))
+        exit_ = pick([{'type': 'node', 'id': pick('bcd')}, {'type': 'group', 'id': pick(['pool', 'entry'])}] + ([{'type': 'group', 'id': chains[0]}] if chains and R.random() < .5 else []))
+        chain = {'id': cid, 'name': cid.title(), 'type': 'chain', 'chain': {'entry': entry, 'exit': exit_}}
+        if R.random() < .1:
+            chain['enabled'] = False
+        chains.append(cid)
+        groups.append(chain)
+    chooser = {'id': 'chooser', 'name': 'Choose', 'type': 'select', 'manual_nodes': [pick('abcd')]}
+    r = R.random()
+    if r < .4:
+        chooser['include_groups'] = R.sample(chains, R.randrange(1, len(chains) + 1))
+    elif r < .6:
+        chooser['proxies_order'] = [{'type': 'strategy', 'id': pick(chains)}, {'type': 'node', 'id': 'a'}]
+    elif r < .75:
+        chooser = {'id': 'chooser', 'name': 'Choose', 'type': 'select', 'source': 'strategy', 'proxies': [pick(chains)]}
+    elif r < .85:
+        chooser['proxy_order'] = 'strategies_first'
+        chooser['include_groups'] = [pick(chains)]
+    groups.append(chooser)
+    profile = {'profile_id': 'default', 'nodes': nodes, 'proxy_groups': groups, 'rule_configs': [],
+               'subscriptions': [{'id': 'feed', 'name': 'Feed', 'url': 'https://feed.example.test', 'enabled': True}],
+               'subscription_aggregations': [{'id': 'agg', 'name': 'Agg', 'subscriptions': ['feed'], 'nodes': ['b']}]}
+    return profile
+
+
+def build_main(runtime):
+    """A stand-in for the emitted Mihomo document: one proxy per node, one group per group, providers per source."""
+    names = {n['id']: n['name'] for n in runtime.get('nodes', []) if isinstance(n, dict)}
+    proxies = [{'name': n['name'], 'type': 'http'} for n in runtime.get('nodes', []) if isinstance(n, dict) and n.get('enabled', True)]
+    providers = {}
+    for p in [*runtime.get('subscriptions', []), *runtime.get('subscription_aggregations', [])]:
+        providers[p['name']] = {'type': 'http', 'url': f"https://panel.test/{p['id']}", 'path': f"./providers/{p['id']}.yaml",
+                                'filter': pick(['', '', 'HK', 'JP`HK']), 'exclude-filter': pick(['', 'x', 'y']), 'interval': 3600}
+    groups = []
+    for g in runtime.get('proxy_groups', []):
+        if not isinstance(g, dict) or not g.get('enabled', True):
+            continue
+        entry = {'name': g['name'], 'type': g.get('type', 'select')}
+        members = [names.get(i) for i in g.get('manual_nodes', [])]
+        entry['proxies'] = [m for m in members if m]
+        if g.get('_chain_dialer'):
+            use = [p for p in providers if R.random() < .6]
+            if use:
+                entry['use'] = use
+            flt = pick(['', 'HK', 'a`b', 'HK`JP`SG', '(US)`(JP)', 'x`', '`', '(?:a)|b`c'])
+            if flt:
+                entry['filter'] = flt
+            if R.random() < .3:
+                entry['exclude-filter'] = pick(['x', 'a`b', '('])
+            if R.random() < .2:
+                entry['exclude-type'] = pick(['http', 'ss|http', ''])
+            if R.random() < .2 and g.get('manual_nodes'):
+                entry['proxies'].append('Ghost')
+        groups.append(entry)
+    return {'proxies': proxies, 'proxy-groups': groups, 'proxy-providers': providers}
+
+
+def chains_rows():
+    rows = []
+    for _ in range(1800):
+        profile = clean_profile() if R.random() < .65 else chain_profile()
+        before = copy.deepcopy(profile)
+        validated = call(validate_dialers, profile)
+        lowered = call(pc.lower_proxy_chains, profile)
+        mutated = profile != before
+        row = {'fn': 'chains', 'in': before,
+               'out': {'validate': validated, 'lower': lowered, 'input_mutated': mutated}}
+        if isinstance(lowered, dict) and 'error' not in lowered or (isinstance(lowered, dict) and 'nodes' in lowered):
+            main = build_main(lowered)
+            row['out']['providers_in'] = copy.deepcopy(main)
+            pr = call(pc.lower_chain_providers, lowered, main)
+            row['out']['providers_result'] = pr
+            row['out']['providers_main'] = main
+        rows.append(row)
+    return rows
+
+
+dump('chains.jsonl', chains_rows())
