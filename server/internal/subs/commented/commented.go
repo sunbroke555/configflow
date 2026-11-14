@@ -1,16 +1,352 @@
-// Package commented is the port of backend/utils/commented_mihomo.py.
+// Package commented is the port of backend/utils/commented_mihomo.py: it
+// edits the fixed `proxy` targets of Mihomo listeners in a YAML text while
+// keeping comments, producing the bytes ruamel.yaml's round-trip dumper
+// writes. The supported YAML subset and the documented gaps are listed in
+// the package tests; anything outside it returns ErrUnsupported (Python
+// would have produced output), and the caller keeps the original text.
 package commented
 
 import (
-	"errors"
+	"strings"
+	"unicode/utf8"
 
 	"configflow/internal/jsonx"
+	"configflow/internal/yamlx"
 )
 
-// ErrUnsupported is returned until the round-trip editor is implemented.
-var ErrUnsupported = errors.New("comment-preserving edit not implemented")
+func splitSourceLines(source string) []string {
+	lines := strings.Split(source, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for i, l := range lines {
+		lines[i] = strings.TrimSuffix(l, "\r")
+	}
+	return lines
+}
 
-// EditListenerTargets is edit_listener_targets.
+// pySplitLines lengths: the longest line of source.splitlines().
+func longestLine(source string) int {
+	longest, cur := 0, 0
+	rs := []rune(source)
+	for i := 0; i < len(rs); i++ {
+		switch rs[i] {
+		case '\n', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+		case '\r':
+			if i+1 < len(rs) && rs[i+1] == '\n' {
+				i++
+			}
+		default:
+			cur++
+			continue
+		}
+		if cur > longest {
+			longest = cur
+		}
+		cur = 0
+	}
+	if cur > longest {
+		longest = cur
+	}
+	return longest
+}
+
+func copyNode(n *node) *node {
+	if n.kind == kAlias {
+		return copyNode(n.target)
+	}
+	c := *n
+	c.anchor = ""
+	c.entries = nil
+	c.items = nil
+	for _, e := range n.entries {
+		c.entries = append(c.entries, &entry{key: copyNode(e.key), value: copyNode(e.value), rec: copyRec(e.rec)})
+	}
+	for _, it := range n.items {
+		c.items = append(c.items, &item{value: copyNode(it.value), rec: copyRec(it.rec), compactFlag: it.compactFlag})
+	}
+	return &c
+}
+
+func copyRec(r rec) rec {
+	c := r
+	if r.eol != nil {
+		e := *r.eol
+		c.eol = &e
+	}
+	c.gap = append([]string(nil), r.gap...)
+	return c
+}
+
+func plainKey(n *node, name string) bool {
+	return n.kind == kScalar && (n.style == sPlain || n.style == sSingle || n.style == sDouble) && n.raw == name
+}
+
+func (n *node) find(name string) (*entry, int) {
+	for i, e := range n.entries {
+		if plainKey(e.key, name) {
+			return e, i
+		}
+	}
+	return nil, -1
+}
+
+func countRefs(n *node, refs map[*node]int, visited map[*node]bool) {
+	if n == nil {
+		return
+	}
+	if n.kind == kAlias {
+		refs[n.target]++
+		return
+	}
+	if n.anchor != "" {
+		refs[n]++
+	}
+	if visited[n] {
+		return
+	}
+	visited[n] = true
+	for _, e := range n.entries {
+		countRefs(e.value, refs, visited)
+	}
+	for _, it := range n.items {
+		countRefs(it.value, refs, visited)
+	}
+}
+
+// keyIdentity is the constructed value of a mapping key, as far as duplicates are concerned.
+func keyIdentity(k *node) string {
+	if k.style == sPlain && !isStringPlain(k.raw) {
+		t, null, _ := plainOut(k.raw)
+		if null {
+			return "n:"
+		}
+		return "p:" + t
+	}
+	return "s:" + k.raw
+}
+
+func rejectMerge(n *node, seen map[*node]bool) error {
+	if n == nil || seen[n] {
+		return nil
+	}
+	seen[n] = true
+	keys := map[string]bool{}
+	for _, e := range n.entries {
+		id := keyIdentity(e.key)
+		if keys[id] {
+			return unsupported("duplicate mapping key")
+		}
+		keys[id] = true
+	}
+	for _, e := range n.entries {
+		if e.key.kind == kScalar && e.key.style == sPlain && e.key.raw == "<<" {
+			return unsupported("merge key")
+		}
+		if err := rejectMerge(e.value, seen); err != nil {
+			return err
+		}
+	}
+	for _, it := range n.items {
+		if err := rejectMerge(it.value, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var removedComment = func(line string) string {
+	t := strings.TrimLeft(line, " \t\n\r\f\v")
+	if strings.HasPrefix(t, "#") {
+		t = t[1:]
+		t = strings.TrimPrefix(t, " ")
+		return t
+	}
+	return line
+}
+
+// EditListenerTargets is edit_listener_targets: indexes are the listeners
+// whose proxy is replaced by newName (nil removes it); expected is the
+// document the result must load to.
 func EditListenerTargets(source string, indexes []int, newName *string, expected *jsonx.Object) (string, error) {
-	return "", ErrUnsupported
+	if strings.HasPrefix(source, "\ufeff") {
+		return "", unsupported("byte order mark")
+	}
+	lineBreak := "\n"
+	if strings.Contains(source, "\r\n") {
+		lineBreak = "\r\n"
+	}
+	width := longestLine(source)
+	if width < 80 {
+		width = 80
+	}
+	doc, err := parseDocument(splitSourceLines(source))
+	if err != nil {
+		return "", err
+	}
+	if err := rejectMerge(doc.root, map[*node]bool{}); err != nil {
+		return "", err
+	}
+	if doc.root.kind != kMap {
+		return "", unsupported("root is not a mapping")
+	}
+	le, _ := doc.root.find("listeners")
+	if le == nil {
+		return "", unsupported("no listeners")
+	}
+	listeners := le.value
+	if listeners.kind == kAlias {
+		listeners = listeners.target
+	}
+	if listeners.kind != kSeq {
+		return "", unsupported("listeners is not a sequence")
+	}
+	preLines := map[*item][]string{}
+	for _, index := range indexes {
+		if index < 0 || index >= len(listeners.items) {
+			return "", unsupported("listener index")
+		}
+		it := listeners.items[index]
+		replacement := copyNode(it.value)
+		if replacement.kind != kMap {
+			return "", unsupported("listener is not a mapping")
+		}
+		if newName == nil {
+			if en, at := replacement.find("proxy"); en != nil {
+				// The removed key's comment token: its end-of-line comment (or the
+				// line break when there is none) and the lines after it.
+				var comments []string
+				if en.rec.eol != nil {
+					comments = append(comments, en.rec.eol.text)
+				} else if len(en.rec.gap) > 0 {
+					comments = append(comments, "")
+				}
+				comments = append(comments, en.rec.gap...)
+				replacement.entries = append(replacement.entries[:at], replacement.entries[at+1:]...)
+				if len(comments) > 0 {
+					var texts []string
+					for _, c := range comments {
+						texts = append(texts, removedComment(c))
+					}
+					if n := len(texts); n > 1 && texts[n-1] == "" {
+						texts = texts[:n-1] // the token's own final line break
+					}
+					joined := strings.Join(texts, "\n")
+					parts := strings.Split(joined, "\n")
+					if joined == "\n" || joined == "" {
+						parts = []string{""} // yaml_set_comment_before_after_key: before == '\n' is one blank line
+					}
+					for _, com := range parts {
+						if com == "" {
+							preLines[it] = append(preLines[it], "")
+						} else {
+							preLines[it] = append(preLines[it], "# "+com)
+						}
+					}
+				}
+			}
+		} else {
+			value := &node{kind: kScalar, style: sDouble, raw: *newName}
+			if en, _ := replacement.find("proxy"); en != nil {
+				en.value = value
+			} else {
+				replacement.entries = append(replacement.entries, &entry{
+					key:   &node{kind: kScalar, style: sPlain, raw: "proxy"},
+					value: value,
+				})
+			}
+		}
+		it.value = replacement
+	}
+	if lineBreak == "\r\n" && (doc.hasInnerGaps || doc.crlfRisk) {
+		return "", unsupported("CRLF document with comment or blank lines between entries")
+	}
+	e := &emitter{width: width, seen: map[*node]bool{}, refs: map[*node]int{}, preLines: preLines, yaml12: doc.explicitStart}
+	countRefs(doc.root, e.refs, map[*node]bool{})
+	if doc.explicitStart {
+		e.out = append(e.out, "---")
+	}
+	head := doc.head
+	if !doc.explicitStart {
+		for len(head) > 0 && head[0] == "" {
+			head = head[1:] // leading blank lines are not kept
+		}
+	}
+	e.gap(head)
+	e.emitMap(doc.root, 0, "")
+	if e.err != nil {
+		return "", e.err
+	}
+	if doc.explicitEnd || e.openEnded {
+		e.out = append(e.out, "...")
+	}
+	result := strings.Join(e.out, lineBreak) + lineBreak
+	// Comments the round trip cannot keep (inside flow collections) are put on top.
+	counts := map[string]int{}
+	for _, c := range e.emitted {
+		counts[c]++
+	}
+	var missing []string
+	seen := map[string]bool{}
+	for _, c := range doc.comments {
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		total := 0
+		for _, d := range doc.comments {
+			if d == c {
+				total++
+			}
+		}
+		for i := 0; i < total-counts[c]; i++ {
+			missing = append(missing, c)
+		}
+	}
+	if len(missing) > 0 {
+		result = strings.Join(missing, lineBreak) + lineBreak + result
+	}
+	got, err := yamlx.SafeLoad(result)
+	if err != nil || !same(got, expected) {
+		return "", unsupported("the edited text does not load to the expected document")
+	}
+	_ = utf8.RuneError
+	return result, nil
+}
+
+// same is _same: equality that also compares types (1 != 1.0, True != 1).
+func same(a, b any) bool {
+	switch x := a.(type) {
+	case *jsonx.Object:
+		y, ok := b.(*jsonx.Object)
+		if !ok || x.Len() != y.Len() {
+			return false
+		}
+		for k, v := range x.All() {
+			w, has := y.Get(k)
+			if !has || !same(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !same(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case jsonx.Number:
+		y, ok := b.(jsonx.Number)
+		return ok && x.IsInt() == y.IsInt() && jsonx.Equal(x, y)
+	default:
+		if _, isNum := b.(jsonx.Number); isNum {
+			return false
+		}
+		return jsonx.Equal(a, b)
+	}
 }

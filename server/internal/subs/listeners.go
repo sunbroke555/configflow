@@ -11,7 +11,11 @@ import (
 
 // ListenerReferenceError is mihomo_listeners.ListenerReferenceError, a
 // StrategyReferenceError.
-type ListenerReferenceError struct{ Message string }
+type ListenerReferenceError struct {
+	Message string
+	// Cause is the Go-side reason (for example commented.ErrUnsupported); not part of the message.
+	Cause error
+}
 
 func (e *ListenerReferenceError) Error() string { return e.Message }
 
@@ -94,7 +98,7 @@ func RelinkGroupListeners(profile *jsonx.Object, oldName string, newName *string
 		document.Set("listeners", replacements)
 		updated, err := commented.EditListenerTargets(source, indexes, newName, document)
 		if err != nil {
-			return nil, lre("无法安全保留 Mihomo 基础配置的注释与引用，原配置已保留")
+			return nil, &ListenerReferenceError{Message: "无法安全保留 Mihomo 基础配置的注释与引用，原配置已保留", Cause: err}
 		}
 		if settings == nil {
 			settings = jsonx.NewObject()

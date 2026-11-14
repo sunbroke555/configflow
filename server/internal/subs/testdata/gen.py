@@ -1033,3 +1033,192 @@ def dns_rows():
 
 
 dump('dns.jsonl', dns_rows())
+
+
+# ------------------------------------------------------------------ commented
+from backend.utils import mihomo_listeners as ml  # noqa: E402
+import warnings  # noqa: E402
+warnings.simplefilter('ignore')
+
+WORDS = ['alpha', 'beta', 'gamma', 'delta', 'proxy-a', 'Hong Kong', 'x_y', 'node-1', '香港', 'a.b.c', '1.1.1.1', 'tls', 'https://223.5.5.5/dns-query']
+COMMENT_TEXT = ['note', 'a longer explanation of this setting', '中文注释', 'x: y', '', '#double', 'trailing  spaces ']
+
+
+def c_text():
+    return '#' + pick(['', ' ', ' ']) + pick(COMMENT_TEXT)
+
+
+def c_scalar():
+    r = R.random()
+    if r < .25:
+        return pick(WORDS)
+    if r < .35:
+        return str(R.choice([0, 1, 7890, 53, 443, -1, 65535]))
+    if r < .42:
+        return pick(['1.5', '0.1', '2.50', '-3.25'])
+    if r < .52:
+        return pick(['true', 'false', 'yes', 'no', 'on', 'off', 'True', 'FALSE'])
+    if r < .58:
+        return pick(['null', '~', 'Null', ''])
+    if r < .72:
+        return "'" + pick(['single', 'it''s', 'a: b', 'x # y', '', 'yes', '123']) + "'"
+    if r < .88:
+        return '"' + pick(['double', 'tab\\t', 'q\\"uote', 'é', '\\u00e9', 'yes', '123', 'a: b', '', '中文', 'back\\\\slash']) + '"'
+    return pick(['0x1F', '012', '0o17', '1_000', '2024-01-01', '1e3', '.inf', '.nan', '1:30', '0b101', '+1', '1.', '.5'])
+
+
+def c_flow(depth=0):
+    r = R.random()
+    sp = pick(['', ' ', '  '])
+    if r < .5 or depth > 1:
+        items = [c_scalar() for _ in range(R.randrange(0, 4))]
+        items = [i if i != '' else 'x' for i in items]
+        sep = pick([',', ', ', ' , ', ',  '])
+        return '[' + sp + sep.join(items) + sp + ']'
+    items = [f'{pick(["a", "b", "key", "k2"])}:{pick([" ", "  "])}{c_scalar() if R.random() < .7 else c_flow(depth + 1)}' for _ in range(R.randrange(0, 4))]
+    items = [i.replace(': ', ': ') for i in items]
+    return '{' + sp + pick([', ', ',', ' , ']).join(items) + sp + '}'
+
+
+def comment_lines(indent):
+    out = []
+    for _ in range(R.choice([0, 0, 0, 0, 1, 1, 2])):
+        out.append(' ' * R.choice([0, 0, indent, indent, indent + 2, 2, 4]) + c_text())
+    if R.random() < .15:
+        out.insert(R.randrange(len(out) + 1), '')
+    return out
+
+
+def eol(line, force=False):
+    if R.random() < (.35 if not force else 1):
+        return line + ' ' * R.choice([1, 1, 2, 3, 5]) + c_text()
+    return line
+
+
+def c_block_map(indent, depth, seq_style, keys=None, anchors=None):
+    lines = []
+    keys = keys or R.sample(['name', 'type', 'enable', 'port', 'mode', 'listen', 'nameserver', 'fallback', 'rule', 'tls', 'servers', 'hosts', 'a', 'b', 'c'],
+                            R.randrange(1, 5))
+    for k in keys:
+        lines += comment_lines(indent)
+        pad = ' ' * indent
+        r = R.random()
+        if r < .55 or depth > 2:
+            lines.append(eol(f'{pad}{k}:{pick([" ", " ", "  "])}{c_scalar()}'))
+        elif r < .68:
+            lines.append(eol(f'{pad}{k}: {c_flow()}'))
+        elif r < .8:
+            lines.append(eol(f'{pad}{k}:', R.random() < .3))
+            lines += c_block_map(indent + pick([2, 2, 4]), depth + 1, seq_style)
+        elif r < .93:
+            lines.append(eol(f'{pad}{k}:', R.random() < .2))
+            si = indent + {0: 0, 1: 2, 2: 4}[seq_style]
+            for _ in range(R.randrange(1, 4)):
+                lines += comment_lines(si)
+                if R.random() < .75:
+                    lines.append(eol(f'{" " * si}- {c_scalar()}'))
+                else:
+                    sub = c_block_map(si + 2, depth + 1, seq_style, keys=R.sample(['name', 'port', 'x'], R.randrange(1, 3)))
+                    sub[0] = ' ' * si + '- ' + sub[0][si + 2:] if not sub[0].lstrip().startswith('#') else sub[0]
+                    lines += sub
+        else:
+            style = pick(['|', '>', '|-', '>-', '|+', '|2'])
+            lines.append(f'{pad}{k}: {style}')
+            for _ in range(R.randrange(1, 4)):
+                lines.append(' ' * (indent + 2 + R.choice([0, 0, 2])) + pick(['text', 'with # hash', 'proxy: Pinned', '  more']))
+            if R.random() < .3:
+                lines.append('')
+    return lines
+
+
+def c_listener(i, si, old, flow):
+    name = pick(['personal', 'lan', 'guest', f'l{i}'])
+    fields = [('name', name), ('type', 'mixed'), ('port', str(17890 + i))]
+    if R.random() < .5:
+        fields.append(('listen', '127.0.0.1' if R.random() < .7 else '"0.0.0.0"'))
+    if old is not None:
+        fields.insert(R.randrange(len(fields) + 1), ('proxy', old))
+    if R.random() < .4:
+        fields.append(('rule', 'lan-rules'))
+    if flow:
+        return [' ' * si + '- {' + pick([', ', ',']).join(f'{k}: {v}' for k, v in fields) + '}']
+    lines = []
+    first = True
+    for k, v in fields:
+        text = f'{k}: {v}'
+        if k == 'proxy':
+            text = f'{k}:{pick([" ", "  "])}' + pick([old, f'"{old}"', f"'{old}'"])
+        pre = comment_lines(si + 2)
+        if first:
+            lines += pre if False else []
+            lines.append(' ' * si + '- ' + eol(text))
+            first = False
+        else:
+            lines += pre
+            lines.append(' ' * (si + 2) + eol(text))
+    return lines
+
+
+def commented_source(old='Pinned'):
+    lines = []
+    if R.random() < .3:
+        lines += [c_text() for _ in range(R.randrange(1, 4))]
+    if R.random() < .1:
+        lines.append(pick(['---', '--- ']))
+    seq_style = R.choice([0, 1, 1, 2])
+    n_top = R.randrange(0, 4)
+    for _ in range(n_top):
+        lines += c_block_map(0, 0, seq_style, keys=[pick(['mixed-port', 'dns', 'tun', 'sniffer', 'log-level', 'sub-rules', 'x-extra'])] if False else None)
+    # listeners
+    lines += comment_lines(0)
+    lines.append(eol('listeners:', R.random() < .1))
+    si = {0: 0, 1: 2, 2: 4}[seq_style]
+    flow = R.random() < .25
+    count = R.randrange(1, 4)
+    for i in range(count):
+        lines += comment_lines(si)
+        lines += c_listener(i, si, old if (i == 0 or R.random() < .4) else None, flow if R.random() < .8 else not flow)
+    if R.random() < .5:
+        lines += c_block_map(0, 0, seq_style, keys=['sub-rules'])
+    if R.random() < .2:
+        lines += comment_lines(0) + [c_text()]
+    nl = '\r\n' if R.random() < .1 else '\n'
+    text = nl.join(lines)
+    if R.random() < .9:
+        text += nl
+    if R.random() < .1:
+        text += nl
+    return text
+
+
+def commented_rows():
+    rows = []
+    fixed = [
+        '# top\nmixed-port: 7890 # mp\nlisteners:\n  # inbound\n  - name: \'personal\' # ln\n    type: mixed\n    proxy: "Pinned" # fp\n    # rule\n    rule: lan-rules\n    port: 17890 # lp\nsub-rules: {lan-rules: [MATCH,DIRECT]} # sr\n',
+        'shared: &base {name: pinned, type: mixed, proxy: Pinned}\nlisteners: [*base]\n',
+        '# top\nshared: &base {name: pinned, type: mixed, proxy: Pinned} # base\nlisteners: [*base] # list\n',
+        '# top\nlisteners: [&base {name: pinned, type: mixed, proxy: Pinned}] # list\nshared: *base # shared\n',
+        '# top\nshared: &base {name: pinned, type: mixed, proxy: Pinned} # base\nlisteners:\n- <<: *base # merge\n  port: 17890 # port\n',
+        '# top\nlisteners: [{proxy: Pinned, name: pinned}] # list\n',
+        '# top\nlisteners: &all [{name: pinned, proxy: Pinned}] # list\nshared: *all # shared\n',
+        '# top\nlisteners: [{name: pinned, proxy: &policy Pinned}] # list\nshared: *policy # shared\n',
+        '# top\nlisteners: [{proxy: Pinned, # policy note\n name: pinned}] # list\n',
+        '# header\r\nlegacy: {enabled: on, number: 012, flag: false, empty: null}\r\nscript: |\r\n  # This is string content\r\n  proxy: Pinned\r\nlisteners:\r\n- {name: pinned, proxy: "Pinned", type: mixed}\r\n',
+        ''.join(f'# User explanation {i}\n' for i in range(230)) + 'mixed-port: 7890 # mixed port\nlisteners:\n  # inbound explanation\n  - name: \'personal\' # listener name\n    type: mixed\n    proxy: "Pinned" # fixed policy explanation\n    # rule explanation\n    rule: lan-rules\n    port: 17890 # listener port\nsub-rules: {lan-rules: [MATCH,DIRECT]} # sub-rule explanation\n',
+    ]
+    cases = [(t, 'fixed') for t in fixed]
+    for _ in range(2400):
+        cases.append((commented_source(), 'random'))
+    names = [None, 'Renamed', 'Renamed # : "quoted"', 'false', 'on', 'No', '012', '中文 组', 'it\'s', 'a\\b', '', ' lead', 'null', '~', 'x: y', '- z', '*star', '&amp', '!bang', '@at', '`tick', 'tab\there']
+    for text, kind in cases:
+        new_name = pick(names) if kind == 'random' else pick([None, 'Renamed', 'Renamed # : "quoted"', 'false', 'on', 'No', '012'])
+        profile = {'mihomo': {'custom_config': text}}
+        try:
+            out = {'changed': ml.relink_group_listeners(profile, 'Pinned', new_name), 'config': profile['mihomo']['custom_config']}
+        except BaseException as exc:  # noqa: BLE001
+            out = {'error': str(exc), 'type': type(exc).__name__}
+        rows.append({'fn': 'relink_group_listeners', 'in': {'config': text, 'old': 'Pinned', 'new': new_name}, 'out': out})
+    return rows
+
+
+dump('commented.jsonl', commented_rows())
