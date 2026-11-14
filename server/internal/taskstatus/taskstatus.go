@@ -1,0 +1,285 @@
+// Package taskstatus is the port of backend/utils/task_status.py: the result
+// of every background task, shown in 系统设置 → 定时任务.
+//
+// Runtime receipts live beside the configuration, not inside it: they are not
+// part of revisions, exports or backups, and survive restarts so the page can
+// still say why the last automatic run failed after a reload. The file is
+// DATA_DIR/task-status.json, guarded by a process-wide mutex and by an
+// exclusive flock on task-status.json.lock (the lock file is kept so that two
+// server instances on one DATA_DIR exclude each other).
+package taskstatus
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+	"unicode/utf8"
+
+	"configflow/internal/jsonx"
+)
+
+// Filename is the status file inside the data directory.
+const Filename = "task-status.json"
+
+// MaxError is the longest last_error kept (in characters).
+const MaxError = 2000
+
+// guard is the module-level threading.Lock of the Python module: one process
+// holds one lock whatever the data directory.
+var guard sync.Mutex
+
+// Store reads and writes the status file of one data directory.
+type Store struct {
+	// DataDir is the repository data directory (get_repository().data_dir).
+	DataDir string
+	// Now is for tests; nil means time.Now.
+	Now func() time.Time
+	// OnRecord is called after Record wrote the file and released the lock
+	// (the Python `safely(refresh_tasks, key)` of backend.notifications);
+	// package #3 wires the notification refresh in here.
+	OnRecord func(key string)
+}
+
+// New returns a store for dataDir.
+func New(dataDir string) *Store { return &Store{DataDir: dataDir} }
+
+func (s *Store) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// NowISO is now_iso(): the UTC time at second resolution, "2026-11-14T12:00:00Z".
+func NowISO() string { return time.Now().UTC().Format("2006-01-02T15:04:05Z") }
+
+func (s *Store) nowISO() string { return s.now().UTC().Format("2006-01-02T15:04:05Z") }
+
+// ParseTime is parse_time: the aware time for an ISO timestamp, or ok=false.
+// Naive timestamps are taken as UTC. See FromISOFormat for the accepted grammar.
+func ParseTime(value any) (time.Time, bool) {
+	text, ok := value.(string)
+	if !ok || text == "" {
+		return time.Time{}, false
+	}
+	return FromISOFormat(strings.ReplaceAll(text, "Z", "+00:00"))
+}
+
+func (s *Store) path() string { return filepath.Join(s.DataDir, Filename) }
+
+// locked runs fn with the process mutex and the file lock held (_locked).
+func (s *Store) locked(fn func(path string) error) error {
+	guard.Lock()
+	defer guard.Unlock()
+	path := s.path()
+	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o666)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	return fn(path)
+}
+
+// read is _read: the stored object, or an empty one when the file is missing,
+// damaged or not an object.
+func read(path string) *jsonx.Object {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return jsonx.NewObject()
+	}
+	value, err := jsonx.Parse(data)
+	if err != nil {
+		return jsonx.NewObject()
+	}
+	if object, ok := value.(*jsonx.Object); ok {
+		return object
+	}
+	return jsonx.NewObject()
+}
+
+// write is _write: temp file in the same directory (mode 0600 like
+// tempfile.mkstemp), compact JSON, fsync, rename over the file.
+func write(path string, value *jsonx.Object) error {
+	encoded, err := jsonx.Compact(value)
+	if err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".task-status-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer func() {
+		if _, statErr := os.Stat(name); statErr == nil {
+			os.Remove(name)
+		}
+	}()
+	if _, err := temp.Write(encoded); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// Load is load(): the whole status object. The result is a private copy.
+func (s *Store) Load() (*jsonx.Object, error) {
+	var out *jsonx.Object
+	err := s.locked(func(path string) error {
+		out = read(path)
+		return nil
+	})
+	return out, err
+}
+
+// Get is get(key): the entry of one task, an empty object when there is none.
+func (s *Store) Get(key string) (*jsonx.Object, error) {
+	data, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+	if entry, ok := data.Value(key).(*jsonx.Object); ok {
+		return entry, nil
+	}
+	return jsonx.NewObject(), nil
+}
+
+// Result is the keyword arguments of record().
+type Result struct {
+	OK         bool
+	StartedAt  string  // empty: now
+	DurationMs float64 // int() of it, at least 0
+	Error      string  // kept only for failures, cut to MaxError characters
+	Trigger    string  // empty: "schedule"
+	// CacheRetained is recorded for a failed (not skipped) run when non-nil.
+	CacheRetained  *bool
+	CacheUpdatedAt string
+	// Skipped marks a run with nothing to do or a missing prerequisite: it
+	// keeps the previous success and failure counts.
+	Skipped bool
+}
+
+// pyInt is int(value or 0) for a value read from the file.
+func pyInt(v any) int64 {
+	switch x := v.(type) {
+	case jsonx.Number:
+		if i, ok := x.Int64(); ok {
+			return i
+		}
+		return int64(x.Float64())
+	case bool:
+		if x {
+			return 1
+		}
+	}
+	return 0
+}
+
+// Record is record(key, ...): append one finished run and return the updated
+// entry (a copy).
+func (s *Store) Record(key string, r Result) (*jsonx.Object, error) {
+	var result *jsonx.Object
+	err := s.locked(func(path string) error {
+		data := read(path)
+		entry, ok := data.Value(key).(*jsonx.Object)
+		if !ok {
+			entry = jsonx.NewObject()
+		}
+		finished := s.nowISO()
+		status := "failed"
+		switch {
+		case r.Skipped:
+			status = "skipped"
+		case r.OK:
+			status = "success"
+		}
+		started := r.StartedAt
+		if started == "" {
+			started = finished
+		}
+		duration := int64(r.DurationMs)
+		if duration < 0 {
+			duration = 0
+		}
+		trigger := r.Trigger
+		if trigger == "" {
+			trigger = "schedule"
+		}
+		message := ""
+		if !r.OK {
+			message = r.Error
+			if utf8.RuneCountInString(message) > MaxError {
+				message = string([]rune(message)[:MaxError])
+			}
+		}
+		entry.Set("last_run_at", started)
+		entry.Set("last_finished_at", finished)
+		entry.Set("last_status", status)
+		entry.Set("last_duration_ms", duration)
+		entry.Set("last_trigger", trigger)
+		entry.Set("last_error", message)
+		if !r.Skipped {
+			entry.Set("run_count", pyInt(entry.Value("run_count"))+1)
+			if r.OK {
+				entry.Set("last_success_at", finished)
+				entry.Set("consecutive_failures", 0)
+			} else {
+				entry.Set("failure_count", pyInt(entry.Value("failure_count"))+1)
+				entry.Set("consecutive_failures", pyInt(entry.Value("consecutive_failures"))+1)
+			}
+		}
+		if r.OK || r.Skipped {
+			entry.Delete("cache_retained")
+		} else if r.CacheRetained != nil {
+			entry.Set("cache_retained", *r.CacheRetained)
+		}
+		if r.CacheUpdatedAt != "" {
+			entry.Set("cache_updated_at", r.CacheUpdatedAt)
+		}
+		data.Set(key, entry)
+		if err := write(path, data); err != nil {
+			return err
+		}
+		result = entry.Clone()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.OnRecord != nil {
+		s.OnRecord(key)
+	}
+	return result, nil
+}
+
+// Forget is forget(*keys): drop the entries of the given tasks.
+func (s *Store) Forget(keys ...string) error {
+	return s.locked(func(path string) error {
+		data := read(path)
+		removed := false
+		for _, key := range keys {
+			if value, ok := data.Pop(key); ok && value != nil {
+				removed = true
+			}
+		}
+		if removed {
+			return write(path, data)
+		}
+		return nil
+	})
+}
