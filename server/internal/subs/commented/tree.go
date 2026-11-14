@@ -46,6 +46,9 @@ type comment struct {
 type rec struct {
 	eol *comment
 	gap []string
+	// trail: comment lines written after the whole value (an alias's
+	// comments, which ruamel keeps before the next key)
+	trail []string
 }
 
 type node struct {
@@ -63,6 +66,12 @@ type node struct {
 	target *node
 	// comments inside a flow collection (not representable; re-added on top)
 	flowComments []string
+	// post is the end-of-line comment after a flow collection's closing
+	// bracket: ruamel keeps it on the collection itself (comment[0]), so it
+	// travels with the collection to alias expansions and copies.
+	post *comment
+	// endGap: comment lines written after a block mapping's last entry
+	endGap []string
 }
 
 type entry struct {
@@ -73,6 +82,9 @@ type entry struct {
 
 type item struct {
 	compactFlag bool // the dash line is owned by the first element of the nested collection
+	// dashBreak: comment lines written between a bare dash and the nested
+	// block mapping (a materialized merge key's comment)
+	dashBreak []string
 	value       *node
 	rec         rec
 }

@@ -13,8 +13,17 @@ import (
 // of the Python code (ruamel.yaml round trip) byte for byte. Rows the Go
 // editor declines (ErrUnsupported) are counted separately: Python produced
 // output for them (or failed too).
-func TestCommentedCorpus(t *testing.T) {
-	rows := loadCorpus(t, "commented.jsonl.gz")
+func TestCommentedCorpus(t *testing.T) { runCommentedCorpus(t, "commented.jsonl.gz", 340) }
+
+// TestCommentedAnchorsCorpus covers anchors, aliases and merge keys around
+// listeners, with comments at every position (testdata/gen.py
+// anchor_sources).
+func TestCommentedAnchorsCorpus(t *testing.T) {
+	runCommentedCorpus(t, "commented_anchors.jsonl.gz", 336)
+}
+
+func runCommentedCorpus(t *testing.T, file string, maxDeclined int) {
+	rows := loadCorpus(t, file)
 	stats := map[string]int{}
 	reasons := map[string]int{}
 	var shown int
@@ -29,11 +38,17 @@ func TestCommentedCorpus(t *testing.T) {
 		changed, err := RelinkGroupListeners(profile, in.GetString("old"), newName)
 		if want.Has("error") {
 			if err == nil {
-				stats["python_error_go_ok:"+want.GetString("error")[:12]]++
+				stats["python_error_go_ok:"+want.GetString("type")]++
 				if shown < 6 {
 					shown++
 					t.Errorf("row %d python error %q but Go edited it. new=%v\nSRC:\n%s", i, want.GetString("error"), in.Value("new"), strings.ReplaceAll(in.GetString("config"), " ", "·"))
 				}
+				continue
+			}
+			if want.GetString("type") == "AssertionError" {
+				// ruamel's emitter crashes (an uncaught AssertionError, HTTP 500
+				// in Flask); Go keeps the original text with the safe error.
+				stats["python_crash_go_error"]++
 				continue
 			}
 			if err.Error() != want.GetString("error") {
@@ -63,8 +78,8 @@ func TestCommentedCorpus(t *testing.T) {
 	t.Logf("declined: %v", reasons)
 	// Declines are a documented gap (the caller keeps the original text with
 	// Python's failure message); do not let them grow unnoticed.
-	if stats["go_declined"] > 340 {
-		t.Errorf("declined rows grew to %d (was 340)", stats["go_declined"])
+	if stats["go_declined"] > maxDeclined {
+		t.Errorf("declined rows grew to %d (was %d)", stats["go_declined"], maxDeclined)
 	}
 }
 

@@ -78,6 +78,15 @@ func (e *emitter) line(text string, r *rec, body []string) {
 // anchorPrefix decides whether n is written with its anchor, and whether it
 // is replaced by an alias because it was already written.
 func (e *emitter) resolve(n *node) (target *node, alias string, prefix string) {
+	target, alias, prefix = e.peekResolve(n)
+	if alias == "" {
+		e.seen[target] = true
+	}
+	return target, alias, prefix
+}
+
+// peekResolve is resolve without marking the node as written.
+func (e *emitter) peekResolve(n *node) (target *node, alias string, prefix string) {
 	target = n
 	if n.kind == kAlias {
 		target = n.target
@@ -88,7 +97,6 @@ func (e *emitter) resolve(n *node) (target *node, alias string, prefix string) {
 	if target.anchor != "" && (target.kind == kScalar || e.refs[target] >= 2) {
 		prefix = "&" + target.anchor
 	}
-	e.seen[target] = true
 	return target, "", prefix
 }
 
@@ -114,6 +122,7 @@ func (e *emitter) emitMap(n *node, col int, lead string) {
 			return
 		}
 	}
+	e.gap(n.endGap)
 }
 
 func (e *emitter) resolveKey(k *node) (*node, string, string) { return k, "", "" }
@@ -127,7 +136,20 @@ func isStringPlain(raw string) bool {
 // plus the value. childCol is the indentation of a nested mapping; a nested
 // sequence sits at seqCol.
 func (e *emitter) emitValue(head string, v *node, r *rec, seqCol, childCol int, isMapEntry bool) {
+	e.emitValueOnly(head, v, r, seqCol, childCol, isMapEntry)
+	if e.err == nil {
+		e.gap(r.trail)
+	}
+}
+
+func (e *emitter) emitValueOnly(head string, v *node, r *rec, seqCol, childCol int, isMapEntry bool) {
 	target, alias, prefix := e.resolve(v)
+	if alias == "" && r.eol == nil && target.post != nil {
+		// an alias expansion: the node brings its own comment
+		withPost := *r
+		withPost.eol = target.post
+		r = &withPost
+	}
 	if alias != "" {
 		e.line(head+" "+alias, r, nil)
 		return
@@ -229,6 +251,7 @@ func (e *emitter) emitValue(head string, v *node, r *rec, seqCol, childCol int, 
 				e.fail(err)
 				return
 			}
+
 			e.openEnded = false
 			e.out = append(e.out, lines[:len(lines)-1]...)
 			e.lineNoWidth(lines[len(lines)-1], r)
@@ -260,7 +283,7 @@ func (e *emitter) emitSeq(n *node, col int, lead string, underMap bool) {
 		}
 		head := prefix + "-"
 		v := it.value
-		target, alias, prefixA := e.resolve(v)
+		target, alias, prefixA := e.peekResolve(v)
 		if alias == "" && target.kind != kScalar && !target.flow && !(target.kind == kMap && len(target.entries) == 0) && !(target.kind == kSeq && len(target.items) == 0) {
 			// compact: first element shares the dash line (ruamel always writes it so)
 			if it.rec.eol != nil || len(it.rec.gap) > 0 {
@@ -271,10 +294,18 @@ func (e *emitter) emitSeq(n *node, col int, lead string, underMap bool) {
 				e.fail(unsupported("anchor on a compact collection"))
 				return
 			}
-			if target.kind == kMap {
+			e.resolve(v)
+			if len(it.dashBreak) > 0 && target.kind == kMap {
+				e.out = append(e.out, head)
+				e.gap(it.dashBreak)
+				e.emitMap(target, col+2, spaces(col+2))
+			} else if target.kind == kMap {
 				e.emitMap(target, col+2, head+" ")
 			} else {
 				e.emitSeq(target, col+2, head+" ", false)
+			}
+			if e.err == nil {
+				e.gap(it.rec.trail)
 			}
 		} else {
 			e.emitValue(head, v, &it.rec, col, col+2, false)
@@ -296,6 +327,8 @@ type flowWriter struct {
 	// nonl is ruamel's no_newline: the next write_indent writes no line break.
 	nonl bool
 	err  error
+	// top is the parent indentation of the outermost collection
+	top int
 }
 
 func (w *flowWriter) col() int { return len(w.cur) }
@@ -408,6 +441,7 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 		w.put("]")
 		w.ws = false
 		w.nonl = false
+		w.postComment(target, parent)
 	default:
 		single := inSeq && len(target.entries) == 1 && prefix == ""
 		if !single {
@@ -462,7 +496,26 @@ func (w *flowWriter) node(n *node, parent int, inSeq bool) {
 		}
 		w.ws = false
 		w.nonl = false
+		w.postComment(target, parent)
 	}
+}
+
+// postComment writes the own comment of a nested flow collection after its
+// closing bracket (write_post_comment): at its column, then a line break.
+// The top-level collection's comment is the line's end-of-line comment.
+func (w *flowWriter) postComment(n *node, parent int) {
+	if n.post == nil || parent < w.top {
+		return
+	}
+	pad := n.post.col - w.col()
+	if pad < 1 {
+		pad = 1
+	}
+	w.put(spaces(pad) + n.post.text)
+	w.e.noteComment(n.post.text)
+	w.lines = append(w.lines, string(w.cur))
+	w.cur = nil
+	w.ws = true
 }
 
 // plain is write_plain: its leading space, then word by word, a word that
@@ -555,7 +608,7 @@ func (w *flowWriter) single(text string, indent int, split bool) {
 // writeFlow renders n after head and returns the physical lines; nonl is
 // the emitter's no_newline flag at that point.
 func (e *emitter) writeFlow(head string, n *node, indent int, nonl bool) ([]string, error) {
-	w := &flowWriter{e: e, cur: []rune(head), nonl: nonl}
+	w := &flowWriter{e: e, cur: []rune(head), nonl: nonl, top: indent - 1}
 	w.node(n, indent-2, false)
 	if w.err != nil {
 		return nil, w.err

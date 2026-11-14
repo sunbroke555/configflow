@@ -36,6 +36,8 @@ def uid():
 
 
 def dump(path, rows):
+    if os.environ.get('GEN_ONLY') and not path.startswith(os.environ['GEN_ONLY']):
+        return
     path += '.gz'
     with gzip.GzipFile(HERE / path, 'wb', mtime=0) as raw, io.TextIOWrapper(raw, encoding='utf-8') as fh:
         for row in rows:
@@ -1222,3 +1224,68 @@ def commented_rows():
 
 
 dump('commented.jsonl', commented_rows())
+
+
+# ---------------------------------------------------------- commented anchors
+def anchor_sources():
+    """Systematic anchor / alias / merge-key layouts around listeners, with and
+    without comments at every interesting position (the random corpus has no
+    anchors)."""
+    E = lambda text, on: text + (' ' * 1 + '# ' + on if on else '')
+    out = []
+    flow_base = 'shared: &base {name: pinned, type: mixed, proxy: Pinned}'
+    for top in ('', '# top'):
+        for bc in (None, 'base'):
+            bases = {
+                'flow': [E(flow_base, bc)],
+                'block': [E('shared: &base', bc), '  name: pinned', '  type: mixed', E('  proxy: Pinned', 'bp' if bc else None)],
+            }
+            for bname, base in bases.items():
+                for lc in (None, 'list'):
+                    for oc in (None, 'skip', 'o'):
+                        tail = [] if oc == 'skip' else [E('other: 1', oc)]
+                        forms = [
+                            [E('listeners: [*base]', lc)],
+                            ['listeners:', E('- *base', lc)],
+                            ['listeners:', E('- <<: *base', lc), E('  port: 17890', 'port' if lc else None)],
+                            ['listeners:', '- port: 17890', E('  <<: *base', lc)],
+                            ['listeners:', E('- name: b', lc), '  <<: *base', '- <<: *base', '  name: c'],
+                            ['listeners:', '- <<: *base', E('  port: 17890', lc), '- name: d', '  port: 1', '  proxy: Pinned'],
+                        ]
+                        for form in forms:
+                            out.append([top] + base + form + tail if top else base + form + tail)
+            for sc in (None, 'shared'):
+                for oc in (None, 'skip', 'o'):
+                    tail = [] if oc == 'skip' else [E('other: 1', oc)]
+                    forms = [
+                        ([E('listeners: [&base {name: pinned, type: mixed, proxy: Pinned}]', bc)], '*base'),
+                        (['listeners:', E('- &base {name: pinned, type: mixed, proxy: Pinned}', bc)], '*base'),
+                        (['listeners:', E('- &base', bc), '  name: pinned', '  proxy: Pinned'], '*base'),
+                        ([E('listeners: &all [{name: pinned, proxy: Pinned}]', bc)], '*all'),
+                        (['listeners: &all', E('- {name: pinned, proxy: Pinned}', bc)], '*all'),
+                        ([E('listeners: [{name: pinned, proxy: &policy Pinned}]', bc)], '*policy'),
+                        (['listeners:', '- name: pinned', E('  proxy: &policy Pinned', bc)], '*policy'),
+                    ]
+                    for form, alias in forms:
+                        lines = form + [E('shared: ' + alias, sc)] + tail
+                        out.append([top] + lines if top else lines)
+                        lines = form + ['shared:', E('- ' + alias, sc)] + tail
+                        out.append([top] + lines if top else lines)
+            out.append(([top] if top else []) + ['pol: &pol Pinned', 'listeners:', '- name: x', E('  proxy: *pol', bc), '- name: y', '  proxy: Pinned'])
+    return ['\n'.join(lines) + '\n' for lines in out]
+
+
+def commented_anchor_rows():
+    rows = []
+    for text in anchor_sources():
+        for new_name in (None, 'Renamed', 'Renamed # : "quoted"'):
+            profile = {'mihomo': {'custom_config': text}}
+            try:
+                out = {'changed': ml.relink_group_listeners(profile, 'Pinned', new_name), 'config': profile['mihomo']['custom_config']}
+            except BaseException as exc:  # noqa: BLE001
+                out = {'error': str(exc), 'type': type(exc).__name__}
+            rows.append({'fn': 'relink_group_listeners', 'in': {'config': text, 'old': 'Pinned', 'new': new_name}, 'out': out})
+    return rows
+
+
+dump('commented_anchors.jsonl', commented_anchor_rows())

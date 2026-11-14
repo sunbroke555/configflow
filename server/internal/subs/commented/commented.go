@@ -75,6 +75,7 @@ func copyRec(r rec) rec {
 		c.eol = &e
 	}
 	c.gap = append([]string(nil), r.gap...)
+	c.trail = append([]string(nil), r.trail...)
 	return c
 }
 
@@ -140,8 +141,8 @@ func rejectMerge(n *node, seen map[*node]bool) error {
 		keys[id] = true
 	}
 	for _, e := range n.entries {
-		if e.key.kind == kScalar && e.key.style == sPlain && e.key.raw == "<<" {
-			return unsupported("merge key")
+		if isMergeKey(e.key) && !(e.value.kind == kAlias && e.value.target.kind == kMap) {
+			return unsupported("merge key other than one alias of a mapping")
 		}
 		if err := rejectMerge(e.value, seen); err != nil {
 			return err
@@ -153,6 +154,100 @@ func rejectMerge(n *node, seen map[*node]bool) error {
 		}
 	}
 	return nil
+}
+
+func isMergeKey(k *node) bool { return k.kind == kScalar && k.style == sPlain && k.raw == "<<" }
+
+// materialize is the merge part of _detach: CommentedMap(result.items())
+// lists the own keys in order, then the merged keys the mapping does not
+// override. The merge entry's comments become comment lines before the
+// next entry (returned as lead when the merge entry was the first one).
+func materialize(m *node) (lead []string, err error) {
+	at := -1
+	for i, e := range m.entries {
+		if isMergeKey(e.key) {
+			at = i
+		}
+	}
+	if at < 0 {
+		return nil, nil
+	}
+	merge := m.entries[at]
+	source := merge.value
+	if source.kind != kMap {
+		return nil, unsupported("merge of something other than a mapping")
+	}
+	own := map[string]bool{}
+	var entries []*entry
+	for i, e := range m.entries {
+		if i != at {
+			own[keyIdentity(e.key)] = true
+			entries = append(entries, e)
+		}
+	}
+	var moved []string
+	if merge.rec.eol != nil {
+		moved = append(moved, spaces(merge.rec.eol.col)+merge.rec.eol.text)
+	}
+	moved = append(moved, merge.rec.gap...)
+	moved = append(moved, merge.rec.trail...)
+	for _, e := range source.entries {
+		if !own[keyIdentity(e.key)] && !isMergeKey(e.key) {
+			entries = append(entries, &entry{key: e.key, value: e.value, rec: copyRec(e.rec)})
+		}
+	}
+	if len(moved) > 0 {
+		// before the next own key; without one, after the whole mapping
+		switch {
+		case at < len(m.entries)-1 && at > 0:
+			prev := m.entries[at-1]
+			prev.rec.gap = append(prev.rec.gap, moved...)
+		case at < len(m.entries)-1:
+			lead = moved
+		case len(entries) > 0:
+			m.endGap = append(m.endGap, moved...)
+		default:
+			return nil, unsupported("comment on a merge-only listener")
+		}
+	}
+	m.entries = entries
+	return lead, nil
+}
+
+// attachComments moves comments to where ruamel's composer keeps them:
+// the comment after an alias belongs to no node and is written on the next
+// line, at its column; the comment after a flow collection's closing
+// bracket also belongs to that collection (post).
+func attachComments(n *node, seen map[*node]bool) {
+	if n == nil || n.kind == kAlias || seen[n] {
+		return
+	}
+	seen[n] = true
+	fix := func(v *node, r *rec, inSeq bool) {
+		if r.eol == nil {
+			if v.kind == kAlias {
+				r.trail, r.gap = r.gap, nil
+			}
+			return
+		}
+		switch {
+		case v.kind == kAlias:
+			r.trail = append([]string{spaces(r.eol.col) + r.eol.text}, r.gap...)
+			r.eol, r.gap = nil, nil
+		case !inSeq && (v.flow && (v.kind == kMap || v.kind == kSeq) || v.kind == kScalar && v.anchor != ""):
+			// a sequence item's comment stays with the sequence (ca.items)
+			c := *r.eol
+			v.post = &c
+		}
+	}
+	for _, e := range n.entries {
+		fix(e.value, &e.rec, false)
+		attachComments(e.value, seen)
+	}
+	for _, it := range n.items {
+		fix(it.value, &it.rec, true)
+		attachComments(it.value, seen)
+	}
 }
 
 func collectAliased(n *node, aliased map[*node]bool, seen map[*node]bool) {
@@ -197,19 +292,18 @@ func subtreeCommented(n *node, seen map[*node]bool) bool {
 	return false
 }
 
-// rejectCommentedAliases declines documents where an alias, or a node that
-// an alias refers to, sits on a line with a comment (or holds comments).
-// ruamel attaches such comments to the shared node and then moves or
-// repeats them in ways that are not emulated (for example
-// `listeners: [*base] # list` gets the anchor line's comment as well).
-// cur is the record of the source line the node is written on.
+// rejectCommentedAliases declines documents where a block collection that an
+// alias refers to has a comment on its header line or inside: ruamel then
+// writes the alias expansion as a flow collection with comments spread over
+// broken lines, which is not emulated. cur is the record of the source line
+// the node starts on.
 func rejectCommentedAliases(n *node, cur *rec, aliased map[*node]bool, seen map[*node]bool) error {
 	if n == nil {
 		return nil
 	}
-	if n.kind == kAlias || aliased[n] {
-		if hasComment(cur) || (n.kind != kAlias && subtreeCommented(n, map[*node]bool{})) {
-			return unsupported("comment next to an anchor or alias")
+	if aliased[n] && !n.flow && (n.kind == kMap || n.kind == kSeq) {
+		if hasComment(cur) || subtreeCommented(n, map[*node]bool{}) {
+			return unsupported("comment in or on an aliased block collection")
 		}
 	}
 	if n.kind == kAlias || seen[n] {
@@ -276,6 +370,7 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 			return "", err
 		}
 	}
+	attachComments(doc.root, map[*node]bool{})
 	if doc.root.kind != kMap {
 		return "", unsupported("root is not a mapping")
 	}
@@ -309,6 +404,11 @@ func EditListenerTargets(source string, indexes []int, newName *string, expected
 		if replacement.kind != kMap {
 			return "", unsupported("listener is not a mapping")
 		}
+		lead, err := materialize(replacement)
+		if err != nil {
+			return "", err
+		}
+		it.dashBreak = lead
 		if newName == nil {
 			if en, at := replacement.find("proxy"); en != nil {
 				// The removed key's comment token: its end-of-line comment (or the
